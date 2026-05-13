@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.1
+
+- Make the Home Assistant sidebar ingress panel explicit.
+- Enable ingress streaming for the embedded terminal path.
+- Document that the sidebar entry is admin-only because the terminal can edit
+  Home Assistant configuration.
+
 ## 0.1.0
 
 Initial Codex Terminal Pro MVP fork.

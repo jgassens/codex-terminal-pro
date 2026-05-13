@@ -11,6 +11,7 @@ This is an MVP fork. It is not an official OpenAI add-on.
 ## Features
 
 - Home Assistant ingress web terminal powered by ttyd.
+- Sidebar panel entry for admin users via Home Assistant ingress.
 - Codex CLI installed with `npm install -g @openai/codex`.
 - Starts in `/config` so Codex can inspect Home Assistant YAML and storage.
 - Persistent Codex state under `/data/.codex`.
@@ -45,6 +46,12 @@ track GitHub releases.
 For future releases, bump `codex-terminal/config.yaml` `version`, push to
 GitHub, then reload the Home Assistant add-on store. Home Assistant will compare
 the installed version with the version in this repository.
+
+## Sidebar Access
+
+Codex Terminal Pro registers a Home Assistant ingress sidebar panel titled
+**Codex Terminal Pro**. The panel is admin-only by design because the terminal
+has `/config` write access and Home Assistant manager API access.
 
 ## Authentication
 

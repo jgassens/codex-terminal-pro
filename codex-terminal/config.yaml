@@ -1,7 +1,7 @@
 ---
 name: "Codex Terminal Pro"
 description: "Unofficial OpenAI Codex CLI terminal for Home Assistant with persistent package management, Home Assistant utilities, and image paste support. Fork of heytcass/home-assistant-addons and ESJavadex/claude-code-ha."
-version: "0.1.0"
+version: "0.1.1"
 slug: "codex_terminal_pro"
 init: false
 
@@ -18,6 +18,8 @@ url: "https://github.com/jgassens/codex-terminal-pro"
 # Web interface configuration
 ingress: true
 ingress_port: 7680
+ingress_entry: /
+ingress_stream: true
 panel_icon: mdi:code-braces-box
 panel_title: "Codex Terminal Pro"
 panel_admin: true

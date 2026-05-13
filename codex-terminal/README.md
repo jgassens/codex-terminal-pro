@@ -6,6 +6,9 @@ Codex Terminal Pro provides a Home Assistant ingress web terminal that starts in
 `/config`, with Codex CLI, image paste support, persistent packages, Home
 Assistant CLI, and GitHub CLI preinstalled.
 
+It registers an admin-only Home Assistant sidebar panel titled **Codex Terminal
+Pro** through ingress.
+
 ![Codex Terminal Pro screenshot](screenshot.png)
 
 ## Quick Start

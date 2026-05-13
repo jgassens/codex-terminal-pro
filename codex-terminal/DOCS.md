@@ -4,6 +4,10 @@ Codex Terminal Pro is an unofficial OpenAI Codex CLI add-on for Home Assistant.
 It opens a web terminal in `/config` and keeps persistent runtime state in
 `/data`.
 
+The add-on registers an admin-only sidebar panel titled **Codex Terminal Pro**.
+It remains admin-only because the terminal can edit Home Assistant
+configuration and call manager-level Home Assistant actions.
+
 ## Install
 
 1. Go to **Settings** -> **Add-ons** -> **Add-on Store**.
