@@ -26,6 +26,16 @@ const PORT = process.env.IMAGE_SERVICE_PORT || 7680;
 const TTYD_PORT = process.env.TTYD_PORT || 7681;
 const UPLOAD_DIR = process.env.UPLOAD_DIR || '/data/images';
 
+// Home Assistant ingress can serve this page from a URL ending in a double
+// slash. Browsers then request paths like //terminal/, which Express does not
+// match against /terminal. Normalize duplicate leading slashes before routing.
+app.use((req, res, next) => {
+    if (req.url.startsWith('//')) {
+        req.url = req.url.replace(/^\/+/, '/');
+    }
+    next();
+});
+
 // Ensure upload directory exists
 if (!fs.existsSync(UPLOAD_DIR)) {
     fs.mkdirSync(UPLOAD_DIR, { recursive: true, mode: 0o755 });
@@ -94,10 +104,11 @@ app.post('/upload', upload.single('image'), (req, res) => {
     });
 });
 
-// Proxy endpoint for ttyd terminal
-// This allows ttyd to work through Home Assistant ingress
-// Handles both HTTP and WebSocket connections
-app.use('/terminal', createProxyMiddleware({
+// Proxy endpoint for ttyd terminal.
+// This allows ttyd to work through Home Assistant ingress without publishing
+// the ttyd port on the host. Keep a reference so websocket upgrades are routed
+// explicitly by the HTTP server below.
+const terminalProxy = createProxyMiddleware({
     target: `http://localhost:${TTYD_PORT}`,
     changeOrigin: true,
     ws: true, // Enable WebSocket proxying
@@ -114,7 +125,9 @@ app.use('/terminal', createProxyMiddleware({
         }
     },
     logLevel: 'warn'
-}));
+});
+
+app.use('/terminal', terminalProxy);
 
 // Serve static files (HTML interface) - MUST be after API routes
 app.use(express.static(path.join(__dirname, 'public')));
@@ -142,6 +155,19 @@ app.use((err, req, res, next) => {
 
 // Create HTTP server and start listening
 const server = http.createServer(app);
+
+server.on('upgrade', (req, socket, head) => {
+    if (req.url && req.url.startsWith('//')) {
+        req.url = req.url.replace(/^\/+/, '/');
+    }
+
+    if (req.url && req.url.startsWith('/terminal')) {
+        terminalProxy.upgrade(req, socket, head);
+        return;
+    }
+
+    socket.destroy();
+});
 
 server.listen(PORT, '0.0.0.0', () => {
     console.log(`Codex Terminal Image Service running on port ${PORT}`);

@@ -312,9 +312,20 @@
         let ttydPort = 7681;
         let uploadDir = '/data/images';
 
+        function ingressPath(path) {
+            const cleanPath = String(path).replace(/^\/+/, '');
+            const basePath = window.location.pathname.replace(/\/+$/, '');
+
+            if (!basePath) {
+                return `/${cleanPath}`;
+            }
+
+            return `${basePath}/${cleanPath}`;
+        }
+
         // Fetch configuration and load ttyd
         // Use relative paths for Home Assistant ingress compatibility
-        fetch('config')
+        fetch(ingressPath('config'))
             .then(res => res.json())
             .then(config => {
                 ttydPort = config.ttydPort;
@@ -331,8 +342,9 @@
 
         function loadTerminal() {
             const iframe = document.getElementById('terminal-frame');
-            // Use relative path for Home Assistant ingress compatibility
-            iframe.src = 'terminal/';
+            // Use an ingress-aware absolute path to avoid //terminal/ when Home
+            // Assistant serves the add-on from a double-slash ingress base URL.
+            iframe.src = ingressPath('terminal/');
         }
 
         const status = document.getElementById('status');
@@ -362,7 +374,7 @@
 
             try {
                 // Use relative path for Home Assistant ingress compatibility
-                const response = await fetch('upload', {
+                const response = await fetch(ingressPath('upload'), {
                     method: 'POST',
                     body: formData
                 });

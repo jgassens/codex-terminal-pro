@@ -53,6 +53,13 @@ Codex Terminal Pro registers a Home Assistant ingress sidebar panel titled
 **Codex Terminal Pro**. The panel is admin-only by design because the terminal
 has `/config` write access and Home Assistant manager API access.
 
+## Launch Behavior
+
+New installs default to `auto_launch_codex: true`, so Codex starts when the
+terminal connects. If you previously installed an older build, Home Assistant
+may preserve your existing option value; set `auto_launch_codex` to `true` in
+the add-on configuration UI to restore auto-start.
+
 ## Authentication
 
 Codex Terminal Pro uses ChatGPT/Codex account authentication for the MVP. A

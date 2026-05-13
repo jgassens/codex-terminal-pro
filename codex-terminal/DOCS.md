@@ -93,7 +93,7 @@ cli_auth_credentials_store = "file"
 ## Configuration
 
 ```yaml
-auto_launch_codex: false
+auto_launch_codex: true
 persistent_apk_packages: []
 persistent_pip_packages: []
 ```

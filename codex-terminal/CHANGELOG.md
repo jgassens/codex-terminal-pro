@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.2
+
+- Default new installs to auto-launch Codex when the terminal opens.
+- Route ttyd websocket upgrades explicitly through the image-service ingress
+  proxy so the terminal can work without publishing host port `7681`.
+- Normalize Home Assistant ingress paths so the terminal iframe does not request
+  `//terminal/`.
+
 ## 0.1.1
 
 - Make the Home Assistant sidebar ingress panel explicit.

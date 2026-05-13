@@ -43,13 +43,14 @@ the add-on from the UI. Version detection comes from `config.yaml`.
 ## Configuration
 
 ```yaml
-auto_launch_codex: false
+auto_launch_codex: true
 persistent_apk_packages: []
 persistent_pip_packages: []
 ```
 
 - `auto_launch_codex`: Start Codex automatically when the terminal opens. The
-  MVP defaults this to `false` so the session picker opens first.
+  MVP now defaults this to `true`; set it to `false` to open the session picker
+  first.
 - `persistent_apk_packages`: APK packages to reinstall into persistent storage.
 - `persistent_pip_packages`: Python packages to install into the persistent
   virtual environment.

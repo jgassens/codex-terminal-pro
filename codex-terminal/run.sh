@@ -120,7 +120,7 @@ install_tools() {
 
 log_startup_diagnostics() {
     local app_name="${APP_NAME:-${ADDON_NAME:-Codex Terminal Pro}}"
-    local app_version="${BUILD_VERSION:-${APP_VERSION:-0.1.0}}"
+    local app_version="${BUILD_VERSION:-${APP_VERSION:-0.1.2}}"
 
     bashio::log.info "Startup diagnostics:"
     bashio::log.info "  - Date: $(date)"
@@ -198,7 +198,7 @@ auto_install_packages() {
 
 get_codex_launch_command() {
     local auto_launch_codex
-    auto_launch_codex=$(bashio::config 'auto_launch_codex' 'false')
+    auto_launch_codex=$(bashio::config 'auto_launch_codex' 'true')
 
     if [ "$auto_launch_codex" = "true" ]; then
         if [ -f /usr/local/bin/codex-session-picker ]; then
@@ -273,7 +273,7 @@ start_web_terminal() {
     bashio::log.info "HOME=${HOME}"
 
     launch_command=$(get_codex_launch_command)
-    auto_launch_codex=$(bashio::config 'auto_launch_codex' 'false')
+    auto_launch_codex=$(bashio::config 'auto_launch_codex' 'true')
     bashio::log.info "Auto-launch Codex: ${auto_launch_codex}"
 
     start_image_service
