@@ -130,6 +130,7 @@
 
         #drop-zone.active {
             display: flex;
+            pointer-events: auto;
         }
 
         #drop-zone-text {
@@ -495,8 +496,13 @@
                         }
                     };
 
-                    // Auto-copy to clipboard and try to paste into terminal
-                    autoCopyAndPaste(filePath);
+                    const inserted = await insertTextIntoTerminal(`${filePath} `);
+                    if (inserted) {
+                        await copyToClipboard(filePath);
+                        setStatus(`📎 Inserted ${filePath}`, 'success', true);
+                    } else {
+                        await autoCopyAndPaste(filePath);
+                    }
 
                     // Helper to select text (works in all contexts)
                     function selectText() {
@@ -617,7 +623,7 @@
             e.preventDefault();
         });
 
-        document.addEventListener('drop', async (e) => {
+        async function handleImageDrop(e) {
             e.preventDefault();
             dragCounter = 0;
             dropZone.classList.remove('active');
@@ -631,7 +637,35 @@
                     setStatus('Please drop an image file', 'error');
                 }
             }
-        });
+        }
+
+        document.addEventListener('drop', handleImageDrop);
+        dropZone.addEventListener('dragover', (e) => e.preventDefault());
+        dropZone.addEventListener('drop', handleImageDrop);
+
+        async function insertTextIntoTerminal(text) {
+            try {
+                const response = await fetch(ingressPath('terminal-input'), {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ text })
+                });
+
+                if (!response.ok) {
+                    const body = await response.text();
+                    console.log('Terminal insert failed:', body);
+                    return false;
+                }
+
+                const result = await response.json();
+                return Boolean(result.success);
+            } catch (err) {
+                console.log('Terminal insert failed:', err);
+                return false;
+            }
+        }
 
         // Auto-copy path and attempt to paste into terminal
         async function autoCopyAndPaste(filePath) {
@@ -751,11 +785,26 @@
             }
         }
 
-        // Prevent default drag behavior on iframe
+        // Forward image drops over the terminal iframe to the wrapper upload
+        // flow. Without this, ttyd can swallow drops before the parent page sees
+        // them.
         window.addEventListener('load', () => {
             const iframe = document.getElementById('terminal-frame');
             iframe.addEventListener('dragover', (e) => e.preventDefault());
-            iframe.addEventListener('drop', (e) => e.preventDefault());
+            iframe.addEventListener('drop', handleImageDrop);
+            iframe.addEventListener('load', () => {
+                try {
+                    const iframeDocument = iframe.contentWindow?.document;
+                    if (!iframeDocument) {
+                        return;
+                    }
+
+                    iframeDocument.addEventListener('dragover', (e) => e.preventDefault(), true);
+                    iframeDocument.addEventListener('drop', handleImageDrop, true);
+                } catch (err) {
+                    console.log('Cannot attach terminal drop handler:', err);
+                }
+            });
         });
 
         // ========================================

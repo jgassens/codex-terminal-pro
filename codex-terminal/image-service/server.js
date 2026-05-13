@@ -16,6 +16,7 @@
 
 const express = require('express');
 const http = require('http');
+const { execFile } = require('child_process');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
@@ -25,6 +26,7 @@ const app = express();
 const PORT = process.env.IMAGE_SERVICE_PORT || 7680;
 const TTYD_PORT = process.env.TTYD_PORT || 7681;
 const UPLOAD_DIR = process.env.UPLOAD_DIR || '/data/images';
+const TMUX_TARGET = process.env.TMUX_TARGET || 'codex-terminal:0.0';
 
 // Home Assistant ingress can serve this page from a URL ending in a double
 // slash. Browsers then request paths like //terminal/, which Express does not
@@ -73,6 +75,7 @@ const upload = multer({
 
 // API routes MUST come before static files middleware
 // Otherwise static middleware will intercept API requests
+app.use(express.json({ limit: '64kb' }));
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -101,6 +104,33 @@ app.post('/upload', upload.single('image'), (req, res) => {
         path: filePath,
         filename: req.file.filename,
         size: req.file.size
+    });
+});
+
+// Insert text into the persistent terminal session. This is used after image
+// upload so the image path lands in the Codex prompt even when browser paste
+// into the ttyd iframe is blocked.
+app.post('/terminal-input', (req, res) => {
+    const text = typeof req.body?.text === 'string' ? req.body.text : '';
+
+    if (!text.trim()) {
+        return res.status(400).json({ success: false, error: 'No terminal input provided' });
+    }
+
+    if (text.length > 4096) {
+        return res.status(400).json({ success: false, error: 'Terminal input is too long' });
+    }
+
+    execFile('tmux', ['send-keys', '-t', TMUX_TARGET, '-l', '--', text], { timeout: 3000 }, (err) => {
+        if (err) {
+            console.error(`Failed to insert terminal input into ${TMUX_TARGET}:`, err.message);
+            return res.status(502).json({
+                success: false,
+                error: 'Failed to insert text into terminal session'
+            });
+        }
+
+        res.json({ success: true });
     });
 });
 
@@ -173,5 +203,6 @@ server.listen(PORT, '0.0.0.0', () => {
     console.log(`Codex Terminal Image Service running on port ${PORT}`);
     console.log(`Upload directory: ${UPLOAD_DIR}`);
     console.log(`ttyd terminal on port: ${TTYD_PORT}`);
+    console.log(`tmux input target: ${TMUX_TARGET}`);
     console.log(`Terminal proxy available at /terminal/`);
 });

@@ -21,6 +21,9 @@ file as sensitive.
 Highlighted terminal text is copied to the browser clipboard when the selection
 finishes.
 
+Dropped or pasted images are uploaded to `/data/images`, and the saved image
+path is inserted directly into the Codex prompt.
+
 ![Codex Terminal Pro screenshot](screenshot.png)
 
 ## Quick Start

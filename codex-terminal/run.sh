@@ -123,7 +123,7 @@ install_tools() {
 
 log_startup_diagnostics() {
     local app_name="${APP_NAME:-${ADDON_NAME:-Codex Terminal Pro}}"
-    local app_version="${BUILD_VERSION:-${APP_VERSION:-0.1.5}}"
+    local app_version="${BUILD_VERSION:-${APP_VERSION:-0.1.6}}"
 
     bashio::log.info "Startup diagnostics:"
     bashio::log.info "  - Date: $(date)"
@@ -350,6 +350,7 @@ start_web_terminal() {
     auto_launch_codex=$(bashio::config 'auto_launch_codex' 'true')
     bashio::log.info "Auto-launch Codex: ${auto_launch_codex}"
     bashio::log.info "Persistent terminal session: tmux session '${tmux_session}'"
+    export TMUX_TARGET="${tmux_session}:0.0"
     write_tmux_config "${tmux_config}"
     write_tmux_launch_script "${tmux_launcher}" "${launch_command}"
 

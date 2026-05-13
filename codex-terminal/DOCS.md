@@ -19,6 +19,9 @@ that scroll away. Treat this log as sensitive terminal output.
 Selecting text inside the embedded terminal copies it to the browser clipboard
 when the selection finishes.
 
+Dropped or pasted images are uploaded to `/data/images`, and the saved path is
+inserted directly into the Codex prompt through the persistent tmux session.
+
 ## Install
 
 1. Go to **Settings** -> **Add-ons** -> **Add-on Store**.

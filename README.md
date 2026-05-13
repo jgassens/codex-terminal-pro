@@ -74,6 +74,9 @@ that scroll away; treat that log as sensitive terminal output.
 Selecting text inside the embedded terminal copies it to the browser clipboard
 when the selection finishes.
 
+Dropping or pasting an image uploads it to `/data/images` and inserts the saved
+image path directly into the Codex prompt.
+
 ## Authentication
 
 Codex Terminal Pro uses ChatGPT/Codex account authentication for the MVP. A

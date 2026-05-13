@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.6
+
+- Insert uploaded image paths directly into the persistent Codex terminal
+  prompt using `tmux send-keys`.
+- Forward image drops over the embedded terminal iframe to the upload flow.
+
 ## 0.1.5
 
 - Copy highlighted terminal text to the browser clipboard when selection
