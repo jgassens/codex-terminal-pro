@@ -106,6 +106,7 @@ install_tools() {
     local missing=""
 
     command -v ttyd >/dev/null 2>&1 || missing="$missing ttyd"
+    command -v tmux >/dev/null 2>&1 || missing="$missing tmux"
     command -v jq >/dev/null 2>&1 || missing="$missing jq"
     command -v curl >/dev/null 2>&1 || missing="$missing curl"
 
@@ -120,7 +121,7 @@ install_tools() {
 
 log_startup_diagnostics() {
     local app_name="${APP_NAME:-${ADDON_NAME:-Codex Terminal Pro}}"
-    local app_version="${BUILD_VERSION:-${APP_VERSION:-0.1.2}}"
+    local app_version="${BUILD_VERSION:-${APP_VERSION:-0.1.3}}"
 
     bashio::log.info "Startup diagnostics:"
     bashio::log.info "  - Date: $(date)"
@@ -130,6 +131,7 @@ log_startup_diagnostics() {
     bashio::log.info "  - CODEX_HOME: ${CODEX_HOME}"
     bashio::log.info "  - PATH: ${PATH}"
     bashio::log.info "  - which ttyd: $(which ttyd 2>/dev/null || true)"
+    bashio::log.info "  - which tmux: $(which tmux 2>/dev/null || true)"
     bashio::log.info "  - which codex: $(which codex 2>/dev/null || true)"
     bashio::log.info "  - codex version: $(codex --version 2>&1 || true)"
     bashio::log.info "  - which ha: $(which ha 2>/dev/null || true)"
@@ -216,6 +218,35 @@ get_codex_launch_command() {
     fi
 }
 
+write_tmux_launch_script() {
+    local launcher="$1"
+    local launch_command="$2"
+
+    cat > "${launcher}" << LAUNCH_EOF
+#!/usr/bin/env bash
+set -e
+
+if [ -f /etc/profile.d/persistent-packages.sh ]; then
+    . /etc/profile.d/persistent-packages.sh
+fi
+
+export HOME="${HOME}"
+export XDG_CONFIG_HOME="${XDG_CONFIG_HOME}"
+export XDG_CACHE_HOME="${XDG_CACHE_HOME}"
+export XDG_STATE_HOME="${XDG_STATE_HOME}"
+export XDG_DATA_HOME="${XDG_DATA_HOME}"
+export CODEX_HOME="${CODEX_HOME}"
+export GH_CONFIG_DIR="${GH_CONFIG_DIR}"
+export PATH="${PATH}"
+export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"
+export PKG_CONFIG_PATH="${PKG_CONFIG_PATH:-}"
+
+${launch_command}
+LAUNCH_EOF
+
+    chmod 700 "${launcher}"
+}
+
 start_image_service() {
     local image_port=7680
     local ttyd_port=7681
@@ -265,6 +296,8 @@ start_web_terminal() {
     local port=7681
     local launch_command
     local auto_launch_codex
+    local tmux_session="codex-terminal"
+    local tmux_launcher="/tmp/codex-terminal-launch.sh"
 
     bashio::log.info "Starting web terminal on port ${port}..."
     bashio::log.info "Environment variables:"
@@ -275,10 +308,12 @@ start_web_terminal() {
     launch_command=$(get_codex_launch_command)
     auto_launch_codex=$(bashio::config 'auto_launch_codex' 'true')
     bashio::log.info "Auto-launch Codex: ${auto_launch_codex}"
+    bashio::log.info "Persistent terminal session: tmux session '${tmux_session}'"
+    write_tmux_launch_script "${tmux_launcher}" "${launch_command}"
 
     start_image_service
 
-    bashio::log.info "Final ttyd command: ttyd --port ${port} --interface 0.0.0.0 --writable --ping-interval 30 --client-option reconnect=5 bash -lc '${launch_command}'"
+    bashio::log.info "Final ttyd command: ttyd --port ${port} --interface 0.0.0.0 --writable --ping-interval 30 --client-option reconnect=5 tmux new-session -A -s ${tmux_session} ${tmux_launcher}"
 
     exec ttyd \
         --port "${port}" \
@@ -286,7 +321,7 @@ start_web_terminal() {
         --writable \
         --ping-interval 30 \
         --client-option reconnect=5 \
-        bash -lc "$launch_command"
+        tmux new-session -A -s "${tmux_session}" "${tmux_launcher}"
 }
 
 run_health_check() {

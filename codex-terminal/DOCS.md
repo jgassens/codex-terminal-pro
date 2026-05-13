@@ -8,6 +8,9 @@ The add-on registers an admin-only sidebar panel titled **Codex Terminal Pro**.
 It remains admin-only because the terminal can edit Home Assistant
 configuration and call manager-level Home Assistant actions.
 
+Interactive terminal state is kept in a named `tmux` session. Browser refreshes,
+tab switches, and ingress reconnects should reattach to the same session.
+
 ## Install
 
 1. Go to **Settings** -> **Add-ons** -> **Add-on Store**.

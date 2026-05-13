@@ -12,6 +12,7 @@ This is an MVP fork. It is not an official OpenAI add-on.
 
 - Home Assistant ingress web terminal powered by ttyd.
 - Sidebar panel entry for admin users via Home Assistant ingress.
+- Persistent `tmux` session so browser reconnects do not kill Codex.
 - Codex CLI installed with `npm install -g @openai/codex`.
 - Starts in `/config` so Codex can inspect Home Assistant YAML and storage.
 - Persistent Codex state under `/data/.codex`.
@@ -59,6 +60,11 @@ New installs default to `auto_launch_codex: true`, so Codex starts when the
 terminal connects. If you previously installed an older build, Home Assistant
 may preserve your existing option value; set `auto_launch_codex` to `true` in
 the add-on configuration UI to restore auto-start.
+
+Codex runs inside a named `tmux` session. Closing the browser tab, switching
+away from the sidebar panel, refreshing the page, or losing the websocket should
+detach the browser but leave Codex running. Reopening the panel reattaches to
+the same session.
 
 ## Authentication
 

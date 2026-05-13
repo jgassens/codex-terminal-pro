@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.3
+
+- Run the interactive Codex terminal inside a persistent `tmux` session.
+- Reattach to the same terminal session after browser tab switches, websocket
+  drops, page refreshes, or Home Assistant ingress reconnects.
+
 ## 0.1.2
 
 - Default new installs to auto-launch Codex when the terminal opens.

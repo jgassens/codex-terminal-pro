@@ -9,6 +9,10 @@ Assistant CLI, and GitHub CLI preinstalled.
 It registers an admin-only Home Assistant sidebar panel titled **Codex Terminal
 Pro** through ingress.
 
+The terminal runs inside a persistent `tmux` session, so browser reconnects and
+Home Assistant ingress websocket drops should reattach instead of restarting
+Codex.
+
 ![Codex Terminal Pro screenshot](screenshot.png)
 
 ## Quick Start
