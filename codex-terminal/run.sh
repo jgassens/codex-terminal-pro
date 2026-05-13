@@ -123,7 +123,7 @@ install_tools() {
 
 log_startup_diagnostics() {
     local app_name="${APP_NAME:-${ADDON_NAME:-Codex Terminal Pro}}"
-    local app_version="${BUILD_VERSION:-${APP_VERSION:-0.1.9}}"
+    local app_version="${BUILD_VERSION:-${APP_VERSION:-0.1.10}}"
 
     bashio::log.info "Startup diagnostics:"
     bashio::log.info "  - Date: $(date)"
@@ -233,6 +233,7 @@ setw -g mode-keys vi
 set -s set-clipboard external
 set -as terminal-features ',xterm-256color:clipboard'
 set -as terminal-overrides ',xterm-256color:Ms=\E]52;%p1%s;%p2%s\007'
+bind-key -T root MouseDrag1Pane if -F '#{pane_in_mode}' 'send-keys -M' 'copy-mode -M'
 bind-key -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-selection-and-cancel
 bind-key -T copy-mode MouseDragEnd1Pane send-keys -X copy-selection-and-cancel
 bind-key -T copy-mode-vi y send-keys -X copy-selection-and-cancel

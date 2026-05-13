@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.10
+
+- Start tmux copy mode on mouse drag so terminal selections have real text to
+  send through OSC 52.
+- Stop reporting browser copy success when ttyd's native copy handler returns
+  true without selected text.
+
 ## 0.1.9
 
 - Trigger ttyd/xterm's native copy handler directly on mouse release so Firefox

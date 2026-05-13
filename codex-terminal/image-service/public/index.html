@@ -400,14 +400,9 @@
                     const copyTerminalSelection = () => {
                         rememberTerminalSelection();
                         const selectedText = getTerminalSelection(iframeWindow) || lastKnownTerminalSelection;
-                        const nativeCopied = copyTerminalSelectionWithTtyd(iframeDocument);
-
-                        if (nativeCopied) {
-                            updateTerminalSelectionCopyStatus(true, selectedText);
-                            return;
-                        }
 
                         if (!selectedText.trim()) {
+                            copyTerminalSelectionWithTtyd(iframeDocument);
                             return;
                         }
 
