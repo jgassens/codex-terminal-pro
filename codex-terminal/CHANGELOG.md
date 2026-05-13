@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.12
+
+- Install Alpine's `bubblewrap` package so Codex finds `bwrap` on `PATH`
+  instead of warning and falling back to its bundled helper.
+- Log `bwrap` path and version in startup diagnostics.
+
 ## 0.1.11
 
 - Copy mouse-dragged terminal text by reading the visible xterm buffer cells

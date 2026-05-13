@@ -1,7 +1,7 @@
 FROM ghcr.io/home-assistant/base:latest
 
 LABEL \
-    io.hass.version="0.1.11" \
+    io.hass.version="0.1.12" \
     io.hass.type="addon" \
     io.hass.arch="aarch64|amd64" \
     org.opencontainers.image.title="Home Assistant Add-on: Codex Terminal Pro" \
@@ -30,6 +30,7 @@ RUN apk add --no-cache \
     wget \
     tree \
     tmux \
+    bubblewrap \
     ttyd
 
 # Install Codex CLI.
