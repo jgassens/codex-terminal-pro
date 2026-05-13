@@ -115,6 +115,6 @@ Initial Codex Terminal Pro MVP fork.
 ## Fork History
 
 This project is an MIT-licensed fork of the Home Assistant terminal add-on work
-by Tom Cassady and the enhanced ESJavadex/claude-code-ha fork. Historical
+by Tom Cassady and an enhanced ESJavadex Home Assistant terminal fork. Historical
 runtime details from those upstream projects are intentionally not repeated here
 because this fork now targets OpenAI Codex CLI.

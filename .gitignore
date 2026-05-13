@@ -28,6 +28,9 @@ dist/
 .codex/auth.json
 auth.json
 
+# Local agent guidance
+AGENTS.md
+
 # Editor files
 .idea/
 .vscode/
