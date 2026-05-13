@@ -1,7 +1,7 @@
 FROM ghcr.io/home-assistant/base:latest
 
 LABEL \
-    io.hass.version="0.1.12" \
+    io.hass.version="0.1.13" \
     io.hass.type="addon" \
     io.hass.arch="aarch64|amd64" \
     org.opencontainers.image.title="Home Assistant Add-on: Codex Terminal Pro" \
@@ -75,7 +75,7 @@ WORKDIR /config
 # Copy and install image service.
 COPY image-service/ /opt/image-service/
 RUN cd /opt/image-service \
-    && npm install --production --no-optional \
+    && npm ci --omit=dev --no-audit --no-fund \
     && npm cache clean --force \
     && chmod +x server.js
 

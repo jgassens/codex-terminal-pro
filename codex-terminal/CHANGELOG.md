@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.13
+
+- Rotate the persistent terminal transcript instead of appending forever.
+- Tighten Codex, GitHub CLI, and XDG state directory permissions under `/data`.
+- Remove the unused Home Assistant Auth API permission.
+- Pin image-service dependencies with a lockfile and install them with `npm ci`.
+- Add uploaded-image retention cleanup while keeping drag/drop upload behavior.
+- Start health checks in the background so the terminal opens faster.
+
 ## 0.1.12
 
 - Install Alpine's `bubblewrap` package so Codex finds `bwrap` on `PATH`

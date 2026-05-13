@@ -74,7 +74,8 @@ the same session.
 Mouse wheel scrolling is handled by tmux, with a large scrollback buffer. You
 can also use tmux copy mode with `Ctrl-b [` and leave it with `q`. Terminal
 output is mirrored to `/data/logs/codex-terminal.log` for debugging warnings
-that scroll away; treat that log as sensitive terminal output.
+that scroll away. The transcript is rotated by size; treat it as sensitive
+terminal output.
 
 Selecting text inside the embedded terminal copies it to the browser clipboard
 when the selection finishes. tmux mouse selections are forwarded to the browser

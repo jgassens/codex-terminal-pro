@@ -27,6 +27,14 @@ const PORT = process.env.IMAGE_SERVICE_PORT || 7680;
 const TTYD_PORT = process.env.TTYD_PORT || 7681;
 const UPLOAD_DIR = process.env.UPLOAD_DIR || '/data/images';
 const TMUX_TARGET = process.env.TMUX_TARGET || 'codex-terminal:0.0';
+const UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
+const IMAGE_RETENTION_DAYS = parseNonNegativeInt(process.env.IMAGE_RETENTION_DAYS, 30);
+const IMAGE_RETENTION_MAX_BYTES = parseNonNegativeInt(process.env.IMAGE_RETENTION_MAX_BYTES, 256 * 1024 * 1024);
+
+function parseNonNegativeInt(value, fallback) {
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
 
 // Home Assistant ingress can serve this page from a URL ending in a double
 // slash. Browsers then request paths like //terminal/, which Express does not
@@ -44,6 +52,79 @@ if (!fs.existsSync(UPLOAD_DIR)) {
     console.log(`Created upload directory: ${UPLOAD_DIR}`);
 }
 
+function listManagedUploads() {
+    try {
+        return fs.readdirSync(UPLOAD_DIR)
+            .filter((filename) => filename.startsWith('pasted-'))
+            .map((filename) => {
+                const filePath = path.join(UPLOAD_DIR, filename);
+                const stat = fs.statSync(filePath);
+                return {
+                    filename,
+                    path: filePath,
+                    size: stat.size,
+                    mtimeMs: stat.mtimeMs,
+                    isFile: stat.isFile()
+                };
+            })
+            .filter((entry) => entry.isFile);
+    } catch (err) {
+        console.error('Unable to list uploaded images:', err.message);
+        return [];
+    }
+}
+
+function removeUpload(entry) {
+    try {
+        fs.unlinkSync(entry.path);
+        console.log(`Removed old uploaded image: ${entry.path}`);
+        return entry.size;
+    } catch (err) {
+        console.error(`Unable to remove uploaded image ${entry.path}:`, err.message);
+        return 0;
+    }
+}
+
+function cleanupUploads(protectedFilename = '') {
+    let files = listManagedUploads();
+    let removed = 0;
+    let removedBytes = 0;
+
+    if (IMAGE_RETENTION_DAYS > 0) {
+        const cutoff = Date.now() - (IMAGE_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+        for (const entry of files) {
+            if (entry.filename !== protectedFilename && entry.mtimeMs < cutoff) {
+                removedBytes += removeUpload(entry);
+                removed += 1;
+            }
+        }
+        files = listManagedUploads();
+    }
+
+    if (IMAGE_RETENTION_MAX_BYTES > 0) {
+        let totalBytes = files.reduce((sum, entry) => sum + entry.size, 0);
+        const oldestFirst = files
+            .filter((entry) => entry.filename !== protectedFilename)
+            .sort((a, b) => a.mtimeMs - b.mtimeMs);
+
+        for (const entry of oldestFirst) {
+            if (totalBytes <= IMAGE_RETENTION_MAX_BYTES) {
+                break;
+            }
+            const bytes = removeUpload(entry);
+            totalBytes -= bytes;
+            removedBytes += bytes;
+            removed += 1;
+        }
+    }
+
+    if (removed > 0) {
+        console.log(`Upload retention cleanup removed ${removed} file(s), ${(removedBytes / 1024).toFixed(2)} KB`);
+    }
+}
+
+cleanupUploads();
+
 // Configure multer for image uploads
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
@@ -60,7 +141,7 @@ const storage = multer.diskStorage({
 const upload = multer({
     storage: storage,
     limits: {
-        fileSize: 10 * 1024 * 1024 // 10MB max file size
+        fileSize: UPLOAD_MAX_BYTES // 10MB max file size
     },
     fileFilter: (req, file, cb) => {
         // Accept images only
@@ -98,6 +179,7 @@ app.post('/upload', upload.single('image'), (req, res) => {
 
     const filePath = path.join(UPLOAD_DIR, req.file.filename);
     console.log(`Image uploaded: ${filePath} (${(req.file.size / 1024).toFixed(2)} KB)`);
+    cleanupUploads(req.file.filename);
 
     res.json({
         success: true,
@@ -202,6 +284,7 @@ server.on('upgrade', (req, socket, head) => {
 server.listen(PORT, '0.0.0.0', () => {
     console.log(`Codex Terminal Image Service running on port ${PORT}`);
     console.log(`Upload directory: ${UPLOAD_DIR}`);
+    console.log(`Upload retention: ${IMAGE_RETENTION_DAYS} day(s), ${IMAGE_RETENTION_MAX_BYTES} bytes`);
     console.log(`ttyd terminal on port: ${TTYD_PORT}`);
     console.log(`tmux input target: ${TMUX_TARGET}`);
     console.log(`Terminal proxy available at /terminal/`);

@@ -8,7 +8,7 @@ CONFIG_FILE="$CODEX_HOME/config.toml"
 
 ensure_codex_home() {
     mkdir -p "$CODEX_HOME"
-    chmod 755 "$CODEX_HOME"
+    chmod 700 "$CODEX_HOME"
 
     touch "$CONFIG_FILE"
     chmod 644 "$CONFIG_FILE"

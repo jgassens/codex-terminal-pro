@@ -62,6 +62,11 @@ the add-on from the UI. Version detection comes from `config.yaml`.
 
 ```yaml
 auto_launch_codex: true
+terminal_transcript_enabled: true
+terminal_transcript_max_bytes: 1048576
+terminal_transcript_backups: 2
+image_retention_days: 30
+image_retention_max_bytes: 268435456
 persistent_apk_packages: []
 persistent_pip_packages: []
 ```
@@ -69,6 +74,13 @@ persistent_pip_packages: []
 - `auto_launch_codex`: Start Codex automatically when the terminal opens. The
   MVP now defaults this to `true`; set it to `false` to open the session picker
   first.
+- `terminal_transcript_enabled`: Mirror terminal output to
+  `/data/logs/codex-terminal.log` so warnings can be recovered after they scroll
+  away.
+- `terminal_transcript_max_bytes` and `terminal_transcript_backups`: Rotate the
+  transcript before it grows without bound.
+- `image_retention_days` and `image_retention_max_bytes`: Clean up old uploaded
+  images from `/data/images`.
 - `persistent_apk_packages`: APK packages to reinstall into persistent storage.
 - `persistent_pip_packages`: Python packages to install into the persistent
   virtual environment.

@@ -109,9 +109,18 @@ cli_auth_credentials_store = "file"
 
 ```yaml
 auto_launch_codex: true
+terminal_transcript_enabled: true
+terminal_transcript_max_bytes: 1048576
+terminal_transcript_backups: 2
+image_retention_days: 30
+image_retention_max_bytes: 268435456
 persistent_apk_packages: []
 persistent_pip_packages: []
 ```
+
+Terminal transcript logging stays enabled by default for debugging, but the log
+rotates under `/data/logs`. Uploaded images stay in `/data/images` long enough
+for normal Codex workflows and are cleaned up by age and total size.
 
 ## Safe Home Assistant Workflow
 

@@ -1,7 +1,7 @@
 ---
 name: "Codex Terminal Pro"
 description: "Unofficial OpenAI Codex CLI terminal for Home Assistant with persistent package management, Home Assistant utilities, and image paste support. Fork of heytcass/home-assistant-addons and ESJavadex/claude-code-ha."
-version: "0.1.12"
+version: "0.1.13"
 slug: "codex_terminal_pro"
 init: false
 
@@ -35,11 +35,21 @@ ports_description:
 # Add-on configuration options
 options:
   auto_launch_codex: true
+  terminal_transcript_enabled: true
+  terminal_transcript_max_bytes: 1048576
+  terminal_transcript_backups: 2
+  image_retention_days: 30
+  image_retention_max_bytes: 268435456
   persistent_apk_packages: []
   persistent_pip_packages: []
 
 schema:
   auto_launch_codex: bool?
+  terminal_transcript_enabled: bool?
+  terminal_transcript_max_bytes: int?
+  terminal_transcript_backups: int?
+  image_retention_days: int?
+  image_retention_max_bytes: int?
   persistent_apk_packages:
     - str?
   persistent_pip_packages:
@@ -53,7 +63,6 @@ map:
 hassio_api: true
 hassio_role: manager
 homeassistant_api: true
-auth_api: true
 
 # Service startup configuration
 startup: services

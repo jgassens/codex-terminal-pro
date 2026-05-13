@@ -9,6 +9,7 @@ init_environment() {
     local data_home="/data/home"
     local config_dir="/data/.config"
     local cache_dir="/data/.cache"
+    local local_dir="/data/.local"
     local state_dir="/data/.local/state"
     local data_dir="/data/.local/share"
     local codex_home="/data/.codex"
@@ -22,16 +23,16 @@ init_environment() {
 
     bashio::log.info "Initializing Codex environment in /data..."
 
-    if ! mkdir -p "$data_home" "$config_dir" "$cache_dir" "$state_dir" "$data_dir" \
+    if ! mkdir -p "$data_home" "$config_dir" "$cache_dir" "$local_dir" "$state_dir" "$data_dir" \
                   "$codex_home" "$gh_config_dir" "$persist_bin" "$persist_lib" \
                   "$persist_python" "$image_dir" "$log_dir"; then
         bashio::log.error "Failed to create directories in /data"
         exit 1
     fi
 
-    chmod 755 "$data_home" "$config_dir" "$cache_dir" "$state_dir" "$data_dir" \
-              "$codex_home" "$gh_config_dir" "$persist_root" "$persist_bin" \
-              "$persist_lib" "$persist_python" "$image_dir"
+    chmod 700 "$data_home" "$config_dir" "$cache_dir" "$local_dir" "$state_dir" \
+              "$data_dir" "$codex_home" "$gh_config_dir"
+    chmod 755 "$persist_root" "$persist_bin" "$persist_lib" "$persist_python" "$image_dir"
     chmod 700 "$log_dir"
 
     export HOME="$data_home"
@@ -124,7 +125,7 @@ install_tools() {
 
 log_startup_diagnostics() {
     local app_name="${APP_NAME:-${ADDON_NAME:-Codex Terminal Pro}}"
-    local app_version="${BUILD_VERSION:-${APP_VERSION:-0.1.12}}"
+    local app_version="${BUILD_VERSION:-${APP_VERSION:-0.1.13}}"
 
     bashio::log.info "Startup diagnostics:"
     bashio::log.info "  - Date: $(date)"
@@ -245,6 +246,20 @@ TMUX_EOF
     chmod 600 "${tmux_config}"
 }
 
+normalize_nonnegative_int() {
+    local value="$1"
+    local fallback="$2"
+
+    case "$value" in
+        ''|*[!0-9]*)
+            echo "$fallback"
+            ;;
+        *)
+            echo "$value"
+            ;;
+    esac
+}
+
 write_tmux_launch_script() {
     local launcher="$1"
     local launch_command="$2"
@@ -273,14 +288,74 @@ LAUNCH_EOF
     chmod 700 "${launcher}"
 }
 
+write_transcript_writer() {
+    local writer="$1"
+    local transcript="$2"
+    local max_bytes="$3"
+    local backups="$4"
+
+    cat > "${writer}" << WRITER_EOF
+#!/usr/bin/env bash
+set -uo pipefail
+
+transcript="${transcript}"
+max_bytes="${max_bytes}"
+backups="${backups}"
+
+rotate_transcript() {
+    local size
+    local i
+
+    if [ "\${max_bytes}" -le 0 ] || [ ! -f "\${transcript}" ]; then
+        return
+    fi
+
+    size=\$(stat -c "%s" "\${transcript}" 2>/dev/null || echo 0)
+    if [ "\${size}" -lt "\${max_bytes}" ]; then
+        return
+    fi
+
+    if [ "\${backups}" -le 0 ]; then
+        : > "\${transcript}"
+        chmod 600 "\${transcript}"
+        return
+    fi
+
+    i=\$((backups - 1))
+    while [ "\${i}" -ge 1 ]; do
+        if [ -f "\${transcript}.\${i}" ]; then
+            mv -f "\${transcript}.\${i}" "\${transcript}.\$((i + 1))"
+        fi
+        i=\$((i - 1))
+    done
+
+    mv -f "\${transcript}" "\${transcript}.1"
+    : > "\${transcript}"
+    chmod 600 "\${transcript}"
+}
+
+mkdir -p "\$(dirname "\${transcript}")"
+touch "\${transcript}"
+chmod 600 "\${transcript}"
+
+while IFS= read -r line; do
+    rotate_transcript
+    printf '%s\\n' "\${line}" >> "\${transcript}"
+done
+WRITER_EOF
+
+    chmod 700 "${writer}"
+}
+
 prepare_tmux_session() {
     local session="$1"
     local launcher="$2"
     local tmux_config="$3"
     local transcript="$4"
-
-    touch "${transcript}"
-    chmod 600 "${transcript}"
+    local transcript_enabled="$5"
+    local transcript_max_bytes="$6"
+    local transcript_backups="$7"
+    local transcript_writer="/tmp/codex-terminal-transcript-writer.sh"
 
     if ! tmux -f "${tmux_config}" has-session -t "${session}" 2>/dev/null; then
         bashio::log.info "Creating tmux session '${session}'"
@@ -293,9 +368,16 @@ prepare_tmux_session() {
     tmux -f "${tmux_config}" set-option -g history-limit 200000
     tmux -f "${tmux_config}" set-option -sq set-clipboard external || \
         bashio::log.warning "Could not enable tmux clipboard support"
-    tmux -f "${tmux_config}" pipe-pane -t "${session}:0.0" -o "cat >> '${transcript}'" || \
-        bashio::log.warning "Could not enable terminal transcript logging"
-    bashio::log.info "Terminal transcript: ${transcript}"
+
+    if [ "${transcript_enabled}" = "true" ]; then
+        write_transcript_writer "${transcript_writer}" "${transcript}" "${transcript_max_bytes}" "${transcript_backups}"
+        tmux -f "${tmux_config}" pipe-pane -t "${session}:0.0" -o "${transcript_writer}" || \
+            bashio::log.warning "Could not enable terminal transcript logging"
+        bashio::log.info "Terminal transcript: ${transcript} (max ${transcript_max_bytes} bytes, ${transcript_backups} backups)"
+    else
+        tmux -f "${tmux_config}" pipe-pane -t "${session}:0.0" || true
+        bashio::log.info "Terminal transcript logging disabled"
+    fi
 }
 
 start_image_service() {
@@ -304,6 +386,8 @@ start_image_service() {
     local upload_dir="/data/images"
     local service_dir="/opt/image-service"
     local server_file="${service_dir}/server.js"
+    local image_retention_days
+    local image_retention_max_bytes
 
     bashio::log.info "Starting image upload service on port ${image_port}..."
 
@@ -313,6 +397,12 @@ start_image_service() {
     export IMAGE_SERVICE_PORT="${image_port}"
     export TTYD_PORT="${ttyd_port}"
     export UPLOAD_DIR="${upload_dir}"
+    image_retention_days=$(bashio::config 'image_retention_days' '30')
+    image_retention_max_bytes=$(bashio::config 'image_retention_max_bytes' '268435456')
+    IMAGE_RETENTION_DAYS=$(normalize_nonnegative_int "${image_retention_days}" "30")
+    IMAGE_RETENTION_MAX_BYTES=$(normalize_nonnegative_int "${image_retention_max_bytes}" "268435456")
+    export IMAGE_RETENTION_DAYS
+    export IMAGE_RETENTION_MAX_BYTES
 
     if [ ! -f "${server_file}" ]; then
         bashio::log.error "server.js not found at ${server_file}"
@@ -322,9 +412,8 @@ start_image_service() {
 
     if [ ! -d "${service_dir}/node_modules" ]; then
         bashio::log.error "node_modules not found in ${service_dir}"
-        bashio::log.info "Attempting to install dependencies..."
-        cd "${service_dir}" && npm install || bashio::log.error "npm install failed"
-        cd - > /dev/null
+        bashio::log.error "Image service dependencies must be installed during the Docker build"
+        return 1
     fi
 
     node "${server_file}" 2>&1 | while IFS= read -r line; do
@@ -351,6 +440,9 @@ start_web_terminal() {
     local tmux_config="/data/.tmux.conf"
     local tmux_launcher="/tmp/codex-terminal-launch.sh"
     local transcript="/data/logs/codex-terminal.log"
+    local transcript_enabled
+    local transcript_max_bytes
+    local transcript_backups
 
     bashio::log.info "Starting web terminal on port ${port}..."
     bashio::log.info "Environment variables:"
@@ -360,6 +452,9 @@ start_web_terminal() {
 
     launch_command=$(get_codex_launch_command)
     auto_launch_codex=$(bashio::config 'auto_launch_codex' 'true')
+    transcript_enabled=$(bashio::config 'terminal_transcript_enabled' 'true')
+    transcript_max_bytes=$(normalize_nonnegative_int "$(bashio::config 'terminal_transcript_max_bytes' '1048576')" "1048576")
+    transcript_backups=$(normalize_nonnegative_int "$(bashio::config 'terminal_transcript_backups' '2')" "2")
     bashio::log.info "Auto-launch Codex: ${auto_launch_codex}"
     bashio::log.info "Persistent terminal session: tmux session '${tmux_session}'"
     export TMUX_TARGET="${tmux_session}:0.0"
@@ -367,7 +462,8 @@ start_web_terminal() {
     write_tmux_launch_script "${tmux_launcher}" "${launch_command}"
 
     start_image_service
-    prepare_tmux_session "${tmux_session}" "${tmux_launcher}" "${tmux_config}" "${transcript}"
+    prepare_tmux_session "${tmux_session}" "${tmux_launcher}" "${tmux_config}" "${transcript}" \
+        "${transcript_enabled}" "${transcript_max_bytes}" "${transcript_backups}"
 
     bashio::log.info "Final ttyd command: ttyd --port ${port} --interface 0.0.0.0 --writable --ping-interval 30 --client-option reconnect=5 --client-option macOptionClickForcesSelection=true --client-option rightClickSelectsWord=true tmux -f ${tmux_config} attach-session -t ${tmux_session}"
 
@@ -390,6 +486,17 @@ run_health_check() {
     fi
 }
 
+run_health_check_background() {
+    if [ -f "/opt/scripts/health-check.sh" ]; then
+        bashio::log.info "Starting system health check in background..."
+        (
+            chmod +x /opt/scripts/health-check.sh
+            /opt/scripts/health-check.sh || bashio::log.warning "Some health checks failed but continuing..."
+        ) &
+        bashio::log.info "Health check background PID: $!"
+    fi
+}
+
 main() {
     bashio::log.info "Initializing Codex Terminal Pro add-on..."
 
@@ -398,7 +505,7 @@ main() {
     log_startup_diagnostics
     setup_session_picker
     setup_persistent_packages
-    run_health_check
+    run_health_check_background
     start_web_terminal
 }
 

@@ -5,6 +5,7 @@ node_modules/
 npm-debug.log
 yarn-error.log
 package-lock.json
+!codex-terminal/image-service/package-lock.json
 yarn.lock
 
 # Logs
