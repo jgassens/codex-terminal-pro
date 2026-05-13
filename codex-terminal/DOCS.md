@@ -16,6 +16,9 @@ to enter copy mode, use arrows/PageUp/PageDown, then press `q` to return.
 Terminal output is mirrored to `/data/logs/codex-terminal.log` for warnings
 that scroll away. Treat this log as sensitive terminal output.
 
+Selecting text inside the embedded terminal copies it to the browser clipboard
+when the selection finishes.
+
 ## Install
 
 1. Go to **Settings** -> **Add-ons** -> **Add-on Store**.

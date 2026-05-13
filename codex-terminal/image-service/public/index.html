@@ -311,6 +311,8 @@
     <script>
         let ttydPort = 7681;
         let uploadDir = '/data/images';
+        let lastCopiedTerminalSelection = '';
+        let lastCopiedTerminalSelectionAt = 0;
 
         function ingressPath(path) {
             const cleanPath = String(path).replace(/^\/+/, '');
@@ -345,6 +347,7 @@
             // Use an ingress-aware absolute path to avoid //terminal/ when Home
             // Assistant serves the add-on from a double-slash ingress base URL.
             iframe.src = ingressPath('terminal/');
+            installTerminalSelectionCopy();
         }
 
         const status = document.getElementById('status');
@@ -358,6 +361,73 @@
             if (message && !persistent) {
                 setTimeout(() => setStatus(''), 5000);
             }
+        }
+
+        function installTerminalSelectionCopy() {
+            const iframe = document.getElementById('terminal-frame');
+
+            iframe.addEventListener('load', () => {
+                setTimeout(() => {
+                    let iframeWindow;
+                    let iframeDocument;
+
+                    try {
+                        iframeWindow = iframe.contentWindow;
+                        iframeDocument = iframeWindow?.document;
+                    } catch (err) {
+                        console.log('Cannot attach terminal selection copier:', err);
+                        return;
+                    }
+
+                    if (!iframeWindow || !iframeDocument) {
+                        return;
+                    }
+
+                    const copyTerminalSelection = () => {
+                        setTimeout(async () => {
+                            let selectedText = '';
+
+                            try {
+                                selectedText = String(iframeWindow.getSelection()?.toString() || '');
+                            } catch (err) {
+                                console.log('Cannot read terminal selection:', err);
+                                return;
+                            }
+
+                            selectedText = selectedText.replace(/\u00a0/g, ' ');
+
+                            if (!selectedText.trim()) {
+                                return;
+                            }
+
+                            const now = Date.now();
+                            if (
+                                selectedText === lastCopiedTerminalSelection &&
+                                now - lastCopiedTerminalSelectionAt < 1000
+                            ) {
+                                return;
+                            }
+
+                            const copied = await copyToClipboard(selectedText);
+                            if (copied) {
+                                lastCopiedTerminalSelection = selectedText;
+                                lastCopiedTerminalSelectionAt = now;
+                                setStatus('Copied terminal selection', 'success', false);
+                            } else {
+                                setStatus('Selection ready - press Cmd+C/Ctrl+C', 'error', false);
+                            }
+                        }, 0);
+                    };
+
+                    iframeDocument.addEventListener('mouseup', copyTerminalSelection, true);
+                    iframeDocument.addEventListener('touchend', copyTerminalSelection, true);
+                    iframeDocument.addEventListener('keyup', (event) => {
+                        if (event.key === 'Shift' || event.key.startsWith('Arrow') || event.key === 'PageUp' || event.key === 'PageDown') {
+                            copyTerminalSelection();
+                        }
+                    }, true);
+                }, 500);
+            });
         }
 
         async function uploadImage(file) {

@@ -71,6 +71,9 @@ can also use tmux copy mode with `Ctrl-b [` and leave it with `q`. Terminal
 output is mirrored to `/data/logs/codex-terminal.log` for debugging warnings
 that scroll away; treat that log as sensitive terminal output.
 
+Selecting text inside the embedded terminal copies it to the browser clipboard
+when the selection finishes.
+
 ## Authentication
 
 Codex Terminal Pro uses ChatGPT/Codex account authentication for the MVP. A

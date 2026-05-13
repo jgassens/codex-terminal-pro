@@ -18,6 +18,9 @@ Codex. If needed, enter tmux copy mode with `Ctrl-b [` and leave it with `q`.
 Terminal output is also mirrored to `/data/logs/codex-terminal.log`; treat that
 file as sensitive.
 
+Highlighted terminal text is copied to the browser clipboard when the selection
+finishes.
+
 ![Codex Terminal Pro screenshot](screenshot.png)
 
 ## Quick Start

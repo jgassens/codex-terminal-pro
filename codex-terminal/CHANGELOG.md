@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.5
+
+- Copy highlighted terminal text to the browser clipboard when selection
+  finishes inside the embedded terminal.
+
 ## 0.1.4
 
 - Enable tmux mouse mode so mouse wheel scrolling enters terminal scrollback
