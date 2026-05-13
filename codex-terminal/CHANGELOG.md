@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.9
+
+- Trigger ttyd/xterm's native copy handler directly on mouse release so Firefox
+  sees selection copy as a user-initiated action.
+- Keep the wrapper text-copy fallback, but avoid stealing the terminal
+  selection before ttyd has a chance to copy it.
+
 ## 0.1.8
 
 - Route tmux mouse selections through OSC 52 clipboard support so selecting text

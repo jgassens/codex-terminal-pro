@@ -398,7 +398,14 @@
                     };
 
                     const copyTerminalSelection = () => {
+                        rememberTerminalSelection();
                         const selectedText = getTerminalSelection(iframeWindow) || lastKnownTerminalSelection;
+                        const nativeCopied = copyTerminalSelectionWithTtyd(iframeDocument);
+
+                        if (nativeCopied) {
+                            updateTerminalSelectionCopyStatus(true, selectedText);
+                            return;
+                        }
 
                         if (!selectedText.trim()) {
                             return;
@@ -443,6 +450,15 @@
                     });
                 }, 500);
             });
+        }
+
+        function copyTerminalSelectionWithTtyd(iframeDocument) {
+            try {
+                return iframeDocument.execCommand('copy');
+            } catch (err) {
+                console.log('Cannot trigger ttyd terminal copy:', err);
+                return false;
+            }
         }
 
         function installOsc52ClipboardBridge(iframeWindow, iframeDocument) {
@@ -545,21 +561,16 @@
         }
 
         function copyToClipboardFromGesture(text, clipboardDocument = document) {
-            const fallbackCopied = fallbackCopyToClipboard(text, clipboardDocument);
-            if (fallbackCopied) {
-                return true;
-            }
-
             if (navigator.clipboard && navigator.clipboard.writeText) {
                 return navigator.clipboard.writeText(text)
                     .then(() => true)
                     .catch((err) => {
                         console.log('Clipboard API failed:', err);
-                        return false;
+                        return fallbackCopyToClipboard(text, clipboardDocument);
                     });
             }
 
-            return false;
+            return fallbackCopyToClipboard(text, clipboardDocument);
         }
 
         async function uploadImage(file) {
