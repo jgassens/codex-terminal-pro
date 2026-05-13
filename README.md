@@ -66,6 +66,11 @@ away from the sidebar panel, refreshing the page, or losing the websocket should
 detach the browser but leave Codex running. Reopening the panel reattaches to
 the same session.
 
+Mouse wheel scrolling is handled by tmux, with a large scrollback buffer. You
+can also use tmux copy mode with `Ctrl-b [` and leave it with `q`. Terminal
+output is mirrored to `/data/logs/codex-terminal.log` for debugging warnings
+that scroll away; treat that log as sensitive terminal output.
+
 ## Authentication
 
 Codex Terminal Pro uses ChatGPT/Codex account authentication for the MVP. A

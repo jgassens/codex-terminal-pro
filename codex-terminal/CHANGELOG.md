@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.4
+
+- Enable tmux mouse mode so mouse wheel scrolling enters terminal scrollback
+  instead of sending up/down history keys to Codex.
+- Increase tmux scrollback history to 200,000 lines.
+- Save terminal output to `/data/logs/codex-terminal.log` with restrictive
+  permissions for debugging warnings that have scrolled off screen.
+
 ## 0.1.3
 
 - Run the interactive Codex terminal inside a persistent `tmux` session.

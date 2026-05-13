@@ -18,12 +18,13 @@ init_environment() {
     local persist_lib="$persist_root/lib"
     local persist_python="$persist_root/python"
     local image_dir="/data/images"
+    local log_dir="/data/logs"
 
     bashio::log.info "Initializing Codex environment in /data..."
 
     if ! mkdir -p "$data_home" "$config_dir" "$cache_dir" "$state_dir" "$data_dir" \
                   "$codex_home" "$gh_config_dir" "$persist_bin" "$persist_lib" \
-                  "$persist_python" "$image_dir"; then
+                  "$persist_python" "$image_dir" "$log_dir"; then
         bashio::log.error "Failed to create directories in /data"
         exit 1
     fi
@@ -31,6 +32,7 @@ init_environment() {
     chmod 755 "$data_home" "$config_dir" "$cache_dir" "$state_dir" "$data_dir" \
               "$codex_home" "$gh_config_dir" "$persist_root" "$persist_bin" \
               "$persist_lib" "$persist_python" "$image_dir"
+    chmod 700 "$log_dir"
 
     export HOME="$data_home"
     export XDG_CONFIG_HOME="$config_dir"
@@ -121,7 +123,7 @@ install_tools() {
 
 log_startup_diagnostics() {
     local app_name="${APP_NAME:-${ADDON_NAME:-Codex Terminal Pro}}"
-    local app_version="${BUILD_VERSION:-${APP_VERSION:-0.1.3}}"
+    local app_version="${BUILD_VERSION:-${APP_VERSION:-0.1.4}}"
 
     bashio::log.info "Startup diagnostics:"
     bashio::log.info "  - Date: $(date)"
@@ -132,6 +134,7 @@ log_startup_diagnostics() {
     bashio::log.info "  - PATH: ${PATH}"
     bashio::log.info "  - which ttyd: $(which ttyd 2>/dev/null || true)"
     bashio::log.info "  - which tmux: $(which tmux 2>/dev/null || true)"
+    bashio::log.info "  - tmux version: $(tmux -V 2>/dev/null || true)"
     bashio::log.info "  - which codex: $(which codex 2>/dev/null || true)"
     bashio::log.info "  - codex version: $(codex --version 2>&1 || true)"
     bashio::log.info "  - which ha: $(which ha 2>/dev/null || true)"
@@ -218,13 +221,26 @@ get_codex_launch_command() {
     fi
 }
 
+write_tmux_config() {
+    local tmux_config="$1"
+
+    cat > "${tmux_config}" << 'TMUX_EOF'
+set -g mouse on
+set -g history-limit 200000
+set -g status off
+set -g escape-time 10
+setw -g mode-keys vi
+TMUX_EOF
+
+    chmod 600 "${tmux_config}"
+}
+
 write_tmux_launch_script() {
     local launcher="$1"
     local launch_command="$2"
 
     cat > "${launcher}" << LAUNCH_EOF
 #!/usr/bin/env bash
-set -e
 
 if [ -f /etc/profile.d/persistent-packages.sh ]; then
     . /etc/profile.d/persistent-packages.sh
@@ -245,6 +261,29 @@ ${launch_command}
 LAUNCH_EOF
 
     chmod 700 "${launcher}"
+}
+
+prepare_tmux_session() {
+    local session="$1"
+    local launcher="$2"
+    local tmux_config="$3"
+    local transcript="$4"
+
+    touch "${transcript}"
+    chmod 600 "${transcript}"
+
+    if ! tmux -f "${tmux_config}" has-session -t "${session}" 2>/dev/null; then
+        bashio::log.info "Creating tmux session '${session}'"
+        tmux -f "${tmux_config}" new-session -d -s "${session}" "${launcher}"
+    else
+        bashio::log.info "Reusing existing tmux session '${session}'"
+    fi
+
+    tmux -f "${tmux_config}" set-option -g mouse on
+    tmux -f "${tmux_config}" set-option -g history-limit 200000
+    tmux -f "${tmux_config}" pipe-pane -t "${session}:0.0" -o "cat >> '${transcript}'" || \
+        bashio::log.warning "Could not enable terminal transcript logging"
+    bashio::log.info "Terminal transcript: ${transcript}"
 }
 
 start_image_service() {
@@ -297,7 +336,9 @@ start_web_terminal() {
     local launch_command
     local auto_launch_codex
     local tmux_session="codex-terminal"
+    local tmux_config="/data/.tmux.conf"
     local tmux_launcher="/tmp/codex-terminal-launch.sh"
+    local transcript="/data/logs/codex-terminal.log"
 
     bashio::log.info "Starting web terminal on port ${port}..."
     bashio::log.info "Environment variables:"
@@ -309,11 +350,13 @@ start_web_terminal() {
     auto_launch_codex=$(bashio::config 'auto_launch_codex' 'true')
     bashio::log.info "Auto-launch Codex: ${auto_launch_codex}"
     bashio::log.info "Persistent terminal session: tmux session '${tmux_session}'"
+    write_tmux_config "${tmux_config}"
     write_tmux_launch_script "${tmux_launcher}" "${launch_command}"
 
     start_image_service
+    prepare_tmux_session "${tmux_session}" "${tmux_launcher}" "${tmux_config}" "${transcript}"
 
-    bashio::log.info "Final ttyd command: ttyd --port ${port} --interface 0.0.0.0 --writable --ping-interval 30 --client-option reconnect=5 tmux new-session -A -s ${tmux_session} ${tmux_launcher}"
+    bashio::log.info "Final ttyd command: ttyd --port ${port} --interface 0.0.0.0 --writable --ping-interval 30 --client-option reconnect=5 tmux -f ${tmux_config} attach-session -t ${tmux_session}"
 
     exec ttyd \
         --port "${port}" \
@@ -321,7 +364,7 @@ start_web_terminal() {
         --writable \
         --ping-interval 30 \
         --client-option reconnect=5 \
-        tmux new-session -A -s "${tmux_session}" "${tmux_launcher}"
+        tmux -f "${tmux_config}" attach-session -t "${tmux_session}"
 }
 
 run_health_check() {

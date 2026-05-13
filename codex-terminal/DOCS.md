@@ -11,6 +11,11 @@ configuration and call manager-level Home Assistant actions.
 Interactive terminal state is kept in a named `tmux` session. Browser refreshes,
 tab switches, and ingress reconnects should reattach to the same session.
 
+Mouse wheel scrolling uses tmux scrollback. Keyboard fallback: press `Ctrl-b [`
+to enter copy mode, use arrows/PageUp/PageDown, then press `q` to return.
+Terminal output is mirrored to `/data/logs/codex-terminal.log` for warnings
+that scroll away. Treat this log as sensitive terminal output.
+
 ## Install
 
 1. Go to **Settings** -> **Add-ons** -> **Add-on Store**.

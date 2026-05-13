@@ -13,6 +13,11 @@ The terminal runs inside a persistent `tmux` session, so browser reconnects and
 Home Assistant ingress websocket drops should reattach instead of restarting
 Codex.
 
+Mouse wheel scrolling uses tmux scrollback instead of sending history keys to
+Codex. If needed, enter tmux copy mode with `Ctrl-b [` and leave it with `q`.
+Terminal output is also mirrored to `/data/logs/codex-terminal.log`; treat that
+file as sensitive.
+
 ![Codex Terminal Pro screenshot](screenshot.png)
 
 ## Quick Start
