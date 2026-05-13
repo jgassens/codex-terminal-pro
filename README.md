@@ -1,5 +1,7 @@
 # Codex Terminal Pro for Home Assistant
 
+[![Open your Home Assistant instance and show the add add-on repository dialog with this repository URL pre-filled.](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fjgassens%2Fcodex-terminal-pro)
+
 Codex Terminal Pro is an unofficial Home Assistant add-on that runs the OpenAI
 Codex CLI in a browser terminal, starting in your Home Assistant `/config`
 directory. It keeps the upstream add-on wrapper, ingress terminal, image paste
@@ -22,6 +24,9 @@ This is an MVP fork. It is not an official OpenAI add-on.
 - Home Assistant CLI (`ha`) and GitHub CLI (`gh`) included.
 
 ## Installation
+
+Click the button above to add this repository to Home Assistant, or install it
+manually:
 
 1. In Home Assistant, go to **Settings** -> **Add-ons** -> **Add-on Store**.
 2. Open the three-dot menu and choose **Repositories**.

@@ -1,5 +1,7 @@
 # Codex Terminal Pro
 
+[![Open your Home Assistant instance and show the add add-on repository dialog with this repository URL pre-filled.](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fjgassens%2Fcodex-terminal-pro)
+
 Unofficial OpenAI Codex CLI terminal for Home Assistant.
 
 Codex Terminal Pro provides a Home Assistant ingress web terminal that starts in
@@ -28,7 +30,7 @@ path is inserted directly into the Codex prompt.
 
 ## Quick Start
 
-1. Add the custom repository:
+1. Click the button above to add the custom repository, or add it manually:
 
    ```text
    https://github.com/jgassens/codex-terminal-pro
