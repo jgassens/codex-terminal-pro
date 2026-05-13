@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.8
+
+- Route tmux mouse selections through OSC 52 clipboard support so selecting text
+  in the persistent tmux session can reach the browser clipboard.
+- Add a small OSC 52 clipboard bridge in the wrapper for ttyd/xterm clipboard
+  sequences.
+
 ## 0.1.7
 
 - Read highlighted text from ttyd's xterm terminal API before falling back to

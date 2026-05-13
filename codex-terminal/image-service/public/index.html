@@ -438,9 +438,64 @@
                         } catch (err) {
                             console.log('Cannot attach xterm selection tracker:', err);
                         }
+
+                        installOsc52ClipboardBridge(iframeWindow, iframeDocument);
                     });
                 }, 500);
             });
+        }
+
+        function installOsc52ClipboardBridge(iframeWindow, iframeDocument) {
+            const term = iframeWindow.term;
+            if (
+                !term ||
+                !term.parser ||
+                typeof term.parser.registerOscHandler !== 'function' ||
+                iframeWindow.__codexOsc52ClipboardInstalled
+            ) {
+                return;
+            }
+
+            iframeWindow.__codexOsc52ClipboardInstalled = true;
+
+            term.parser.registerOscHandler(52, (data) => {
+                const text = decodeOsc52ClipboardData(data);
+                if (!text) {
+                    return false;
+                }
+
+                const copyResult = copyToClipboardFromGesture(text, iframeDocument);
+                if (copyResult && typeof copyResult.then === 'function') {
+                    copyResult.then((copied) => {
+                        updateTerminalSelectionCopyStatus(copied, text);
+                    });
+                } else {
+                    updateTerminalSelectionCopyStatus(Boolean(copyResult), text);
+                }
+
+                return true;
+            });
+        }
+
+        function decodeOsc52ClipboardData(data) {
+            const separator = data.indexOf(';');
+            if (separator === -1) {
+                return '';
+            }
+
+            const encoded = data.slice(separator + 1);
+            if (!encoded || encoded === '?') {
+                return '';
+            }
+
+            try {
+                const binary = atob(encoded);
+                const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+                return new TextDecoder().decode(bytes).replace(/\u00a0/g, ' ');
+            } catch (err) {
+                console.log('Cannot decode OSC 52 clipboard data:', err);
+                return '';
+            }
         }
 
         function waitForTerminalApi(iframeWindow, callback, attempt = 0) {
