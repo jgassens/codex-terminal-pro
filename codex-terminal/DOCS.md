@@ -17,7 +17,8 @@ Terminal output is mirrored to `/data/logs/codex-terminal.log` for warnings
 that scroll away. Treat this log as sensitive terminal output.
 
 Selecting text inside the embedded terminal copies it to the browser clipboard
-when the selection finishes.
+when the selection finishes. If tmux mouse mode captures a drag on macOS, hold
+Option while selecting to force browser terminal selection.
 
 Dropped or pasted images are uploaded to `/data/images`, and the saved path is
 inserted directly into the Codex prompt through the persistent tmux session.

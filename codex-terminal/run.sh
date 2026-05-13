@@ -123,7 +123,7 @@ install_tools() {
 
 log_startup_diagnostics() {
     local app_name="${APP_NAME:-${ADDON_NAME:-Codex Terminal Pro}}"
-    local app_version="${BUILD_VERSION:-${APP_VERSION:-0.1.6}}"
+    local app_version="${BUILD_VERSION:-${APP_VERSION:-0.1.7}}"
 
     bashio::log.info "Startup diagnostics:"
     bashio::log.info "  - Date: $(date)"
@@ -357,7 +357,7 @@ start_web_terminal() {
     start_image_service
     prepare_tmux_session "${tmux_session}" "${tmux_launcher}" "${tmux_config}" "${transcript}"
 
-    bashio::log.info "Final ttyd command: ttyd --port ${port} --interface 0.0.0.0 --writable --ping-interval 30 --client-option reconnect=5 tmux -f ${tmux_config} attach-session -t ${tmux_session}"
+    bashio::log.info "Final ttyd command: ttyd --port ${port} --interface 0.0.0.0 --writable --ping-interval 30 --client-option reconnect=5 --client-option macOptionClickForcesSelection=true --client-option rightClickSelectsWord=true tmux -f ${tmux_config} attach-session -t ${tmux_session}"
 
     exec ttyd \
         --port "${port}" \
@@ -365,6 +365,8 @@ start_web_terminal() {
         --writable \
         --ping-interval 30 \
         --client-option reconnect=5 \
+        --client-option macOptionClickForcesSelection=true \
+        --client-option rightClickSelectsWord=true \
         tmux -f "${tmux_config}" attach-session -t "${tmux_session}"
 }
 

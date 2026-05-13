@@ -371,6 +371,7 @@
                 setTimeout(() => {
                     let iframeWindow;
                     let iframeDocument;
+                    let lastKnownTerminalSelection = '';
 
                     try {
                         iframeWindow = iframe.contentWindow;
@@ -384,51 +385,126 @@
                         return;
                     }
 
-                    const copyTerminalSelection = () => {
-                        setTimeout(async () => {
-                            let selectedText = '';
+                    if (iframeWindow.__codexTerminalSelectionCopyInstalled) {
+                        return;
+                    }
+                    iframeWindow.__codexTerminalSelectionCopyInstalled = true;
 
-                            try {
-                                selectedText = String(iframeWindow.getSelection()?.toString() || '');
-                            } catch (err) {
-                                console.log('Cannot read terminal selection:', err);
-                                return;
-                            }
-
-                            selectedText = selectedText.replace(/\u00a0/g, ' ');
-
-                            if (!selectedText.trim()) {
-                                return;
-                            }
-
-                            const now = Date.now();
-                            if (
-                                selectedText === lastCopiedTerminalSelection &&
-                                now - lastCopiedTerminalSelectionAt < 1000
-                            ) {
-                                return;
-                            }
-
-                            const copied = await copyToClipboard(selectedText);
-                            if (copied) {
-                                lastCopiedTerminalSelection = selectedText;
-                                lastCopiedTerminalSelectionAt = now;
-                                setStatus('Copied terminal selection', 'success', false);
-                            } else {
-                                setStatus('Selection ready - press Cmd+C/Ctrl+C', 'error', false);
-                            }
-                        }, 0);
+                    const rememberTerminalSelection = () => {
+                        const selectedText = getTerminalSelection(iframeWindow);
+                        if (selectedText.trim()) {
+                            lastKnownTerminalSelection = selectedText;
+                        }
                     };
 
+                    const copyTerminalSelection = () => {
+                        const selectedText = getTerminalSelection(iframeWindow) || lastKnownTerminalSelection;
+
+                        if (!selectedText.trim()) {
+                            return;
+                        }
+
+                        const now = Date.now();
+                        if (
+                            selectedText === lastCopiedTerminalSelection &&
+                            now - lastCopiedTerminalSelectionAt < 1000
+                        ) {
+                            return;
+                        }
+
+                        const copyResult = copyToClipboardFromGesture(selectedText, iframeDocument);
+                        if (copyResult && typeof copyResult.then === 'function') {
+                            copyResult.then((copied) => {
+                                updateTerminalSelectionCopyStatus(copied, selectedText);
+                            });
+                        } else {
+                            updateTerminalSelectionCopyStatus(Boolean(copyResult), selectedText);
+                        }
+                    };
+
+                    iframeDocument.addEventListener('selectionchange', rememberTerminalSelection, true);
                     iframeDocument.addEventListener('mouseup', copyTerminalSelection, true);
                     iframeDocument.addEventListener('touchend', copyTerminalSelection, true);
                     iframeDocument.addEventListener('keyup', (event) => {
                         if (event.key === 'Shift' || event.key.startsWith('Arrow') || event.key === 'PageUp' || event.key === 'PageDown') {
+                            rememberTerminalSelection();
                             copyTerminalSelection();
                         }
                     }, true);
+
+                    waitForTerminalApi(iframeWindow, () => {
+                        try {
+                            iframeWindow.term.onSelectionChange(rememberTerminalSelection);
+                        } catch (err) {
+                            console.log('Cannot attach xterm selection tracker:', err);
+                        }
+                    });
                 }, 500);
             });
+        }
+
+        function waitForTerminalApi(iframeWindow, callback, attempt = 0) {
+            if (iframeWindow.term && typeof iframeWindow.term.getSelection === 'function') {
+                callback();
+                return;
+            }
+
+            if (attempt >= 40) {
+                console.log('ttyd terminal API was not available for selection copy');
+                return;
+            }
+
+            setTimeout(() => waitForTerminalApi(iframeWindow, callback, attempt + 1), 250);
+        }
+
+        function getTerminalSelection(iframeWindow) {
+            let selectedText = '';
+
+            try {
+                if (iframeWindow.term && typeof iframeWindow.term.getSelection === 'function') {
+                    selectedText = String(iframeWindow.term.getSelection() || '');
+                }
+            } catch (err) {
+                console.log('Cannot read xterm selection:', err);
+            }
+
+            if (!selectedText) {
+                try {
+                    selectedText = String(iframeWindow.getSelection()?.toString() || '');
+                } catch (err) {
+                    console.log('Cannot read terminal document selection:', err);
+                }
+            }
+
+            return selectedText.replace(/\u00a0/g, ' ');
+        }
+
+        function updateTerminalSelectionCopyStatus(copied, selectedText) {
+            if (copied) {
+                lastCopiedTerminalSelection = selectedText;
+                lastCopiedTerminalSelectionAt = Date.now();
+                setStatus('Copied terminal selection', 'success', false);
+            } else {
+                setStatus('Selection ready - press Cmd+C/Ctrl+C', 'error', false);
+            }
+        }
+
+        function copyToClipboardFromGesture(text, clipboardDocument = document) {
+            const fallbackCopied = fallbackCopyToClipboard(text, clipboardDocument);
+            if (fallbackCopied) {
+                return true;
+            }
+
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                return navigator.clipboard.writeText(text)
+                    .then(() => true)
+                    .catch((err) => {
+                        console.log('Clipboard API failed:', err);
+                        return false;
+                    });
+            }
+
+            return false;
         }
 
         async function uploadImage(file) {
@@ -728,20 +804,21 @@
         }
 
         // Fallback clipboard copy using execCommand
-        function fallbackCopyToClipboard(text) {
-            const textArea = document.createElement('textarea');
+        function fallbackCopyToClipboard(text, clipboardDocument = document) {
+            const textArea = clipboardDocument.createElement('textarea');
             textArea.value = text;
             textArea.style.position = 'absolute';
             textArea.style.left = '-9999px';
-            document.body.appendChild(textArea);
+            clipboardDocument.body.appendChild(textArea);
+            textArea.focus();
             textArea.select();
 
             try {
-                const copied = document.execCommand('copy');
-                document.body.removeChild(textArea);
+                const copied = clipboardDocument.execCommand('copy');
+                clipboardDocument.body.removeChild(textArea);
                 return copied;
             } catch (err) {
-                document.body.removeChild(textArea);
+                clipboardDocument.body.removeChild(textArea);
                 return false;
             }
         }

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.7
+
+- Read highlighted text from ttyd's xterm terminal API before falling back to
+  browser selection, so copy-on-select works inside the embedded terminal.
+- Enable xterm's macOS Option-drag selection escape hatch for tmux mouse mode.
+
 ## 0.1.6
 
 - Insert uploaded image paths directly into the persistent Codex terminal
