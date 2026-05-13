@@ -372,6 +372,7 @@
                     let iframeWindow;
                     let iframeDocument;
                     let lastKnownTerminalSelection = '';
+                    let dragStartCell = null;
 
                     try {
                         iframeWindow = iframe.contentWindow;
@@ -424,8 +425,37 @@
                         }
                     };
 
+                    const rememberDragStart = (event) => {
+                        if (event.button !== 0) {
+                            return;
+                        }
+                        dragStartCell = getTerminalCellFromMouseEvent(iframeWindow, event);
+                    };
+
+                    const copyDraggedTerminalText = (event) => {
+                        rememberTerminalSelection();
+                        const dragEndCell = getTerminalCellFromMouseEvent(iframeWindow, event);
+                        const draggedText = getTerminalTextFromDrag(iframeWindow, dragStartCell, dragEndCell);
+                        dragStartCell = null;
+
+                        if (draggedText.trim()) {
+                            const copyResult = copyToClipboardFromGesture(draggedText, iframeDocument);
+                            if (copyResult && typeof copyResult.then === 'function') {
+                                copyResult.then((copied) => {
+                                    updateTerminalSelectionCopyStatus(copied, draggedText);
+                                });
+                            } else {
+                                updateTerminalSelectionCopyStatus(Boolean(copyResult), draggedText);
+                            }
+                            return;
+                        }
+
+                        copyTerminalSelection();
+                    };
+
                     iframeDocument.addEventListener('selectionchange', rememberTerminalSelection, true);
-                    iframeDocument.addEventListener('mouseup', copyTerminalSelection, true);
+                    iframeDocument.addEventListener('mousedown', rememberDragStart, true);
+                    iframeDocument.addEventListener('mouseup', copyDraggedTerminalText, true);
                     iframeDocument.addEventListener('touchend', copyTerminalSelection, true);
                     iframeDocument.addEventListener('keyup', (event) => {
                         if (event.key === 'Shift' || event.key.startsWith('Arrow') || event.key === 'PageUp' || event.key === 'PageDown') {
@@ -543,6 +573,79 @@
             }
 
             return selectedText.replace(/\u00a0/g, ' ');
+        }
+
+        function getTerminalCellFromMouseEvent(iframeWindow, event) {
+            const term = iframeWindow.term;
+            if (!term || !term.cols || !term.rows) {
+                return null;
+            }
+
+            const screen = iframeWindow.document.querySelector('.xterm-screen') ||
+                iframeWindow.document.querySelector('.xterm') ||
+                iframeWindow.document.querySelector('.terminal');
+            if (!screen) {
+                return null;
+            }
+
+            const rect = screen.getBoundingClientRect();
+            if (
+                event.clientX < rect.left ||
+                event.clientX > rect.right ||
+                event.clientY < rect.top ||
+                event.clientY > rect.bottom
+            ) {
+                return null;
+            }
+
+            const cellWidth = rect.width / term.cols;
+            const cellHeight = rect.height / term.rows;
+            if (!cellWidth || !cellHeight) {
+                return null;
+            }
+
+            return {
+                col: Math.max(0, Math.min(term.cols - 1, Math.floor((event.clientX - rect.left) / cellWidth))),
+                row: Math.max(0, Math.min(term.rows - 1, Math.floor((event.clientY - rect.top) / cellHeight)))
+            };
+        }
+
+        function getTerminalTextFromDrag(iframeWindow, startCell, endCell) {
+            const term = iframeWindow.term;
+            const buffer = term?.buffer?.active;
+            if (!buffer || !startCell || !endCell) {
+                return '';
+            }
+
+            if (startCell.row === endCell.row && Math.abs(startCell.col - endCell.col) < 1) {
+                return '';
+            }
+
+            const start = (startCell.row < endCell.row ||
+                (startCell.row === endCell.row && startCell.col <= endCell.col)) ? startCell : endCell;
+            const end = start === startCell ? endCell : startCell;
+            const viewportY = buffer.viewportY || 0;
+            const lines = [];
+
+            for (let row = start.row; row <= end.row; row += 1) {
+                const line = buffer.getLine(viewportY + row);
+                if (!line) {
+                    continue;
+                }
+
+                const text = line.translateToString(false).replace(/\u00a0/g, ' ');
+                if (row === start.row && row === end.row) {
+                    lines.push(text.slice(start.col, end.col + 1).trimEnd());
+                } else if (row === start.row) {
+                    lines.push(text.slice(start.col).trimEnd());
+                } else if (row === end.row) {
+                    lines.push(text.slice(0, end.col + 1).trimEnd());
+                } else {
+                    lines.push(text.trimEnd());
+                }
+            }
+
+            return lines.join('\n').trim();
         }
 
         function updateTerminalSelectionCopyStatus(copied, selectedText) {

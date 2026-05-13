@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.11
+
+- Copy mouse-dragged terminal text by reading the visible xterm buffer cells
+  under the drag range, avoiding stale tmux copy-mode output.
+- Keep tmux mouse scrolling enabled without forcing tmux copy mode on every
+  drag.
+
 ## 0.1.10
 
 - Start tmux copy mode on mouse drag so terminal selections have real text to
