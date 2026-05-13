@@ -23,6 +23,10 @@ dist/
 .env.local
 .env.*.local
 
+# Codex credentials
+.codex/auth.json
+auth.json
+
 # Editor files
 .idea/
 .vscode/

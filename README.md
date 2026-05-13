@@ -1,106 +1,114 @@
-# Claude Terminal Pro for Home Assistant
+# Codex Terminal Pro for Home Assistant
 
-An enhanced Home Assistant add-on that integrates Anthropic's Claude Code CLI with persistent package management and advanced features.
+Codex Terminal Pro is an unofficial Home Assistant add-on that runs the OpenAI
+Codex CLI in a browser terminal, starting in your Home Assistant `/config`
+directory. It keeps the upstream add-on wrapper, ingress terminal, image paste
+service, persistent package helpers, Home Assistant CLI, GitHub CLI, and
+persistent `/data` state.
 
-## Recommended Plugins
+This is an MVP fork. It is not an official OpenAI add-on.
 
-For an enhanced Claude Code experience with Home Assistant, we recommend installing the **Claude Home Assistant Plugins**:
+## Features
 
-**[https://github.com/ESJavadex/claude-homeassistant-plugins](https://github.com/ESJavadex/claude-homeassistant-plugins)**
-
-These plugins provide Claude Code with specialized tools and context for Home Assistant development, including entity management, automation helpers, and more.
-
-### Installation
-
-Run this command inside Claude Terminal Pro:
-
-```bash
-npx claude-plugins install @ESJavadex/claude-homeassistant-plugins/homeassistant-config
-```
-
-This creates a `CLAUDE.md` file in your Home Assistant config directory with context and instructions tailored for Home Assistant development.
-
-## Fork Attribution
-
-This project is a fork of [heytcass/home-assistant-addons](https://github.com/heytcass/home-assistant-addons) created by Tom Cassady.
-
-**Original project:** [https://github.com/heytcass/home-assistant-addons](https://github.com/heytcass/home-assistant-addons)
-**Maintained by:** Javier Santos ([@esjavadex](https://github.com/esjavadex))
-
-### What's Enhanced in This Fork
-
-- **Image Paste Support**: Upload images via paste (Ctrl+V), drag-drop, or upload button for Claude analysis
-- **Persistent Package Management**: Install system and Python packages that survive reboots
-- **Auto-install Configuration**: Configure packages to auto-install on startup
-- **Improved Credential Handling**: Enhanced authentication persistence
-- **Additional Documentation**: Comprehensive guides for development and usage
-
-This project maintains the same MIT license as the original.
+- Home Assistant ingress web terminal powered by ttyd.
+- Codex CLI installed with `npm install -g @openai/codex`.
+- Starts in `/config` so Codex can inspect Home Assistant YAML and storage.
+- Persistent Codex state under `/data/.codex`.
+- Device-code login helper for headless add-on use.
+- Image paste, drag-drop, and upload support with files saved in `/data/images`.
+- Persistent APK and Python package helpers under `/data/packages`.
+- Home Assistant CLI (`ha`) and GitHub CLI (`gh`) included.
 
 ## Installation
 
-To add this repository to your Home Assistant instance:
+1. In Home Assistant, go to **Settings** -> **Add-ons** -> **Add-on Store**.
+2. Open the three-dot menu and choose **Repositories**.
+3. Add this repository URL:
 
-1. Go to **Settings** → **Add-ons** → **Add-on Store**
-2. Click the three dots menu in the top right corner
-3. Select **Repositories**
-4. Add the URL: `https://github.com/esjavadex/claude-code-ha`
-5. Click **Add**
+   ```text
+   https://github.com/jgassens/codex-terminal-pro
+   ```
 
-## Add-ons
+4. Install **Codex Terminal Pro**.
+5. Start the add-on and open the web UI.
 
-### Claude Terminal Pro
+After this repository is added through the Home Assistant add-on store, future
+updates can be installed from GitHub instead of copying files into `/addons`.
 
-A web-based terminal interface with Claude Code CLI pre-installed and enhanced package management. This add-on provides a terminal environment directly in your Home Assistant dashboard, allowing you to use Claude's powerful AI capabilities for coding, automation, and configuration tasks.
+## Updating From GitHub
 
-#### Core Features
-- Web terminal access through your Home Assistant UI
-- Pre-installed Claude Code CLI that launches automatically
-- Direct access to your Home Assistant config directory
-- No configuration needed (uses OAuth)
-- Access to Claude's complete capabilities including:
-  - Code generation and explanation
-  - Debugging assistance
-  - Home Assistant automation help
-  - Learning resources
+Install the add-on from this GitHub repository, not from the local `/addons`
+folder, if you want Home Assistant to offer updates. The local development app
+slug such as `local_codex_terminal_pro` is useful for testing, but it will not
+track GitHub releases.
 
-#### Enhanced Features (Pro)
-- **Image Paste Support**: Paste (Ctrl+V), drag-drop, or upload images for Claude analysis
-  - Lightweight service (~10MB RAM, ARM-compatible)
-  - Supports JPEG, PNG, GIF, WebP, SVG (10MB limit)
-  - Persistent storage in `/data/images/`
-  - Perfect for OCR, image analysis, screenshot debugging
-- **Persistent Package Management**: Install packages that survive container restarts
-- **Auto-install Packages**: Configure APK and pip packages to auto-install on startup
-- **Python Virtual Environment**: Isolated Python environment for packages
-- **Simple Commands**: Use `persist-install` for easy package management
-- **Unrestricted Mode**: Option to run Claude with `--dangerously-skip-permissions` for full file access
+For future releases, bump `codex-terminal/config.yaml` `version`, push to
+GitHub, then reload the Home Assistant add-on store. Home Assistant will compare
+the installed version with the version in this repository.
 
-#### Configuration Options
-- `auto_launch_claude`: Auto-start Claude or show session picker (default: true)
-- `dangerously_skip_permissions`: Enable unrestricted file access (default: false)
-- `persistent_apk_packages`: System packages to auto-install
-- `persistent_pip_packages`: Python packages to auto-install
+## Authentication
 
-[Documentation](claude-terminal/DOCS.md)
+Codex Terminal Pro uses ChatGPT/Codex account authentication for the MVP. A
+ChatGPT subscription is used through Codex account auth. API-key auth would use
+OpenAI API billing, and is intentionally not exposed in the add-on config yet
+because API keys need a safe Home Assistant secret-handling path.
 
-## Community Tools
+Preferred headless flow:
 
-Tools built by the community to enhance Claude Terminal:
+1. Start the add-on.
+2. Open the web UI.
+3. Run:
 
-- **[ha-ws-client-go](https://github.com/schoolboyqueue/home-assistant-blueprints/tree/main/scripts/ha-ws-client-go)** by [@schoolboyqueue](https://github.com/schoolboyqueue) - Lightweight Go CLI for Home Assistant WebSocket API. Gives Claude direct access to entity states, service calls, automation traces, and real-time monitoring. Single binary, no dependencies.
+   ```bash
+   codex-auth-helper
+   ```
 
-## Support
+4. Choose **Start device-code login** and follow the URL and one-time code.
 
-If you have any questions or issues with this add-on, please create an issue in this repository.
+Do not use the plain browser-login callback from inside the Home Assistant
+add-on. URLs like `http://localhost:1455/auth/callback?...` point at your
+browser machine, not the add-on container.
 
-## Credits
+Fallback import flow:
 
-**Original Creator:** Tom Cassady ([@heytcass](https://github.com/heytcass)) - Created the initial Claude Terminal add-on
-**Fork Maintainer:** Javier Santos ([@esjavadex](https://github.com/esjavadex)) - Added persistent package management and enhancements
+1. On a trusted local machine with a browser, configure file credential storage:
 
-This add-on was created and enhanced with the assistance of Claude Code itself! The development process, debugging, and documentation were all completed using Claude's AI capabilities.
+   ```bash
+   mkdir -p ~/.codex
+   grep -q '^cli_auth_credentials_store' ~/.codex/config.toml 2>/dev/null || printf 'cli_auth_credentials_store = "file"\n' >> ~/.codex/config.toml
+   codex login
+   ```
 
-## License
+2. Copy `~/.codex/auth.json` into the add-on's Codex home:
 
-This repository is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+   ```text
+   /data/.codex/auth.json
+   ```
+
+3. Run `codex-auth-helper` and fix permissions.
+
+Treat `auth.json` like a password. It contains access tokens. Do not commit it,
+paste it into tickets, or share it in chat.
+
+## Safety
+
+- Back up Home Assistant before asking Codex to change configuration.
+- Ask Codex to inspect first, then show diffs before edits.
+- Run `ha core check` before reloads or restarts.
+- Do not restart Home Assistant until config checks pass.
+- Do not add broader mounts unless there is a concrete need.
+
+## Architecture Support
+
+The MVP supports `amd64` and `aarch64`. `armv7` is not advertised because Codex
+Linux binary availability needs verification on that architecture.
+
+## Attribution
+
+Codex Terminal Pro preserves the MIT-licensed Home Assistant add-on work from
+Tom Cassady's original terminal add-on and the ESJavadex enhanced fork. This fork
+replaces the upstream runtime layer with OpenAI Codex CLI while retaining the
+Home Assistant add-on wrapper and utility features.
+
+The Codex icon assets are from LobeHub Icons and are distributed under the MIT
+License.

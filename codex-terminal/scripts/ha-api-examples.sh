@@ -1,6 +1,6 @@
 #!/usr/bin/with-contenv bashio
 
-# Home Assistant API Examples for Claude Terminal
+# Home Assistant API Examples for Codex Terminal Pro
 # This script demonstrates how to interact with Home Assistant APIs
 
 # Colors for output
@@ -10,7 +10,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║          Home Assistant API Examples for Claude             ║"
+echo "║        Home Assistant API Examples for Codex                ║"
 echo "╚══════════════════════════════════════════════════════════════╝"
 echo ""
 
@@ -99,7 +99,7 @@ echo -e "${YELLOW}# Get add-on configuration:${NC}"
 echo 'CONFIG=$(bashio::config)'
 echo ""
 echo -e "${YELLOW}# Get specific config value:${NC}"
-echo 'AUTO_LAUNCH=$(bashio::config "auto_launch_claude")'
+echo 'AUTO_LAUNCH=$(bashio::config "auto_launch_codex")'
 echo ""
 echo -e "${YELLOW}# Call Supervisor API:${NC}"
 echo 'curl -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/core/info'

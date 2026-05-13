@@ -20,5 +20,5 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-Note: This license applies only to the Home Assistant add-on code. 
-Claude Code itself is subject to Anthropic's Commercial Terms of Service.
+Note: This license applies only to this Home Assistant add-on code. OpenAI
+Codex CLI is distributed separately under its own license and terms.

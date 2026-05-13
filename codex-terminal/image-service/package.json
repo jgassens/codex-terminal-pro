@@ -1,12 +1,12 @@
 {
-  "name": "claude-terminal-image-service",
-  "version": "1.0.0",
-  "description": "Lightweight image upload service for Claude Terminal Pro",
+  "name": "codex-terminal-image-service",
+  "version": "0.1.0",
+  "description": "Lightweight image upload service for Codex Terminal Pro",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
-  "keywords": ["claude", "terminal", "image", "upload"],
+  "keywords": ["codex", "terminal", "image", "upload", "home-assistant"],
   "author": "Javier Santos",
   "license": "MIT",
   "dependencies": {

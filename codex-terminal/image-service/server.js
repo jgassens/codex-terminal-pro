@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Claude Terminal Pro - Image Upload Service
+ * Codex Terminal Pro - Image Upload Service
  *
  * Lightweight Express server that handles image uploads from browser paste/drag-drop.
  * Designed for resource-constrained environments (Raspberry Pi).
@@ -10,7 +10,7 @@
  * - Serves custom HTML interface with embedded ttyd terminal
  * - Handles image uploads via POST /upload
  * - Saves images to /data/images (persistent storage)
- * - Returns file paths for use with Claude CLI
+ * - Returns file paths for use with Codex CLI
  * - ARM-compatible (no native dependencies)
  */
 
@@ -144,7 +144,7 @@ app.use((err, req, res, next) => {
 const server = http.createServer(app);
 
 server.listen(PORT, '0.0.0.0', () => {
-    console.log(`Claude Terminal Image Service running on port ${PORT}`);
+    console.log(`Codex Terminal Image Service running on port ${PORT}`);
     console.log(`Upload directory: ${UPLOAD_DIR}`);
     console.log(`ttyd terminal on port: ${TTYD_PORT}`);
     console.log(`Terminal proxy available at /terminal/`);

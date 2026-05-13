@@ -1,8 +1,16 @@
-ARG BUILD_FROM
-FROM ${BUILD_FROM}
+FROM ghcr.io/home-assistant/base:latest
 
-# Install packages in a single layer to minimize image size
-# Node.js and npm kept for image-service dependency
+LABEL \
+    io.hass.version="0.1.0" \
+    io.hass.type="addon" \
+    io.hass.arch="aarch64|amd64" \
+    org.opencontainers.image.title="Home Assistant Add-on: Codex Terminal Pro" \
+    org.opencontainers.image.description="Unofficial OpenAI Codex CLI terminal for Home Assistant" \
+    org.opencontainers.image.source="https://github.com/jgassens/codex-terminal-pro" \
+    org.opencontainers.image.licenses="MIT"
+
+# Install packages in a single layer to minimize image size.
+# Node.js and npm are kept for Codex CLI and the image-service dependency.
 RUN apk add --no-cache \
     nodejs \
     npm \
@@ -20,25 +28,19 @@ RUN apk add --no-cache \
     git \
     vim \
     wget \
-    tree
+    tree \
+    ttyd
 
-# Install Claude Code CLI
-# Try native installer first (recommended by Anthropic, uses Bun runtime).
-# Falls back to npm if native install fails (e.g., CPU lacks AVX support).
-RUN (curl -fsSL https://claude.ai/install.sh | bash \
-    && ln -sf /root/.local/bin/claude /usr/local/bin/claude) \
-    || npm install -g @anthropic-ai/claude-code
+# Install Codex CLI.
+RUN npm install -g @openai/codex \
+    && npm cache clean --force
 
-# Install Home Assistant CLI (ha command)
-# Download appropriate binary based on build architecture
-# Automatically fetches the latest version from GitHub
+# Install Home Assistant CLI (ha command).
+# Download appropriate binary based on build architecture.
 ARG TARGETARCH
-RUN case "${TARGETARCH}" in \
+RUN case "${TARGETARCH:-amd64}" in \
         amd64)   HA_ARCH="amd64" ;; \
         arm64)   HA_ARCH="aarch64" ;; \
-        arm/v7)  HA_ARCH="armv7" ;; \
-        arm/v6)  HA_ARCH="armhf" ;; \
-        386)     HA_ARCH="i386" ;; \
         *)       echo "Unsupported architecture: ${TARGETARCH}" && exit 1 ;; \
     esac && \
     echo "Fetching latest Home Assistant CLI version..." && \
@@ -49,13 +51,10 @@ RUN case "${TARGETARCH}" in \
     chmod +x /usr/bin/ha && \
     echo "Home Assistant CLI ${HA_VERSION} installed successfully"
 
-# Install GitHub CLI (gh command)
-# Download appropriate binary based on build architecture
-RUN case "${TARGETARCH}" in \
+# Install GitHub CLI (gh command).
+RUN case "${TARGETARCH:-amd64}" in \
         amd64)   GH_ARCH="amd64" ;; \
         arm64)   GH_ARCH="arm64" ;; \
-        arm/v7)  GH_ARCH="armv7" ;; \
-        386)     GH_ARCH="386" ;; \
         *)       echo "Unsupported architecture for gh: ${TARGETARCH}" && exit 1 ;; \
     esac && \
     echo "Fetching latest GitHub CLI version..." && \
@@ -69,23 +68,21 @@ RUN case "${TARGETARCH}" in \
     rm -rf /tmp/gh* && \
     echo "GitHub CLI v${GH_VERSION} installed successfully"
 
-# Create directory for Claude configuration and set working directory
-RUN mkdir -p /config/claude-config
 WORKDIR /config
 
-# Copy and install image service
+# Copy and install image service.
 COPY image-service/ /opt/image-service/
 RUN cd /opt/image-service \
     && npm install --production --no-optional \
     && npm cache clean --force \
     && chmod +x server.js
 
-# Copy startup script and modular scripts
+# Copy startup script and modular scripts.
 COPY run.sh /run.sh
 COPY scripts/ /opt/scripts/
-COPY .claude/ /opt/.claude/
 RUN chmod +x /run.sh \
-    && chmod +x /opt/scripts/*.sh
+    && chmod +x /opt/scripts/*.sh \
+    && chmod +x /opt/scripts/persist-install
 
-# Use exec form for better signal handling
+# Use exec form for better signal handling.
 CMD ["/run.sh"]

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Claude Code Clipboard Image Monitor for macOS
-Automatically uploads clipboard images to Claude Terminal Pro add-on
+Codex Terminal Pro Clipboard Image Monitor for macOS
+Automatically uploads clipboard images to Codex Terminal Pro add-on
 
 Usage:
     python3 mac-clipboard-monitor.py <ADDON_URL>
@@ -42,7 +42,7 @@ class ClipboardMonitor:
         try:
             response = requests.get(f"{self.addon_url}/health", timeout=5)
             if response.status_code == 200:
-                print(f"✓ Connected to Claude Terminal Pro at {self.addon_url}")
+                print(f"✓ Connected to Codex Terminal Pro at {self.addon_url}")
             else:
                 print(f"⚠ Warning: Server responded with status {response.status_code}")
         except requests.exceptions.RequestException as e:
@@ -78,7 +78,7 @@ class ClipboardMonitor:
         return hashlib.md5(data).hexdigest()
 
     def upload_image(self, image_data):
-        """Upload image to Claude Terminal Pro"""
+        """Upload image to Codex Terminal Pro"""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
         filename = f"clipboard-{timestamp}.png"
 
@@ -106,7 +106,7 @@ class ClipboardMonitor:
                     timestamp_str = datetime.now().strftime('%H:%M:%S')
                     print(f"[{timestamp_str}] ✓ Uploaded: {filename} ({size_kb:.1f} KB)")
                     print(f"    Path copied to clipboard: {path}")
-                    print(f"    Ready to paste into Claude Code CLI!\n")
+                    print(f"    Ready to paste into Codex CLI!\n")
                     return True
                 else:
                     print(f"✗ Upload failed: {result.get('error', 'Unknown error')}")
