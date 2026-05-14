@@ -32,9 +32,9 @@ path is inserted directly into the Codex prompt.
 
 Fresh installs add supported Codex TUI defaults in `/data/.codex/config.toml`:
 Catppuccin Mocha theme colors, a richer footer with run state, task progress,
-context remaining, rate-limit percentages, git metadata, permissions, approval
-mode, and Codex version, plus an activity-aware terminal title. Existing
-user-customized Codex TUI config is left untouched.
+context remaining, rate-limit percentages, git metadata, and Codex version,
+plus an activity-aware terminal title. Existing user-customized Codex TUI
+config is left untouched.
 
 ![Codex Terminal Pro screenshot](screenshot.png)
 

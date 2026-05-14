@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.17
+
+- Remove `permissions` and `approval-mode` from the managed Codex TUI status
+  line because Codex `0.130.0` rejects those item IDs.
+- Automatically upgrade managed `0.1.15` and `0.1.16` TUI blocks that contain
+  unsupported status-line items.
+
 ## 0.1.16
 
 - Remove the duplicate context-used field from the managed Codex TUI status
