@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.15
+
+- Expand the managed Codex TUI defaults into a fuller status HUD with
+  Catppuccin Mocha theme colors, run state, task progress, context used and
+  remaining, 5-hour and weekly limits, git/branch metadata, permissions,
+  approval mode, and Codex version.
+- Add a terminal title default with activity, project, branch, and model
+  metadata.
+- Automatically upgrade the exact `0.1.14` managed footer block while leaving
+  user-customized `[tui]` configuration untouched.
+
 ## 0.1.14
 
 - Restyle the Home Assistant ingress wrapper with a warmer terminal-focused

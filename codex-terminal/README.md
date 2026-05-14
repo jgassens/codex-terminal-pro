@@ -30,9 +30,11 @@ OSC 52 support.
 Dropped or pasted images are uploaded to `/data/images`, and the saved image
 path is inserted directly into the Codex prompt.
 
-Fresh installs add a supported Codex TUI footer in `/data/.codex/config.toml`
-showing the active model, context remaining, current directory, and git branch.
-Existing Codex TUI config is left untouched.
+Fresh installs add supported Codex TUI defaults in `/data/.codex/config.toml`:
+Catppuccin Mocha theme colors, a richer footer with run state, task progress,
+context percentages, rate-limit percentages, git metadata, permissions, approval
+mode, and Codex version, plus an activity-aware terminal title. Existing
+user-customized Codex TUI config is left untouched.
 
 ![Codex Terminal Pro screenshot](screenshot.png)
 
