@@ -11,6 +11,9 @@ Assistant CLI, and GitHub CLI preinstalled.
 It registers an admin-only Home Assistant sidebar panel titled **Codex Terminal
 Pro** through ingress.
 
+The web terminal wrapper uses a compact Codex-focused interface around ttyd,
+with voice input and image upload controls kept one click away from the prompt.
+
 The terminal runs inside a persistent `tmux` session, so browser reconnects and
 Home Assistant ingress websocket drops should reattach instead of restarting
 Codex.
@@ -26,6 +29,10 @@ OSC 52 support.
 
 Dropped or pasted images are uploaded to `/data/images`, and the saved image
 path is inserted directly into the Codex prompt.
+
+Fresh installs add a supported Codex TUI footer in `/data/.codex/config.toml`
+showing the active model, context remaining, current directory, and git branch.
+Existing Codex TUI config is left untouched.
 
 ![Codex Terminal Pro screenshot](screenshot.png)
 

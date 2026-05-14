@@ -44,6 +44,7 @@ init_environment() {
     export GH_CONFIG_DIR="$gh_config_dir"
 
     ensure_codex_file_credentials
+    ensure_codex_tui_defaults
 
     if [ -f "$CODEX_HOME/auth.json" ]; then
         chmod 600 "$CODEX_HOME/auth.json"
@@ -105,6 +106,22 @@ ensure_codex_file_credentials() {
     fi
 }
 
+ensure_codex_tui_defaults() {
+    local config_file="$CODEX_HOME/config.toml"
+
+    if grep -Eq '^[[:space:]]*(\[tui\]|tui\.|status_line[[:space:]]*=)' "$config_file"; then
+        bashio::log.info "Codex TUI config already present; leaving it unchanged"
+        return
+    fi
+
+    cat >> "$config_file" << 'TUI_EOF'
+
+# Codex Terminal Pro default footer. Edit or remove this block to customize.
+[tui]
+status_line = ["model-with-reasoning", "context-remaining", "current-dir", "git-branch"]
+TUI_EOF
+}
+
 install_tools() {
     local missing=""
 
@@ -125,7 +142,7 @@ install_tools() {
 
 log_startup_diagnostics() {
     local app_name="${APP_NAME:-${ADDON_NAME:-Codex Terminal Pro}}"
-    local app_version="${BUILD_VERSION:-${APP_VERSION:-0.1.13}}"
+    local app_version="${BUILD_VERSION:-${APP_VERSION:-0.1.14}}"
 
     bashio::log.info "Startup diagnostics:"
     bashio::log.info "  - Date: $(date)"

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.14
+
+- Restyle the Home Assistant ingress wrapper with a warmer terminal-focused
+  Codex interface while preserving the existing ttyd, tmux, image upload, and
+  voice input behavior.
+- Add a supported Codex TUI footer default for fresh `/data/.codex/config.toml`
+  files showing model, context remaining, working directory, and git branch.
+- Leave any existing Codex `[tui]` configuration untouched.
+
 ## 0.1.13
 
 - Rotate the persistent terminal transcript instead of appending forever.

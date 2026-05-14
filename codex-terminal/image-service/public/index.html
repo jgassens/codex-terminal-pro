@@ -11,10 +11,29 @@
             box-sizing: border-box;
         }
 
+        :root {
+            --bg: #101314;
+            --panel: #171b1d;
+            --panel-strong: #202527;
+            --border: #344044;
+            --border-soft: #263033;
+            --text: #f3efe2;
+            --muted: #a7b0ac;
+            --accent: #f0b45b;
+            --accent-strong: #ffc86b;
+            --accent-cool: #79c7c5;
+            --success: #8ec07c;
+            --danger: #fb6f5f;
+            --button: #263c42;
+            --button-hover: #315057;
+            --button-active: #20343a;
+            --shadow: rgba(0, 0, 0, 0.35);
+        }
+
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #1e1e1e;
-            color: #fff;
+            font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
             overflow: hidden;
             height: 100vh;
         }
@@ -26,50 +45,95 @@
         }
 
         #header {
-            background: #2d2d2d;
-            padding: 8px 16px;
-            border-bottom: 1px solid #3d3d3d;
+            background: var(--panel);
+            padding: 9px 14px;
+            border-bottom: 1px solid var(--border-soft);
             display: flex;
             align-items: center;
             justify-content: space-between;
             flex-shrink: 0;
+            gap: 12px;
+            box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03), 0 10px 30px var(--shadow);
         }
 
         #header-title {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-width: 0;
             font-size: 14px;
-            font-weight: 500;
-            color: #ccc;
+            font-weight: 650;
+            color: var(--text);
+            white-space: nowrap;
+        }
+
+        .brand-mark {
+            display: inline-grid;
+            place-items: center;
+            width: 30px;
+            height: 24px;
+            border: 1px solid rgba(121, 199, 197, 0.45);
+            border-radius: 6px;
+            color: var(--accent-cool);
+            background: #11191b;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-size: 12px;
+            letter-spacing: 0;
+        }
+
+        .status-pill {
+            color: var(--accent);
+            background: rgba(240, 180, 91, 0.1);
+            border: 1px solid rgba(240, 180, 91, 0.26);
+            border-radius: 999px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-size: 11px;
+            font-weight: 600;
+            padding: 3px 8px;
+        }
+
+        #header-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-width: 0;
         }
 
         .header-btn {
-            background: #007acc;
-            color: white;
-            border: none;
-            padding: 6px 12px;
-            border-radius: 4px;
+            background: var(--button);
+            color: var(--text);
+            border: 1px solid rgba(121, 199, 197, 0.28);
+            padding: 7px 11px;
+            border-radius: 6px;
             cursor: pointer;
             font-size: 12px;
+            font-weight: 600;
             display: flex;
             align-items: center;
             gap: 6px;
+            min-height: 32px;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
         }
 
         .header-btn:hover {
-            background: #005a9e;
+            background: var(--button-hover);
+            border-color: rgba(121, 199, 197, 0.5);
         }
 
         .header-btn:active {
-            background: #004578;
+            background: var(--button-active);
         }
 
         .header-btn:disabled {
-            background: #555;
+            background: #2d3436;
             cursor: not-allowed;
             opacity: 0.5;
         }
 
         #voice-btn.recording {
-            background: #d9534f;
+            background: #51312f;
+            border-color: rgba(251, 111, 95, 0.7);
+            color: #fff0e8;
             animation: pulse 1.5s infinite;
         }
 
@@ -80,17 +144,21 @@
 
         #status {
             font-size: 12px;
-            color: #888;
+            color: var(--muted);
             padding: 0 12px;
             transition: all 0.2s ease;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            max-width: min(44vw, 520px);
         }
 
         #status.success {
-            color: #4ec9b0;
+            color: var(--success);
         }
 
         #status.error {
-            color: #f48771;
+            color: var(--danger);
         }
 
         #status:hover {
@@ -105,22 +173,23 @@
             flex: 1;
             position: relative;
             overflow: hidden;
+            background: #050708;
+            border-top: 1px solid rgba(255, 255, 255, 0.03);
         }
 
         #terminal-frame {
             width: 100%;
             height: 100%;
             border: none;
-            background: #1e1e1e;
+            background: #050708;
         }
 
         #drop-zone {
             position: absolute;
-            top: 0;
-            left: 0;
+            inset: 0;
             width: 100%;
             height: 100%;
-            background: rgba(0, 122, 204, 0.9);
+            background: rgba(10, 14, 15, 0.88);
             display: none;
             align-items: center;
             justify-content: center;
@@ -134,10 +203,15 @@
         }
 
         #drop-zone-text {
-            font-size: 24px;
-            font-weight: 500;
-            color: white;
+            font-size: 22px;
+            font-weight: 700;
+            color: var(--text);
             text-align: center;
+            padding: 18px 24px;
+            border: 1px solid rgba(240, 180, 91, 0.55);
+            border-radius: 8px;
+            background: rgba(23, 27, 29, 0.94);
+            box-shadow: 0 18px 45px var(--shadow);
         }
 
         #file-input {
@@ -165,7 +239,7 @@
             left: 0;
             width: 100%;
             height: 100%;
-            background: rgba(0, 0, 0, 0.8);
+            background: rgba(0, 0, 0, 0.78);
             display: none;
             align-items: center;
             justify-content: center;
@@ -177,42 +251,43 @@
         }
 
         #voice-modal-content {
-            background: #2d2d2d;
+            background: var(--panel);
             border-radius: 8px;
             padding: 24px;
             max-width: 500px;
             width: 90%;
-            border: 1px solid #3d3d3d;
+            border: 1px solid var(--border);
+            box-shadow: 0 24px 60px var(--shadow);
         }
 
         #voice-modal-title {
             font-size: 18px;
-            font-weight: 500;
+            font-weight: 650;
             margin-bottom: 16px;
-            color: #fff;
+            color: var(--text);
         }
 
         #voice-transcript {
-            background: #1e1e1e;
-            border: 1px solid #3d3d3d;
-            border-radius: 4px;
+            background: #0d1112;
+            border: 1px solid var(--border-soft);
+            border-radius: 6px;
             padding: 12px;
             min-height: 100px;
             max-height: 200px;
             overflow-y: auto;
             margin-bottom: 16px;
-            color: #ccc;
+            color: var(--text);
             font-size: 14px;
             line-height: 1.5;
         }
 
         #voice-transcript.listening {
-            border-color: #d9534f;
+            border-color: var(--danger);
         }
 
         #voice-transcript:empty::before {
             content: "Click 'Start Recording' and speak...";
-            color: #666;
+            color: #6f7b7a;
             font-style: italic;
         }
 
@@ -224,57 +299,92 @@
 
         .modal-btn {
             padding: 8px 16px;
-            border: none;
-            border-radius: 4px;
+            border: 1px solid transparent;
+            border-radius: 6px;
             cursor: pointer;
             font-size: 13px;
-            font-weight: 500;
+            font-weight: 650;
         }
 
         .modal-btn-primary {
-            background: #007acc;
-            color: white;
+            background: var(--button);
+            border-color: rgba(121, 199, 197, 0.35);
+            color: var(--text);
         }
 
         .modal-btn-primary:hover {
-            background: #005a9e;
+            background: var(--button-hover);
         }
 
         .modal-btn-danger {
-            background: #d9534f;
-            color: white;
+            background: #51312f;
+            border-color: rgba(251, 111, 95, 0.5);
+            color: #fff0e8;
         }
 
         .modal-btn-danger:hover {
-            background: #c9302c;
+            background: #633632;
         }
 
         .modal-btn-secondary {
-            background: #555;
-            color: white;
+            background: var(--panel-strong);
+            border-color: var(--border-soft);
+            color: var(--text);
         }
 
         .modal-btn-secondary:hover {
-            background: #666;
+            background: #2c3336;
         }
 
         #voice-status {
             font-size: 12px;
-            color: #888;
+            color: var(--muted);
             margin-bottom: 12px;
             min-height: 18px;
         }
 
         #voice-status.listening {
-            color: #d9534f;
+            color: var(--danger);
+        }
+
+        @media (max-width: 760px) {
+            #header {
+                align-items: flex-start;
+                flex-direction: column;
+                gap: 8px;
+            }
+
+            #header-actions {
+                width: 100%;
+                justify-content: space-between;
+                gap: 8px;
+            }
+
+            #status {
+                flex: 1;
+                max-width: none;
+                padding-left: 0;
+            }
+
+            .header-btn {
+                padding: 7px 9px;
+            }
+
+            .status-pill {
+                display: none;
+            }
         }
     </style>
 </head>
 <body>
     <div id="container">
         <div id="header">
-            <div id="header-title">Codex Terminal Pro - Voice & image support</div>
-            <div style="display: flex; align-items: center; gap: 12px;">
+            <div id="header-title">
+                <span class="brand-mark">&gt;_</span>
+                <span>Codex Terminal Pro</span>
+                <span class="status-pill">/config</span>
+            </div>
+            <div id="header-actions">
                 <span id="status"></span>
                 <button id="voice-btn" class="header-btn">
                     <span>🎤</span>
@@ -289,7 +399,7 @@
         <div id="terminal-container">
             <iframe id="terminal-frame" src="about:blank"></iframe>
             <div id="drop-zone">
-                <div id="drop-zone-text">Drop image here to upload</div>
+                <div id="drop-zone-text">Drop image to upload into Codex</div>
             </div>
         </div>
     </div>

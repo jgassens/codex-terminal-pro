@@ -14,10 +14,13 @@ This is an MVP fork. It is not an official OpenAI add-on.
 
 - Home Assistant ingress web terminal powered by ttyd.
 - Sidebar panel entry for admin users via Home Assistant ingress.
+- Polished Codex-focused web wrapper with image upload and voice controls.
 - Persistent `tmux` session so browser reconnects do not kill Codex.
 - Codex CLI installed with `npm install -g @openai/codex`.
 - Starts in `/config` so Codex can inspect Home Assistant YAML and storage.
 - Persistent Codex state under `/data/.codex`.
+- Supported Codex TUI footer defaults for model, context, directory, and git
+  branch on fresh installs.
 - Device-code login helper for headless add-on use.
 - Image paste, drag-drop, and upload support with files saved in `/data/images`.
 - Persistent APK and Python package helpers under `/data/packages`.
