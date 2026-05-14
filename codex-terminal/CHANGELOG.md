@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.16
+
+- Remove the duplicate context-used field from the managed Codex TUI status
+  line, leaving the clearer context-remaining readout.
+- Automatically upgrade the exact `0.1.15` managed TUI block while preserving
+  user-customized `[tui]` configuration.
+
 ## 0.1.15
 
 - Expand the managed Codex TUI defaults into a fuller status HUD with

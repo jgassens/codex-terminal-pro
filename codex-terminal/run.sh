@@ -117,6 +117,14 @@ ensure_codex_tui_defaults() {
         return
     fi
 
+    if grep -q '^# Codex Terminal Pro default TUI\.' "$config_file" && \
+       grep -q '^status_line = \["run-state", "task-progress", "model-with-reasoning", "context-used", "context-remaining",' "$config_file"; then
+        bashio::log.info "Updating managed Codex Terminal Pro TUI defaults"
+        sed -i '/^# Codex Terminal Pro default TUI\./,$d' "$config_file"
+        write_codex_tui_defaults "$config_file"
+        return
+    fi
+
     if grep -Eq '^[[:space:]]*(\[tui\]|tui\.|status_line[[:space:]]*=)' "$config_file"; then
         bashio::log.info "Codex TUI config already present; leaving it unchanged"
         return
@@ -134,7 +142,7 @@ write_codex_tui_defaults() {
 [tui]
 theme = "catppuccin-mocha"
 status_line_use_colors = true
-status_line = ["run-state", "task-progress", "model-with-reasoning", "context-used", "context-remaining", "five-hour-limit", "weekly-limit", "current-dir", "git-branch", "branch-changes", "pull-request-number", "permissions", "approval-mode", "codex-version"]
+status_line = ["run-state", "task-progress", "model-with-reasoning", "context-remaining", "five-hour-limit", "weekly-limit", "current-dir", "git-branch", "branch-changes", "pull-request-number", "permissions", "approval-mode", "codex-version"]
 terminal_title = ["activity", "project-name", "git-branch", "model-with-reasoning"]
 TUI_EOF
 }
@@ -159,7 +167,7 @@ install_tools() {
 
 log_startup_diagnostics() {
     local app_name="${APP_NAME:-${ADDON_NAME:-Codex Terminal Pro}}"
-    local app_version="${BUILD_VERSION:-${APP_VERSION:-0.1.15}}"
+    local app_version="${BUILD_VERSION:-${APP_VERSION:-0.1.16}}"
 
     bashio::log.info "Startup diagnostics:"
     bashio::log.info "  - Date: $(date)"
