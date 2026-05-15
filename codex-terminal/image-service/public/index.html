@@ -124,6 +124,12 @@
             background: var(--button-active);
         }
 
+        .header-btn.active {
+            background: rgba(240, 180, 91, 0.2);
+            border-color: rgba(240, 180, 91, 0.65);
+            color: var(--accent-strong);
+        }
+
         .header-btn:disabled {
             background: #2d3436;
             cursor: not-allowed;
@@ -135,6 +141,10 @@
             border-color: rgba(251, 111, 95, 0.7);
             color: #fff0e8;
             animation: pulse 1.5s infinite;
+        }
+
+        #touch-select-btn {
+            display: none;
         }
 
         @keyframes pulse {
@@ -370,8 +380,18 @@
                 padding: 7px 9px;
             }
 
+            #touch-select-btn {
+                display: flex;
+            }
+
             .status-pill {
                 display: none;
+            }
+        }
+
+        @media (pointer: coarse) {
+            #touch-select-btn {
+                display: flex;
             }
         }
     </style>
@@ -389,6 +409,10 @@
                 <button id="voice-btn" class="header-btn">
                     <span>🎤</span>
                     <span>Voice Input</span>
+                </button>
+                <button id="touch-select-btn" class="header-btn" title="Touch-drag terminal text to copy">
+                    <span>▣</span>
+                    <span>Select Text</span>
                 </button>
                 <button id="upload-btn" class="header-btn">
                     <span>📎</span>
@@ -426,6 +450,7 @@
         let lastCopiedTerminalSelectionAt = 0;
         let lastImagePasteSignature = '';
         let lastImagePasteAt = 0;
+        let touchSelectionMode = false;
         const handledImagePasteEvents = new WeakSet();
 
         function ingressPath(path) {
@@ -466,6 +491,7 @@
 
         const status = document.getElementById('status');
         const uploadBtn = document.getElementById('upload-btn');
+        const touchSelectBtn = document.getElementById('touch-select-btn');
         const fileInput = document.getElementById('file-input');
         const dropZone = document.getElementById('drop-zone');
 
@@ -486,6 +512,8 @@
                     let iframeDocument;
                     let lastKnownTerminalSelection = '';
                     let dragStartCell = null;
+                    let touchSelectStartCell = null;
+                    let touchSelectCurrentCell = null;
 
                     try {
                         iframeWindow = iframe.contentWindow;
@@ -512,6 +540,10 @@
                     };
 
                     const copyTerminalSelection = () => {
+                        if (touchSelectionMode) {
+                            return;
+                        }
+
                         rememberTerminalSelection();
                         const selectedText = getTerminalSelection(iframeWindow) || lastKnownTerminalSelection;
 
@@ -566,10 +598,79 @@
                         copyTerminalSelection();
                     };
 
+                    const rememberTouchSelectionStart = (event) => {
+                        if (!touchSelectionMode || event.touches.length !== 1) {
+                            return;
+                        }
+
+                        touchSelectStartCell = getTerminalCellFromTouchEvent(iframeWindow, event);
+                        touchSelectCurrentCell = touchSelectStartCell;
+
+                        if (!touchSelectStartCell) {
+                            return;
+                        }
+
+                        event.preventDefault();
+                        event.stopPropagation();
+                        selectTerminalRange(iframeWindow, touchSelectStartCell, touchSelectCurrentCell);
+                        setStatus('Drag to select terminal text', 'success', false);
+                    };
+
+                    const updateTouchSelection = (event) => {
+                        if (!touchSelectionMode || !touchSelectStartCell || event.touches.length !== 1) {
+                            return;
+                        }
+
+                        const currentCell = getTerminalCellFromTouchEvent(iframeWindow, event);
+                        if (!currentCell) {
+                            return;
+                        }
+
+                        touchSelectCurrentCell = currentCell;
+                        event.preventDefault();
+                        event.stopPropagation();
+                        selectTerminalRange(iframeWindow, touchSelectStartCell, touchSelectCurrentCell);
+                    };
+
+                    const finishTouchSelection = (event) => {
+                        if (!touchSelectionMode || !touchSelectStartCell) {
+                            return;
+                        }
+
+                        const startCell = touchSelectStartCell;
+                        const endCell = getTerminalCellFromTouchEvent(iframeWindow, event) || touchSelectCurrentCell;
+                        event.preventDefault();
+                        event.stopPropagation();
+
+                        const selectedText = getTerminalTextFromDrag(iframeWindow, startCell, endCell);
+                        selectTerminalRange(iframeWindow, startCell, endCell);
+                        touchSelectStartCell = null;
+                        touchSelectCurrentCell = null;
+                        setTouchSelectionMode(false);
+
+                        if (!selectedText.trim()) {
+                            setStatus('No terminal text selected', 'error', false);
+                            return;
+                        }
+
+                        const copyResult = copyToClipboardFromGesture(selectedText, iframeDocument);
+                        if (copyResult && typeof copyResult.then === 'function') {
+                            copyResult.then((copied) => {
+                                updateTerminalSelectionCopyStatus(copied, selectedText);
+                            });
+                        } else {
+                            updateTerminalSelectionCopyStatus(Boolean(copyResult), selectedText);
+                        }
+                    };
+
                     iframeDocument.addEventListener('selectionchange', rememberTerminalSelection, true);
                     iframeDocument.addEventListener('mousedown', rememberDragStart, true);
                     iframeDocument.addEventListener('mouseup', copyDraggedTerminalText, true);
+                    iframeDocument.addEventListener('touchstart', rememberTouchSelectionStart, { capture: true, passive: false });
+                    iframeDocument.addEventListener('touchmove', updateTouchSelection, { capture: true, passive: false });
+                    iframeDocument.addEventListener('touchcancel', finishTouchSelection, { capture: true, passive: false });
                     iframeDocument.addEventListener('touchend', copyTerminalSelection, true);
+                    iframeDocument.addEventListener('touchend', finishTouchSelection, { capture: true, passive: false });
                     iframeDocument.addEventListener('keyup', (event) => {
                         if (event.key === 'Shift' || event.key.startsWith('Arrow') || event.key === 'PageUp' || event.key === 'PageDown') {
                             rememberTerminalSelection();
@@ -589,6 +690,24 @@
                 }, 500);
             });
         }
+
+        function setTouchSelectionMode(enabled) {
+            touchSelectionMode = Boolean(enabled);
+            if (touchSelectBtn) {
+                touchSelectBtn.classList.toggle('active', touchSelectionMode);
+                touchSelectBtn.setAttribute('aria-pressed', touchSelectionMode ? 'true' : 'false');
+            }
+
+            if (touchSelectionMode) {
+                setStatus('Select mode: touch-drag terminal text', 'success', true);
+            } else if (status.textContent === 'Select mode: touch-drag terminal text') {
+                setStatus('');
+            }
+        }
+
+        touchSelectBtn?.addEventListener('click', () => {
+            setTouchSelectionMode(!touchSelectionMode);
+        });
 
         function copyTerminalSelectionWithTtyd(iframeDocument) {
             try {
@@ -689,6 +808,19 @@
         }
 
         function getTerminalCellFromMouseEvent(iframeWindow, event) {
+            return getTerminalCellFromPoint(iframeWindow, event.clientX, event.clientY);
+        }
+
+        function getTerminalCellFromTouchEvent(iframeWindow, event) {
+            const touch = event.touches?.[0] || event.changedTouches?.[0];
+            if (!touch) {
+                return null;
+            }
+
+            return getTerminalCellFromPoint(iframeWindow, touch.clientX, touch.clientY);
+        }
+
+        function getTerminalCellFromPoint(iframeWindow, clientX, clientY) {
             const term = iframeWindow.term;
             if (!term || !term.cols || !term.rows) {
                 return null;
@@ -703,10 +835,10 @@
 
             const rect = screen.getBoundingClientRect();
             if (
-                event.clientX < rect.left ||
-                event.clientX > rect.right ||
-                event.clientY < rect.top ||
-                event.clientY > rect.bottom
+                clientX < rect.left ||
+                clientX > rect.right ||
+                clientY < rect.top ||
+                clientY > rect.bottom
             ) {
                 return null;
             }
@@ -718,9 +850,38 @@
             }
 
             return {
-                col: Math.max(0, Math.min(term.cols - 1, Math.floor((event.clientX - rect.left) / cellWidth))),
-                row: Math.max(0, Math.min(term.rows - 1, Math.floor((event.clientY - rect.top) / cellHeight)))
+                col: Math.max(0, Math.min(term.cols - 1, Math.floor((clientX - rect.left) / cellWidth))),
+                row: Math.max(0, Math.min(term.rows - 1, Math.floor((clientY - rect.top) / cellHeight)))
             };
+        }
+
+        function orderedTerminalCells(startCell, endCell) {
+            if (!startCell || !endCell) {
+                return { start: null, end: null };
+            }
+
+            const start = (startCell.row < endCell.row ||
+                (startCell.row === endCell.row && startCell.col <= endCell.col)) ? startCell : endCell;
+            const end = start === startCell ? endCell : startCell;
+            return { start, end };
+        }
+
+        function selectTerminalRange(iframeWindow, startCell, endCell) {
+            const term = iframeWindow.term;
+            const buffer = term?.buffer?.active;
+            if (!term || typeof term.select !== 'function' || !buffer || !startCell || !endCell) {
+                return false;
+            }
+
+            const { start, end } = orderedTerminalCells(startCell, endCell);
+            if (!start || !end) {
+                return false;
+            }
+
+            const rowDelta = Math.max(0, end.row - start.row);
+            const length = Math.max(1, (rowDelta * term.cols) + (end.col - start.col) + 1);
+            term.select(start.col, (buffer.viewportY || 0) + start.row, length);
+            return true;
         }
 
         function getTerminalTextFromDrag(iframeWindow, startCell, endCell) {
@@ -734,9 +895,7 @@
                 return '';
             }
 
-            const start = (startCell.row < endCell.row ||
-                (startCell.row === endCell.row && startCell.col <= endCell.col)) ? startCell : endCell;
-            const end = start === startCell ? endCell : startCell;
+            const { start, end } = orderedTerminalCells(startCell, endCell);
             const viewportY = buffer.viewportY || 0;
             const lines = [];
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.19
+
+- Add a mobile-visible **Select Text** mode for the embedded terminal.
+- In select mode, touch-drag maps the finger range to xterm buffer cells,
+  visually selects the terminal range, and copies the selected text on release.
+- Keep normal terminal touch input unchanged until Select Text mode is enabled.
+
 ## 0.1.18
 
 - Capture image paste events inside the embedded ttyd terminal iframe so

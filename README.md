@@ -16,6 +16,7 @@ This is an MVP fork. It is not an official OpenAI add-on.
 - Sidebar panel entry for admin users via Home Assistant ingress.
 - Polished Codex-focused web wrapper with image upload and voice controls.
 - Persistent `tmux` session so browser reconnects do not kill Codex.
+- Touch-friendly terminal text selection mode for phones and tablets.
 - Codex CLI installed with `npm install -g @openai/codex`.
 - Starts in `/config` so Codex can inspect Home Assistant YAML and storage.
 - Persistent Codex state under `/data/.codex`.

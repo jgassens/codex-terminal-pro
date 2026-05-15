@@ -25,7 +25,8 @@ file as sensitive.
 
 Highlighted terminal text is copied to the browser clipboard when the selection
 finishes. tmux mouse selections are forwarded to the browser clipboard through
-OSC 52 support.
+OSC 52 support. On touch devices, use **Select Text** in the terminal toolbar,
+then drag across the terminal text to select and copy it.
 
 Dropped, selected, or pasted images are uploaded to `/data/images`, and the
 saved image path is inserted directly into the Codex prompt. Paste is captured
