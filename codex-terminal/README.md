@@ -77,8 +77,11 @@ auto_launch_codex: true
 terminal_transcript_enabled: true
 terminal_transcript_max_bytes: 1048576
 terminal_transcript_backups: 2
+terminal_history_limit: 50000
 image_retention_days: 30
 image_retention_max_bytes: 268435456
+supervisor_broker_enabled: true
+supervisor_broker_t1_ttl_seconds: 120
 persistent_apk_packages: []
 persistent_pip_packages: []
 ```
@@ -90,9 +93,16 @@ persistent_pip_packages: []
   `/data/logs/codex-terminal.log` so warnings can be recovered after they scroll
   away.
 - `terminal_transcript_max_bytes` and `terminal_transcript_backups`: Rotate the
-  transcript before it grows without bound.
+  transcript before it grows without bound. Transcript redaction is best-effort;
+  treat the log as sensitive.
+- `terminal_history_limit`: tmux scrollback lines retained inside the persistent
+  terminal session.
 - `image_retention_days` and `image_retention_max_bytes`: Clean up old uploaded
   images from `/data/images`.
+- `supervisor_broker_enabled`: Require typed confirmation for risky Home
+  Assistant management operations from the default `ha` path.
+- `supervisor_broker_t1_ttl_seconds`: Short reuse window for routine
+  management confirmations.
 - `persistent_apk_packages`: APK packages to reinstall into persistent storage.
 - `persistent_pip_packages`: Python packages to install into the persistent
   virtual environment.
@@ -127,6 +137,21 @@ use OpenAI API billing and is not part of the MVP add-on configuration.
 - Ask Codex to show diffs before changing files.
 - Run `ha core check` before reloads or restarts.
 - Only restart Home Assistant after explicit confirmation.
+
+Codex Terminal Pro includes a Supervisor broker guardrail. Read-only `ha`
+commands such as info, logs, stats, and checks run normally. Routine management
+commands such as restart, reload, start, stop, update, rebuild, and options ask
+for a typed confirmation. High-risk host, OS, backup, install, uninstall, and
+delete operations require a fresh nonce and a reason.
+
+This prevents many accidental agent-driven operations during normal use. It
+does not prevent a determined root process from bypassing the wrapper, reading
+the token file, editing the broker, or tampering with logs. It is a guardrail,
+not a security boundary.
+
+Clipboard support depends on browser security rules. Nabu Casa and HTTPS
+contexts can use browser clipboard APIs; plain HTTP LAN access may need the
+manual tap-and-hold copy fallback, especially on iOS.
 
 ## Architecture
 

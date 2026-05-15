@@ -15,23 +15,29 @@ init_environment() {
     local codex_home="/data/.codex"
     local gh_config_dir="/data/.config/gh"
     local persist_root="/data/packages"
+    local guard_root="$persist_root/guard"
+    local guard_bin="$guard_root/bin"
+    local guard_libexec="$guard_root/libexec"
     local persist_bin="$persist_root/bin"
     local persist_lib="$persist_root/lib"
     local persist_python="$persist_root/python"
     local image_dir="/data/images"
     local log_dir="/data/logs"
+    local supervisor_dir="/data/.supervisor"
 
     bashio::log.info "Initializing Codex environment in /data..."
 
     if ! mkdir -p "$data_home" "$config_dir" "$cache_dir" "$local_dir" "$state_dir" "$data_dir" \
                   "$codex_home" "$gh_config_dir" "$persist_bin" "$persist_lib" \
-                  "$persist_python" "$image_dir" "$log_dir"; then
+                  "$persist_python" "$guard_bin" "$guard_libexec" "$image_dir" "$log_dir" \
+                  "$supervisor_dir/confirm"; then
         bashio::log.error "Failed to create directories in /data"
         exit 1
     fi
 
     chmod 700 "$data_home" "$config_dir" "$cache_dir" "$local_dir" "$state_dir" \
-              "$data_dir" "$codex_home" "$gh_config_dir"
+              "$data_dir" "$codex_home" "$gh_config_dir" "$guard_root" "$guard_bin" \
+              "$guard_libexec" "$supervisor_dir" "$supervisor_dir/confirm"
     chmod 755 "$persist_root" "$persist_bin" "$persist_lib" "$persist_python" "$image_dir"
     chmod 700 "$log_dir"
 
@@ -50,7 +56,7 @@ init_environment() {
         chmod 600 "$CODEX_HOME/auth.json"
     fi
 
-    export PATH="$persist_bin:$persist_python/venv/bin:$PATH"
+    export PATH="$guard_bin:$persist_bin:$persist_python/venv/bin:$PATH"
     export LD_LIBRARY_PATH="$persist_lib:${LD_LIBRARY_PATH:-}"
     export PKG_CONFIG_PATH="$persist_lib/pkgconfig:${PKG_CONFIG_PATH:-}"
 
@@ -69,9 +75,10 @@ export XDG_DATA_HOME="/data/.local/share"
 export CODEX_HOME="/data/.codex"
 export GH_CONFIG_DIR="/data/.config/gh"
 
-export PATH="/data/packages/bin:/data/packages/python/venv/bin:$PATH"
+export PATH="/data/packages/guard/bin:/data/packages/bin:/data/packages/python/venv/bin:$PATH"
 export LD_LIBRARY_PATH="/data/packages/lib:${LD_LIBRARY_PATH:-}"
 export PKG_CONFIG_PATH="/data/packages/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+unset SUPERVISOR_TOKEN
 
 if [ -d "/data/packages/python/venv" ]; then
     export VIRTUAL_ENV="/data/packages/python/venv"
@@ -147,18 +154,18 @@ TUI_EOF
 }
 
 install_tools() {
-    local missing=""
+    local missing=()
 
-    command -v ttyd >/dev/null 2>&1 || missing="$missing ttyd"
-    command -v tmux >/dev/null 2>&1 || missing="$missing tmux"
-    command -v bwrap >/dev/null 2>&1 || missing="$missing bubblewrap"
-    command -v jq >/dev/null 2>&1 || missing="$missing jq"
-    command -v curl >/dev/null 2>&1 || missing="$missing curl"
+    command -v ttyd >/dev/null 2>&1 || missing+=("ttyd")
+    command -v tmux >/dev/null 2>&1 || missing+=("tmux")
+    command -v bwrap >/dev/null 2>&1 || missing+=("bubblewrap")
+    command -v jq >/dev/null 2>&1 || missing+=("jq")
+    command -v curl >/dev/null 2>&1 || missing+=("curl")
 
-    if [ -n "$missing" ]; then
-        bashio::log.info "Installing missing runtime tools:${missing}"
-        if ! apk add --no-cache $missing; then
-            bashio::log.error "Failed to install required runtime tools:${missing}"
+    if [ "${#missing[@]}" -gt 0 ]; then
+        bashio::log.info "Installing missing runtime tools: ${missing[*]}"
+        if ! apk add --no-cache "${missing[@]}"; then
+            bashio::log.error "Failed to install required runtime tools: ${missing[*]}"
             exit 1
         fi
     fi
@@ -166,7 +173,7 @@ install_tools() {
 
 log_startup_diagnostics() {
     local app_name="${APP_NAME:-${ADDON_NAME:-Codex Terminal Pro}}"
-    local app_version="${BUILD_VERSION:-${APP_VERSION:-0.1.20}}"
+    local app_version="${BUILD_VERSION:-${APP_VERSION:-0.1.24}}"
 
     bashio::log.info "Startup diagnostics:"
     bashio::log.info "  - Date: $(date)"
@@ -217,6 +224,17 @@ setup_persistent_packages() {
     auto_install_packages
 }
 
+is_safe_package_name() {
+    case "$1" in
+        ''|*[!A-Za-z0-9@._:+!=\>\<,\[\]~-]*)
+            return 1
+            ;;
+        *)
+            return 0
+            ;;
+    esac
+}
+
 auto_install_packages() {
     local apk_packages
     local pip_packages
@@ -228,6 +246,10 @@ auto_install_packages() {
         bashio::log.info "Auto-installing system packages from config..."
         echo "$apk_packages" | jq -r '.[]' | while read -r pkg; do
             if [ -n "$pkg" ]; then
+                if ! is_safe_package_name "$pkg"; then
+                    bashio::log.warning "Skipping invalid system package name: $pkg"
+                    continue
+                fi
                 bashio::log.info "  Installing: $pkg"
                 /usr/local/bin/persist-install "$pkg" || bashio::log.warning "Failed to install: $pkg"
             fi
@@ -236,14 +258,83 @@ auto_install_packages() {
 
     if [ "$pip_packages" != "[]" ] && [ -n "$pip_packages" ]; then
         bashio::log.info "Auto-installing Python packages from config..."
-        local all_packages
-        all_packages=$(echo "$pip_packages" | jq -r '.[]' | tr '\n' ' ')
+        local pip_args=()
+        local pkg
 
-        if [ -n "$all_packages" ]; then
-            bashio::log.info "  Installing: $all_packages"
-            /usr/local/bin/persist-install --python $all_packages || bashio::log.warning "Failed to install Python packages"
+        while IFS= read -r pkg; do
+            if [ -z "$pkg" ]; then
+                continue
+            fi
+            if ! is_safe_package_name "$pkg"; then
+                bashio::log.warning "Skipping invalid Python package name: $pkg"
+                continue
+            fi
+            pip_args+=("$pkg")
+        done < <(echo "$pip_packages" | jq -r '.[]')
+
+        if [ "${#pip_args[@]}" -gt 0 ]; then
+            bashio::log.info "  Installing: ${pip_args[*]}"
+            /usr/local/bin/persist-install --python "${pip_args[@]}" || bashio::log.warning "Failed to install Python packages"
         fi
     fi
+}
+
+setup_supervisor_broker() {
+    local guard_dir="/data/packages/guard/bin"
+    local supervisor_dir="/data/.supervisor"
+    local broker_enabled
+    local broker_ttl
+    local target_agents="/config/AGENTS.md"
+    local fallback_agents="/config/AGENTS.codex-terminal-pro.md"
+
+    broker_enabled=$(bashio::config 'supervisor_broker_enabled' 'true')
+    broker_ttl=$(normalize_nonnegative_int "$(bashio::config 'supervisor_broker_t1_ttl_seconds' '120')" "120")
+
+    mkdir -p "$guard_dir" "$supervisor_dir/confirm" "/data/logs"
+    chmod 700 "/data/packages/guard" "$guard_dir" "$supervisor_dir" "$supervisor_dir/confirm" "/data/logs"
+
+    if [ -n "${SUPERVISOR_TOKEN:-}" ]; then
+        printf '%s\n' "$SUPERVISOR_TOKEN" > "$supervisor_dir/token"
+        chmod 600 "$supervisor_dir/token"
+    elif [ ! -s "$supervisor_dir/token" ]; then
+        bashio::log.warning "SUPERVISOR_TOKEN is not available; brokered ha commands may fail"
+    fi
+
+    cat > "$supervisor_dir/broker.conf" << BROKER_CONF
+SUPERVISOR_BROKER_ENABLED="${broker_enabled}"
+SUPERVISOR_BROKER_T1_TTL_SECONDS="${broker_ttl}"
+BROKER_CONF
+    chmod 600 "$supervisor_dir/broker.conf"
+
+    if [ -f /opt/scripts/supervisor-broker.sh ]; then
+        cp /opt/scripts/supervisor-broker.sh "$guard_dir/supervisor-broker"
+        chmod 755 "$guard_dir/supervisor-broker"
+    fi
+
+    if [ -f /opt/scripts/ha-guard.sh ]; then
+        cp /opt/scripts/ha-guard.sh "$guard_dir/ha"
+        chmod 755 "$guard_dir/ha"
+    fi
+
+    if [ -f /opt/scripts/supervisor-api.sh ]; then
+        cp /opt/scripts/supervisor-api.sh "$guard_dir/supervisor-api"
+        chmod 755 "$guard_dir/supervisor-api"
+    fi
+
+    if [ -f /opt/scripts/codex-terminal-agents.md ]; then
+        if [ ! -e "$target_agents" ]; then
+            cp /opt/scripts/codex-terminal-agents.md "$target_agents"
+            chmod 644 "$target_agents"
+            bashio::log.info "Installed Codex Terminal Pro agent guidance at $target_agents"
+        else
+            cp /opt/scripts/codex-terminal-agents.md "$fallback_agents"
+            chmod 644 "$fallback_agents"
+            bashio::log.info "Existing /config/AGENTS.md preserved; wrote add-on guidance to $fallback_agents"
+        fi
+    fi
+
+    unset SUPERVISOR_TOKEN
+    bashio::log.info "Supervisor broker: enabled=${broker_enabled}, T1 TTL=${broker_ttl}s"
 }
 
 get_codex_launch_command() {
@@ -268,10 +359,11 @@ get_codex_launch_command() {
 
 write_tmux_config() {
     local tmux_config="$1"
+    local history_limit="$2"
 
-    cat > "${tmux_config}" << 'TMUX_EOF'
+    cat > "${tmux_config}" << TMUX_EOF
 set -g mouse on
-set -g history-limit 200000
+set -g history-limit ${history_limit}
 set -g status off
 set -g escape-time 10
 setw -g mode-keys vi
@@ -322,6 +414,7 @@ export GH_CONFIG_DIR="${GH_CONFIG_DIR}"
 export PATH="${PATH}"
 export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"
 export PKG_CONFIG_PATH="${PKG_CONFIG_PATH:-}"
+unset SUPERVISOR_TOKEN
 
 ${launch_command}
 LAUNCH_EOF
@@ -343,46 +436,57 @@ transcript="${transcript}"
 max_bytes="${max_bytes}"
 backups="${backups}"
 
-rotate_transcript() {
-    local size
-    local i
-
-    if [ "\${max_bytes}" -le 0 ] || [ ! -f "\${transcript}" ]; then
-        return
-    fi
-
-    size=\$(stat -c "%s" "\${transcript}" 2>/dev/null || echo 0)
-    if [ "\${size}" -lt "\${max_bytes}" ]; then
-        return
-    fi
-
-    if [ "\${backups}" -le 0 ]; then
-        : > "\${transcript}"
-        chmod 600 "\${transcript}"
-        return
-    fi
-
-    i=\$((backups - 1))
-    while [ "\${i}" -ge 1 ]; do
-        if [ -f "\${transcript}.\${i}" ]; then
-            mv -f "\${transcript}.\${i}" "\${transcript}.\$((i + 1))"
-        fi
-        i=\$((i - 1))
-    done
-
-    mv -f "\${transcript}" "\${transcript}.1"
-    : > "\${transcript}"
-    chmod 600 "\${transcript}"
-}
-
 mkdir -p "\$(dirname "\${transcript}")"
 touch "\${transcript}"
 chmod 600 "\${transcript}"
+initial_size=\$(stat -c "%s" "\${transcript}" 2>/dev/null || echo 0)
 
-while IFS= read -r line; do
-    rotate_transcript
-    printf '%s\\n' "\${line}" >> "\${transcript}"
-done
+awk -v transcript="\${transcript}" \\
+    -v max_bytes="\${max_bytes}" \\
+    -v backups="\${backups}" \\
+    -v size="\${initial_size}" '
+function rotate_transcript(    i) {
+    if (max_bytes <= 0) {
+        return
+    }
+
+    close(transcript)
+
+    if (backups <= 0) {
+        system(": > " transcript)
+        system("chmod 600 " transcript)
+        size = 0
+        return
+    }
+
+    for (i = backups - 1; i >= 1; i -= 1) {
+        system("[ -f " transcript "." i " ] && mv -f " transcript "." i " " transcript "." (i + 1))
+    }
+
+    system("[ -f " transcript " ] && mv -f " transcript " " transcript ".1")
+    system(": > " transcript)
+    system("chmod 600 " transcript)
+    size = 0
+}
+
+function redact(line) {
+    gsub(/Bearer[[:space:]]+[A-Za-z0-9._~+\\/=:-]+/, "Bearer [REDACTED]", line)
+    gsub(/sk-[A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-]+/, "sk-[REDACTED]", line)
+    gsub(/SUPERVISOR_TOKEN=[^[:space:]]+/, "SUPERVISOR_TOKEN=[REDACTED]", line)
+    gsub(/eyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+/, "[JWT REDACTED]", line)
+    return line
+}
+
+{
+    line = redact(\$0)
+    line_bytes = length(line) + 1
+    if (max_bytes > 0 && size > 0 && size + line_bytes > max_bytes) {
+        rotate_transcript()
+    }
+    print line >> transcript
+    size += line_bytes
+}
+'
 WRITER_EOF
 
     chmod 700 "${writer}"
@@ -396,6 +500,7 @@ prepare_tmux_session() {
     local transcript_enabled="$5"
     local transcript_max_bytes="$6"
     local transcript_backups="$7"
+    local history_limit="$8"
     local transcript_writer="/tmp/codex-terminal-transcript-writer.sh"
 
     if ! tmux -f "${tmux_config}" has-session -t "${session}" 2>/dev/null; then
@@ -406,7 +511,7 @@ prepare_tmux_session() {
     fi
 
     tmux -f "${tmux_config}" set-option -g mouse on
-    tmux -f "${tmux_config}" set-option -g history-limit 200000
+    tmux -f "${tmux_config}" set-option -g history-limit "${history_limit}"
     tmux -f "${tmux_config}" set-option -sq set-clipboard external || \
         bashio::log.warning "Could not enable tmux clipboard support"
 
@@ -498,6 +603,7 @@ start_web_terminal() {
     local transcript_enabled
     local transcript_max_bytes
     local transcript_backups
+    local terminal_history_limit
 
     bashio::log.info "Starting web terminal on port ${port}..."
     bashio::log.info "Environment variables:"
@@ -510,21 +616,23 @@ start_web_terminal() {
     transcript_enabled=$(bashio::config 'terminal_transcript_enabled' 'true')
     transcript_max_bytes=$(normalize_nonnegative_int "$(bashio::config 'terminal_transcript_max_bytes' '1048576')" "1048576")
     transcript_backups=$(normalize_nonnegative_int "$(bashio::config 'terminal_transcript_backups' '2')" "2")
+    terminal_history_limit=$(normalize_nonnegative_int "$(bashio::config 'terminal_history_limit' '50000')" "50000")
     bashio::log.info "Auto-launch Codex: ${auto_launch_codex}"
     bashio::log.info "Persistent terminal session: tmux session '${tmux_session}'"
+    bashio::log.info "Terminal history limit: ${terminal_history_limit}"
     export TMUX_TARGET="${tmux_session}:0.0"
-    write_tmux_config "${tmux_config}"
+    write_tmux_config "${tmux_config}" "${terminal_history_limit}"
     write_tmux_launch_script "${tmux_launcher}" "${launch_command}"
 
     start_image_service
     prepare_tmux_session "${tmux_session}" "${tmux_launcher}" "${tmux_config}" "${transcript}" \
-        "${transcript_enabled}" "${transcript_max_bytes}" "${transcript_backups}"
+        "${transcript_enabled}" "${transcript_max_bytes}" "${transcript_backups}" "${terminal_history_limit}"
 
-    bashio::log.info "Final ttyd command: ttyd --port ${port} --interface 0.0.0.0 --writable --ping-interval 30 --client-option reconnect=5 --client-option macOptionClickForcesSelection=true --client-option rightClickSelectsWord=true tmux -f ${tmux_config} attach-session -t ${tmux_session}"
+    bashio::log.info "Final ttyd command: ttyd --port ${port} --interface 127.0.0.1 --writable --ping-interval 30 --client-option reconnect=5 --client-option macOptionClickForcesSelection=true --client-option rightClickSelectsWord=true tmux -f ${tmux_config} attach-session -t ${tmux_session}"
 
     exec ttyd \
         --port "${port}" \
-        --interface 0.0.0.0 \
+        --interface 127.0.0.1 \
         --writable \
         --ping-interval 30 \
         --client-option reconnect=5 \
@@ -560,6 +668,7 @@ main() {
     log_startup_diagnostics
     setup_session_picker
     setup_persistent_packages
+    setup_supervisor_broker
     run_health_check_background
     start_web_terminal
 }

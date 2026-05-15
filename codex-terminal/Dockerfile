@@ -1,7 +1,7 @@
 FROM ghcr.io/home-assistant/base:latest
 
 LABEL \
-    io.hass.version="0.1.20" \
+    io.hass.version="0.1.24" \
     io.hass.type="addon" \
     io.hass.arch="aarch64|amd64" \
     org.opencontainers.image.title="Home Assistant Add-on: Codex Terminal Pro" \
@@ -82,7 +82,11 @@ RUN cd /opt/image-service \
 # Copy startup script and modular scripts.
 COPY run.sh /run.sh
 COPY scripts/ /opt/scripts/
-RUN chmod +x /run.sh \
+RUN mkdir -p /usr/libexec/codex-terminal \
+    && mv /usr/bin/ha /usr/libexec/codex-terminal/ha-real \
+    && cp /opt/scripts/ha-guard.sh /usr/bin/ha \
+    && chmod +x /usr/bin/ha /usr/libexec/codex-terminal/ha-real \
+    && chmod +x /run.sh \
     && chmod +x /opt/scripts/*.sh \
     && chmod +x /opt/scripts/persist-install
 

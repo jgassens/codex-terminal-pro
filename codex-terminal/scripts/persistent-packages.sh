@@ -11,6 +11,28 @@ PERSIST_LIB="$PERSIST_ROOT/lib"
 PERSIST_PYTHON="$PERSIST_ROOT/python"
 PERSIST_APK_CACHE="$PERSIST_ROOT/apk-cache"
 
+is_safe_package_name() {
+    case "$1" in
+        ''|*[!A-Za-z0-9@._:+!=\>\<,\[\]~-]*)
+            return 1
+            ;;
+        *)
+            return 0
+            ;;
+    esac
+}
+
+validate_package_args() {
+    local package
+
+    for package in "$@"; do
+        if ! is_safe_package_name "$package"; then
+            bashio::log.error "Invalid package name: $package"
+            return 1
+        fi
+    done
+}
+
 # Initialize persistent package directories
 init_persistent_storage() {
     bashio::log.info "Initializing persistent package storage..."
@@ -50,20 +72,22 @@ setup_environment() {
 
 # Install APK package to persistent storage (via bind mount trick)
 persist_apk_install() {
-    local packages="$@"
+    local packages=("$@")
 
-    if [ -z "$packages" ]; then
+    if [ "${#packages[@]}" -eq 0 ]; then
         bashio::log.error "No packages specified"
         return 1
     fi
 
-    bashio::log.info "Installing APK packages to persistent storage: $packages"
+    validate_package_args "${packages[@]}" || return 1
+
+    bashio::log.info "Installing APK packages to persistent storage: ${packages[*]}"
 
     # Install to system first (needed for dependencies)
-    apk add --no-cache $packages
+    apk add --no-cache "${packages[@]}"
 
     # Copy installed binaries to persistent storage
-    for pkg in $packages; do
+    for pkg in "${packages[@]}"; do
         # Find which files were installed by this package
         local pkg_files=$(apk info -L "$pkg" 2>/dev/null || echo "")
 
@@ -92,19 +116,21 @@ persist_apk_install() {
 
 # Install Python package to persistent virtual environment
 persist_pip_install() {
-    local packages="$@"
+    local packages=("$@")
 
-    if [ -z "$packages" ]; then
+    if [ "${#packages[@]}" -eq 0 ]; then
         bashio::log.error "No packages specified"
         return 1
     fi
 
-    bashio::log.info "Installing Python packages to persistent venv: $packages"
+    validate_package_args "${packages[@]}" || return 1
+
+    bashio::log.info "Installing Python packages to persistent venv: ${packages[*]}"
 
     # Activate venv and install
     source "$PERSIST_PYTHON/venv/bin/activate"
     pip install --upgrade pip
-    pip install $packages
+    pip install "${packages[@]}"
 
     bashio::log.info "Python packages installed successfully"
 }
@@ -117,18 +143,26 @@ auto_install_packages() {
     # Parse and install APK packages
     if [ "$apk_packages" != "[]" ] && [ "$apk_packages" != "" ]; then
         bashio::log.info "Auto-installing APK packages from config..."
-        local pkg_list=$(echo "$apk_packages" | jq -r '.[]' | tr '\n' ' ')
-        if [ -n "$pkg_list" ]; then
-            persist_apk_install $pkg_list
+        local pkg_list=()
+        local pkg
+        while IFS= read -r pkg; do
+            [ -n "$pkg" ] && pkg_list+=("$pkg")
+        done < <(echo "$apk_packages" | jq -r '.[]')
+        if [ "${#pkg_list[@]}" -gt 0 ]; then
+            persist_apk_install "${pkg_list[@]}"
         fi
     fi
 
     # Parse and install Python packages
     if [ "$pip_packages" != "[]" ] && [ "$pip_packages" != "" ]; then
         bashio::log.info "Auto-installing Python packages from config..."
-        local pkg_list=$(echo "$pip_packages" | jq -r '.[]' | tr '\n' ' ')
-        if [ -n "$pkg_list" ]; then
-            persist_pip_install $pkg_list
+        local pkg_list=()
+        local pkg
+        while IFS= read -r pkg; do
+            [ -n "$pkg" ] && pkg_list+=("$pkg")
+        done < <(echo "$pip_packages" | jq -r '.[]')
+        if [ "${#pkg_list[@]}" -gt 0 ]; then
+            persist_pip_install "${pkg_list[@]}"
         fi
     fi
 }

@@ -228,6 +228,44 @@
             display: none;
         }
 
+        #manual-copy-panel {
+            position: fixed;
+            left: 16px;
+            right: 16px;
+            bottom: 16px;
+            z-index: 2500;
+            display: none;
+            gap: 10px;
+            flex-direction: column;
+            padding: 12px;
+            border: 1px solid rgba(121, 199, 197, 0.45);
+            border-radius: 8px;
+            background: rgba(23, 27, 29, 0.98);
+            box-shadow: 0 18px 45px var(--shadow);
+        }
+
+        #manual-copy-panel.active {
+            display: flex;
+        }
+
+        #manual-copy-message {
+            color: var(--text);
+            font-size: 13px;
+            line-height: 1.4;
+        }
+
+        #manual-copy-text {
+            width: 100%;
+            min-height: 72px;
+            resize: vertical;
+            border: 1px solid var(--border-soft);
+            border-radius: 6px;
+            background: #0d1112;
+            color: var(--text);
+            padding: 10px;
+            font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        }
+
         .spinner {
             display: inline-block;
             width: 12px;
@@ -429,6 +467,14 @@
     </div>
     <input type="file" id="file-input" accept="image/*,.heic,.heif" multiple>
 
+    <div id="manual-copy-panel" aria-live="polite">
+        <div id="manual-copy-message">Copy this text manually.</div>
+        <textarea id="manual-copy-text" readonly></textarea>
+        <div class="modal-buttons">
+            <button id="manual-copy-dismiss" class="modal-btn modal-btn-secondary">Dismiss</button>
+        </div>
+    </div>
+
     <!-- Voice Input Modal -->
     <div id="voice-modal">
         <div id="voice-modal-content">
@@ -494,6 +540,10 @@
         const touchSelectBtn = document.getElementById('touch-select-btn');
         const fileInput = document.getElementById('file-input');
         const dropZone = document.getElementById('drop-zone');
+        const manualCopyPanel = document.getElementById('manual-copy-panel');
+        const manualCopyText = document.getElementById('manual-copy-text');
+        const manualCopyMessage = document.getElementById('manual-copy-message');
+        const manualCopyDismiss = document.getElementById('manual-copy-dismiss');
 
         function setStatus(message, type = '', persistent = false) {
             status.textContent = message;
@@ -926,7 +976,8 @@
                 lastCopiedTerminalSelectionAt = Date.now();
                 setStatus('Copied terminal selection', 'success', false);
             } else {
-                setStatus('Selection ready - press Cmd+C/Ctrl+C', 'error', false);
+                showManualCopy(selectedText, 'Copy failed. Tap and hold to Copy, or use the selected text below.');
+                setStatus('Selection ready for manual copy', 'error', false);
             }
         }
 
@@ -1060,27 +1111,20 @@
                     setStatus(`📋 ${filePath} (click to select)`, 'success', true);
                     console.log('Image uploaded:', filePath);
 
-                    // Make status clickable to select text (works in iframes)
+                    // Make status clickable to copy or manually select text.
                     status.style.cursor = 'pointer';
                     status.style.userSelect = 'text';
 
-                    status.onclick = () => {
-                        // Try modern clipboard API first
-                        if (navigator.clipboard && navigator.clipboard.writeText) {
-                            navigator.clipboard.writeText(filePath)
-                                .then(() => {
-                                    const originalText = status.textContent;
-                                    setStatus('✓ Copied!', 'success', false);
-                                    setTimeout(() => {
-                                        setStatus(originalText, 'success', true);
-                                    }, 2000);
-                                })
-                                .catch(() => {
-                                    selectText();
-                                });
+                    status.onclick = async () => {
+                        const copied = await copyToClipboard(filePath);
+                        if (copied) {
+                            const originalText = status.textContent;
+                            setStatus('✓ Copied!', 'success', false);
+                            setTimeout(() => {
+                                setStatus(originalText, 'success', true);
+                            }, 2000);
                         } else {
-                            // Fallback: select the text so user can copy with Cmd+C
-                            selectText();
+                            showManualCopy(filePath, 'Tap and hold the path to Copy, then paste it into the terminal.');
                         }
                     };
 
@@ -1089,46 +1133,12 @@
                         await copyToClipboard(filePath);
                         setStatus(`📎 Inserted ${filePath}`, 'success', true);
                     } else {
-                        await autoCopyAndPaste(filePath);
-                    }
-
-                    // Helper to select text (works in all contexts)
-                    function selectText() {
-                        const range = document.createRange();
-                        const selection = window.getSelection();
-
-                        // Clear any existing selection
-                        selection.removeAllRanges();
-
-                        // Create a temporary text node with just the path
-                        const tempDiv = document.createElement('div');
-                        tempDiv.style.position = 'absolute';
-                        tempDiv.style.left = '-9999px';
-                        tempDiv.textContent = result.path;
-                        document.body.appendChild(tempDiv);
-
-                        // Select the path text
-                        range.selectNodeContents(tempDiv);
-                        selection.addRange(range);
-
-                        // Try execCommand as fallback for copying
-                        try {
-                            const copied = document.execCommand('copy');
-                            if (copied) {
-                                setStatus('✓ Copied! (Cmd+C)', 'success', false);
-                            } else {
-                                setStatus('✓ Selected! Press Cmd+C to copy', 'success', false);
-                            }
-                        } catch (err) {
-                            setStatus('✓ Selected! Press Cmd+C to copy', 'success', false);
+                        const copied = await copyToClipboard(filePath);
+                        if (copied) {
+                            setStatus(`📋 ${filePath} copied. Paste it into the terminal.`, 'success', true);
+                        } else {
+                            showManualCopy(filePath, 'Tap and hold the path to Copy, then paste it into the terminal.');
                         }
-
-                        // Clean up and restore message
-                        setTimeout(() => {
-                            document.body.removeChild(tempDiv);
-                            selection.removeAllRanges();
-                            setStatus(`📋 ${result.path} (click to select)`, 'success', true);
-                        }, 3000);
                     }
                 } else {
                     setStatus(result.error || 'Upload failed', 'error');
@@ -1264,51 +1274,6 @@
             }
         }
 
-        // Auto-copy path and attempt to paste into terminal
-        async function autoCopyAndPaste(filePath) {
-            const iframe = document.getElementById('terminal-frame');
-
-            // Step 1: Copy to clipboard
-            const copied = await copyToClipboard(filePath);
-
-            if (copied) {
-                // Step 2: Focus the terminal iframe
-                try {
-                    iframe.contentWindow.focus();
-                    iframe.focus();
-
-                    // Step 3: Try to send the text directly
-                    // Note: This might not work due to iframe security, but we'll try
-                    setTimeout(() => {
-                        // Try to trigger a paste event in the iframe
-                        const pasteEvent = new ClipboardEvent('paste', {
-                            clipboardData: new DataTransfer(),
-                            bubbles: true,
-                            cancelable: true
-                        });
-
-                        // Try to add the text to the clipboard data
-                        try {
-                            pasteEvent.clipboardData.setData('text/plain', filePath);
-                        } catch (e) {
-                            console.log('Cannot set clipboard data in event:', e);
-                        }
-
-                        iframe.contentWindow.document.dispatchEvent(pasteEvent);
-
-                        // Alternative: Try to send keyboard events
-                        sendTextToTerminal(filePath);
-
-                        setStatus(`📋 ${filePath} - Ready to use! (path in clipboard)`, 'success', true);
-                    }, 100);
-
-                } catch (err) {
-                    console.log('Cannot access iframe for auto-paste:', err);
-                    setStatus(`📋 ${filePath} - Copied! Paste into terminal (Cmd+V)`, 'success', true);
-                }
-            }
-        }
-
         // Helper to copy text to clipboard
         async function copyToClipboard(text) {
             if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -1324,64 +1289,55 @@
             }
         }
 
-        // Fallback clipboard copy using execCommand
+        // iOS-compatible fallback clipboard copy using execCommand.
         function fallbackCopyToClipboard(text, clipboardDocument = document) {
             const textArea = clipboardDocument.createElement('textarea');
             textArea.value = text;
-            textArea.style.position = 'absolute';
-            textArea.style.left = '-9999px';
+            textArea.readOnly = false;
+            textArea.contentEditable = 'true';
+            textArea.style.position = 'fixed';
+            textArea.style.top = '0';
+            textArea.style.left = '0';
+            textArea.style.width = '1px';
+            textArea.style.height = '1px';
+            textArea.style.opacity = '0';
+            textArea.style.pointerEvents = 'none';
             clipboardDocument.body.appendChild(textArea);
-            textArea.focus();
-            textArea.select();
+
+            const selection = clipboardDocument.getSelection?.();
+            const range = clipboardDocument.createRange?.();
+
+            textArea.focus({ preventScroll: true });
+            if (range && selection) {
+                range.selectNodeContents(textArea);
+                selection.removeAllRanges();
+                selection.addRange(range);
+            }
+            textArea.setSelectionRange(0, text.length);
 
             try {
                 const copied = clipboardDocument.execCommand('copy');
                 clipboardDocument.body.removeChild(textArea);
+                selection?.removeAllRanges();
                 return copied;
             } catch (err) {
                 clipboardDocument.body.removeChild(textArea);
+                selection?.removeAllRanges();
                 return false;
             }
         }
 
-        // Try to send text to terminal by simulating keyboard input
-        function sendTextToTerminal(text) {
-            const iframe = document.getElementById('terminal-frame');
-
-            // Try to send each character as a keyboard event
-            // This might not work due to iframe restrictions, but worth trying
-            try {
-                const iframeDoc = iframe.contentWindow.document;
-                const terminal = iframeDoc.querySelector('.xterm-helper-textarea') ||
-                               iframeDoc.querySelector('textarea') ||
-                               iframeDoc.body;
-
-                if (terminal) {
-                    // Try to insert text
-                    if (terminal.value !== undefined) {
-                        terminal.value = text;
-                        terminal.dispatchEvent(new Event('input', { bubbles: true }));
-                    }
-
-                    // Try to send keyboard events for each character
-                    for (const char of text) {
-                        const keyEvent = new KeyboardEvent('keypress', {
-                            key: char,
-                            char: char,
-                            keyCode: char.charCodeAt(0),
-                            bubbles: true
-                        });
-                        terminal.dispatchEvent(keyEvent);
-                    }
-
-                    console.log('Attempted to send text to terminal');
-                }
-            } catch (err) {
-                console.log('Cannot send keyboard events to iframe:', err);
-                // This is expected due to cross-origin restrictions
-                // The clipboard copy is the fallback
-            }
+        function showManualCopy(text, message) {
+            manualCopyText.value = text;
+            manualCopyMessage.textContent = message || 'Tap and hold to Copy, then paste into the terminal.';
+            manualCopyPanel.classList.add('active');
+            manualCopyText.focus({ preventScroll: true });
+            manualCopyText.select();
         }
+
+        manualCopyDismiss.addEventListener('click', () => {
+            manualCopyPanel.classList.remove('active');
+        });
 
         // Forward image paste/drop events over the terminal iframe to the
         // wrapper upload flow. Without this, ttyd/xterm can swallow them before
@@ -1586,44 +1542,15 @@
                 return;
             }
 
-            // Try clipboard API first
-            if (navigator.clipboard && navigator.clipboard.writeText) {
-                try {
-                    await navigator.clipboard.writeText(text);
-                    voiceStatus.textContent = '✓ Copied to clipboard! Paste into terminal.';
-                    voiceStatus.className = 'success';
-                } catch (err) {
-                    fallbackCopy(text);
-                }
+            const copied = await copyToClipboard(text);
+            if (copied) {
+                voiceStatus.textContent = '✓ Copied to clipboard! Paste into terminal.';
+                voiceStatus.className = 'success';
             } else {
-                fallbackCopy(text);
+                showManualCopy(text, 'Tap and hold to Copy this transcript, then paste it into the terminal.');
+                voiceStatus.textContent = 'Select the transcript in the copy panel.';
             }
         });
-
-        function fallbackCopy(text) {
-            // Fallback using execCommand
-            const tempTextArea = document.createElement('textarea');
-            tempTextArea.value = text;
-            tempTextArea.style.position = 'absolute';
-            tempTextArea.style.left = '-9999px';
-            document.body.appendChild(tempTextArea);
-
-            tempTextArea.select();
-
-            try {
-                const copied = document.execCommand('copy');
-                if (copied) {
-                    voiceStatus.textContent = '✓ Copied! Paste into terminal.';
-                    voiceStatus.className = 'success';
-                } else {
-                    voiceStatus.textContent = '⚠️ Select text above and press Cmd+C to copy';
-                }
-            } catch (err) {
-                voiceStatus.textContent = '⚠️ Select text above and press Cmd+C to copy';
-            }
-
-            document.body.removeChild(tempTextArea);
-        }
 
         // Keyboard shortcuts in voice modal
         voiceModal.addEventListener('keydown', (e) => {

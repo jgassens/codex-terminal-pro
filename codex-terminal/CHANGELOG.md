@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.1.24
+
+- Add a Supervisor broker guardrail for Home Assistant management commands.
+  Read-only checks remain frictionless, routine management actions require a
+  typed confirmation, and high-risk host/OS/backup/add-on operations require a
+  fresh nonce plus reason.
+- Store broker decisions in `/data/logs/supervisor-broker.log` with restrictive
+  permissions.
+- Move the default interactive path toward brokered `ha` and `supervisor-api`
+  helpers while documenting that this is a guardrail, not containment.
+- Preserve any existing `/config/AGENTS.md`; write add-on guidance to
+  `/config/AGENTS.codex-terminal-pro.md` when needed.
+
+## 0.1.23
+
+- Improve iOS and mobile clipboard fallbacks for terminal selections, uploaded
+  paths, and voice transcripts.
+- Add a visible manual-copy panel when browser clipboard APIs are unavailable.
+- Keep touch-device **Select Text** mode as the reliable mobile terminal
+  selection path.
+
+## 0.1.22
+
+- Harden `/terminal-input` against cross-origin browser calls and control
+  characters.
+- Bind ttyd to `127.0.0.1`; ingress continues to use the local Express proxy.
+- Validate uploaded image contents with lightweight signature checks and reject
+  invalid renamed files.
+- Add non-breaking security headers and tighten persistent package argument
+  handling.
+
+## 0.1.21
+
+- Make tmux scrollback configurable with a lower default history limit.
+- Rewrite transcript rotation to avoid a file-size `stat` call on every output
+  line.
+- Apply best-effort redaction for common token patterns in terminal transcripts.
+- Remove stale frontend auto-paste/key-event fallback paths so image insertion
+  continues through the tmux-backed `/terminal-input` endpoint.
+
 ## 0.1.20
 
 - Reduce Codex TUI redraw noise by trimming the managed status line back to

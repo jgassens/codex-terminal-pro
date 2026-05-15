@@ -14,11 +14,17 @@ tab switches, and ingress reconnects should reattach to the same session.
 Mouse wheel scrolling uses tmux scrollback. Keyboard fallback: press `Ctrl-b [`
 to enter copy mode, use arrows/PageUp/PageDown, then press `q` to return.
 Terminal output is mirrored to `/data/logs/codex-terminal.log` for warnings
-that scroll away. Treat this log as sensitive terminal output.
+that scroll away. Treat this log as sensitive terminal output. Redaction of
+common token patterns is best-effort and is not a substitute for avoiding
+secrets in terminal output.
 
 Selecting text inside the embedded terminal copies it to the browser clipboard
 when the selection finishes. tmux mouse selections are forwarded to the browser
 clipboard through OSC 52 support.
+
+On iOS and other restricted mobile browsers, clipboard APIs may require HTTPS.
+Use the Nabu Casa/HTTPS URL for best results. Over plain HTTP LAN access, the
+manual tap-and-hold copy panel is the reliable fallback.
 
 Dropped or pasted images are uploaded to `/data/images`, and the saved path is
 inserted directly into the Codex prompt through the persistent tmux session.
@@ -112,8 +118,11 @@ auto_launch_codex: true
 terminal_transcript_enabled: true
 terminal_transcript_max_bytes: 1048576
 terminal_transcript_backups: 2
+terminal_history_limit: 50000
 image_retention_days: 30
 image_retention_max_bytes: 268435456
+supervisor_broker_enabled: true
+supervisor_broker_t1_ttl_seconds: 120
 persistent_apk_packages: []
 persistent_pip_packages: []
 ```
@@ -122,6 +131,10 @@ Terminal transcript logging stays enabled by default for debugging, but the log
 rotates under `/data/logs`. Uploaded images stay in `/data/images` long enough
 for normal Codex workflows and are cleaned up by age and total size.
 
+`terminal_history_limit` controls tmux scrollback lines. The default is lower
+than older releases to reduce memory and redraw pressure while keeping practical
+scrollback.
+
 ## Safe Home Assistant Workflow
 
 1. Ask Codex to inspect configuration first.
@@ -129,6 +142,28 @@ for normal Codex workflows and are cleaned up by age and total size.
 3. Run `ha core check`.
 4. Reload YAML only if the check passes.
 5. Restart Home Assistant only after explicit confirmation.
+
+## Supervisor Broker Guardrail
+
+The add-on keeps `hassio_role: manager` so legitimate Home Assistant management
+workflows continue to function, but it routes the default `ha` command through a
+confirmation broker.
+
+- Read-only commands such as `ha core check`, info, list, logs, and stats are
+  allowed automatically.
+- Routine management commands such as restart, reload, start, stop, update,
+  rebuild, and options require a typed confirmation.
+- High-risk host, OS, backup, install, uninstall, and delete operations require
+  a fresh nonce and a reason.
+- Non-interactive risky operations are refused.
+- Direct Supervisor calls should use `supervisor-api`, which applies the same
+  broker policy.
+
+The broker writes decisions to `/data/logs/supervisor-broker.log`. This log is
+for accountability and troubleshooting, not tamper-proof audit. A determined
+root process can bypass the broker, read `/data/.supervisor/token`, call the
+real CLI, alter PATH, or edit logs. This is a guardrail, not a security
+boundary.
 
 ## Architecture
 

@@ -14,15 +14,13 @@ echo "║        Home Assistant API Examples for Codex                ║"
 echo "╚══════════════════════════════════════════════════════════════╝"
 echo ""
 
-# Get the Supervisor token (automatically available in add-ons)
-SUPERVISOR_TOKEN="${SUPERVISOR_TOKEN}"
-if [ -z "$SUPERVISOR_TOKEN" ]; then
-    echo -e "${RED}Error: Supervisor token not found${NC}"
-    echo "This script must be run from within a Home Assistant add-on"
+if ! command -v supervisor-api >/dev/null 2>&1; then
+    echo -e "${RED}Error: supervisor-api helper not found${NC}"
+    echo "This script must be run from within Codex Terminal Pro"
     exit 1
 fi
 
-echo -e "${GREEN}✓ Supervisor token available${NC}"
+echo -e "${GREEN}✓ Brokered Supervisor API helper available${NC}"
 echo ""
 
 # Function to make API calls
@@ -32,16 +30,11 @@ api_call() {
     local data=${3:-}
 
     if [ "$method" = "GET" ]; then
-        curl -s -X GET \
-            -H "Authorization: Bearer ${SUPERVISOR_TOKEN}" \
-            -H "Content-Type: application/json" \
-            "http://supervisor/${endpoint}"
+        supervisor-api "/${endpoint}"
     else
-        curl -s -X "$method" \
-            -H "Authorization: Bearer ${SUPERVISOR_TOKEN}" \
+        supervisor-api -X "$method" "/${endpoint}" \
             -H "Content-Type: application/json" \
-            -d "$data" \
-            "http://supervisor/${endpoint}"
+            -d "$data"
     fi
 }
 
@@ -81,10 +74,7 @@ echo ""
 # Function to call Home Assistant API
 ha_api_call() {
     local endpoint=$1
-    curl -s -X GET \
-        -H "Authorization: Bearer ${SUPERVISOR_TOKEN}" \
-        -H "Content-Type: application/json" \
-        "http://supervisor/core/api/${endpoint}"
+    supervisor-api "/core/api/${endpoint}"
 }
 
 echo "   Getting system health:"
@@ -102,7 +92,7 @@ echo -e "${YELLOW}# Get specific config value:${NC}"
 echo 'AUTO_LAUNCH=$(bashio::config "auto_launch_codex")'
 echo ""
 echo -e "${YELLOW}# Call Supervisor API:${NC}"
-echo 'curl -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/core/info'
+echo 'supervisor-api /core/info'
 echo ""
 echo -e "${YELLOW}# Use bashio for logging:${NC}"
 echo 'bashio::log.info "Message"'
@@ -118,53 +108,23 @@ echo "2. Install 'websocat' or use Node.js WebSocket libraries"
 echo "3. Connect to: ws://supervisor/core/websocket"
 echo ""
 echo "Example WebSocket authentication flow:"
-echo '{'
-echo '  "type": "auth",'
-echo '  "access_token": "YOUR_SUPERVISOR_TOKEN"'
-echo '}'
+echo "Use Home Assistant-supported clients that can read credentials securely."
 echo ""
 
 # Python example for entity control
 echo "════════════════════════════════════════════════════════════════"
-echo "Python script example for entity control:"
+echo "Shell example for entity control through the brokered helper:"
 echo ""
 cat << 'EOF'
-#!/usr/bin/env python3
-import os
-import requests
-import json
-
-# Get token from environment
-token = os.environ.get('SUPERVISOR_TOKEN')
-base_url = 'http://supervisor/core/api'
-
-headers = {
-    'Authorization': f'Bearer {token}',
-    'Content-Type': 'application/json'
-}
-
-# Get all entities
-response = requests.get(f'{base_url}/states', headers=headers)
-entities = response.json()
-
-# Turn on a light
-data = {'entity_id': 'light.living_room'}
-requests.post(f'{base_url}/services/light/turn_on', headers=headers, json=data)
-
-# Set climate temperature
-data = {
-    'entity_id': 'climate.thermostat',
-    'temperature': 22
-}
-requests.post(f'{base_url}/services/climate/set_temperature', headers=headers, json=data)
+supervisor-api /core/api/states
+supervisor-api -X POST /core/api/services/light/turn_on \
+  -H 'Content-Type: application/json' \
+  -d '{"entity_id":"light.living_room"}'
 EOF
 
 echo ""
 echo "════════════════════════════════════════════════════════════════"
 echo -e "${GREEN}✓ API access is now enabled for this add-on!${NC}"
 echo ""
-echo "The SUPERVISOR_TOKEN environment variable provides access to:"
-echo "• Supervisor API (/addons, /core, /host, /network, etc.)"
-echo "• Home Assistant API (/api/states, /api/services, etc.)"
-echo "• WebSocket API (for real-time updates)"
+echo "Use supervisor-api or ha for brokered Home Assistant/Supervisor access."
 echo ""

@@ -76,6 +76,95 @@ function isAllowedImage(file) {
     return ALLOWED_IMAGE_MIMES.has(file.mimetype) || ALLOWED_IMAGE_EXTENSIONS.has(ext);
 }
 
+function requestHeaderMatchesHost(req, headerName) {
+    const value = req.get(headerName);
+    const host = req.get('host');
+
+    if (!value || !host) {
+        return true;
+    }
+
+    try {
+        const parsed = new URL(value);
+        return parsed.host === host;
+    } catch {
+        return false;
+    }
+}
+
+function isSameOriginBrowserRequest(req) {
+    return requestHeaderMatchesHost(req, 'origin') && requestHeaderMatchesHost(req, 'referer');
+}
+
+function hasControlCharacters(value) {
+    return /[\u0000-\u001f\u007f]/.test(value);
+}
+
+function readFileHead(filePath, maxBytes = 4096) {
+    const fd = fs.openSync(filePath, 'r');
+    try {
+        const buffer = Buffer.alloc(maxBytes);
+        const bytesRead = fs.readSync(fd, buffer, 0, maxBytes, 0);
+        return buffer.subarray(0, bytesRead);
+    } finally {
+        fs.closeSync(fd);
+    }
+}
+
+function ascii(buffer, start = 0, end = buffer.length) {
+    return buffer.subarray(start, Math.min(end, buffer.length)).toString('ascii');
+}
+
+function isValidSvg(buffer) {
+    const text = buffer.toString('utf8').replace(/^\uFEFF/, '').trimStart().slice(0, 4096).toLowerCase();
+    const svgStart = text.startsWith('<svg') || (text.startsWith('<?xml') && text.includes('<svg'));
+    const activeContent = /<script|onload\s*=|javascript:/i.test(text);
+    return svgStart && !activeContent;
+}
+
+function isValidImageContent(filePath, mimetype, filename) {
+    const ext = path.extname(filename || '').toLowerCase();
+    const head = readFileHead(filePath);
+
+    if (head.length < 4) {
+        return false;
+    }
+
+    if (ext === '.jpg' || ext === '.jpeg' || mimetype === 'image/jpeg') {
+        return head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff;
+    }
+
+    if (ext === '.png' || mimetype === 'image/png') {
+        return head.length >= 8 &&
+            head[0] === 0x89 &&
+            ascii(head, 1, 4) === 'PNG' &&
+            head[4] === 0x0d &&
+            head[5] === 0x0a &&
+            head[6] === 0x1a &&
+            head[7] === 0x0a;
+    }
+
+    if (ext === '.gif' || mimetype === 'image/gif') {
+        const signature = ascii(head, 0, 6);
+        return signature === 'GIF87a' || signature === 'GIF89a';
+    }
+
+    if (ext === '.webp' || mimetype === 'image/webp') {
+        return head.length >= 12 && ascii(head, 0, 4) === 'RIFF' && ascii(head, 8, 12) === 'WEBP';
+    }
+
+    if (ext === '.heic' || ext === '.heif' || mimetype.includes('heic') || mimetype.includes('heif')) {
+        const brandText = ascii(head, 4, 64).toLowerCase();
+        return brandText.startsWith('ftyp') && /(heic|heix|hevc|hevx|mif1|msf1)/.test(brandText);
+    }
+
+    if (ext === '.svg' || mimetype === 'image/svg+xml') {
+        return isValidSvg(head);
+    }
+
+    return false;
+}
+
 // Home Assistant ingress can serve this page from a URL ending in a double
 // slash. Browsers then request paths like //terminal/, which Express does not
 // match against /terminal. Normalize duplicate leading slashes before routing.
@@ -83,6 +172,12 @@ app.use((req, res, next) => {
     if (req.url.startsWith('//')) {
         req.url = req.url.replace(/^\/+/, '/');
     }
+    next();
+});
+
+app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'no-referrer');
     next();
 });
 
@@ -219,6 +314,15 @@ app.post('/upload', upload.single('image'), (req, res) => {
     }
 
     const filePath = path.join(UPLOAD_DIR, req.file.filename);
+    if (!isValidImageContent(filePath, req.file.mimetype || '', req.file.filename)) {
+        try {
+            fs.unlinkSync(filePath);
+        } catch (err) {
+            console.error(`Unable to remove rejected upload ${filePath}:`, err.message);
+        }
+        return res.status(400).json({ success: false, error: 'Uploaded file is not a valid supported image' });
+    }
+
     console.log(`Image uploaded: ${filePath} (${(req.file.size / 1024).toFixed(2)} KB)`);
     cleanupUploads(req.file.filename);
 
@@ -236,12 +340,20 @@ app.post('/upload', upload.single('image'), (req, res) => {
 app.post('/terminal-input', (req, res) => {
     const text = typeof req.body?.text === 'string' ? req.body.text : '';
 
+    if (!isSameOriginBrowserRequest(req)) {
+        return res.status(403).json({ success: false, error: 'Cross-origin terminal input is not allowed' });
+    }
+
     if (!text.trim()) {
         return res.status(400).json({ success: false, error: 'No terminal input provided' });
     }
 
     if (text.length > 4096) {
         return res.status(400).json({ success: false, error: 'Terminal input is too long' });
+    }
+
+    if (hasControlCharacters(text)) {
+        return res.status(400).json({ success: false, error: 'Terminal input contains unsupported control characters' });
     }
 
     execFile('tmux', ['send-keys', '-t', TMUX_TARGET, '-l', '--', text], { timeout: 3000 }, (err) => {
@@ -282,7 +394,9 @@ const terminalProxy = createProxyMiddleware({
 
 app.use('/terminal', terminalProxy);
 
-// Serve static files (HTML interface) - MUST be after API routes
+// Serve static files (HTML interface) - MUST be after API routes.
+// Do not expose /data/images through express.static; uploaded files are paths
+// for Codex to read, not browser-served content.
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Multer error handling middleware

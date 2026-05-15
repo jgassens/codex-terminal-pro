@@ -1,7 +1,7 @@
 ---
 name: "Codex Terminal Pro"
 description: "Unofficial OpenAI Codex CLI terminal for Home Assistant with persistent package management, Home Assistant utilities, and image paste support."
-version: "0.1.20"
+version: "0.1.24"
 slug: "codex_terminal_pro"
 init: false
 
@@ -38,8 +38,11 @@ options:
   terminal_transcript_enabled: true
   terminal_transcript_max_bytes: 1048576
   terminal_transcript_backups: 2
+  terminal_history_limit: 50000
   image_retention_days: 30
   image_retention_max_bytes: 268435456
+  supervisor_broker_enabled: true
+  supervisor_broker_t1_ttl_seconds: 120
   persistent_apk_packages: []
   persistent_pip_packages: []
 
@@ -48,8 +51,11 @@ schema:
   terminal_transcript_enabled: bool?
   terminal_transcript_max_bytes: int?
   terminal_transcript_backups: int?
+  terminal_history_limit: int?
   image_retention_days: int?
   image_retention_max_bytes: int?
+  supervisor_broker_enabled: bool?
+  supervisor_broker_t1_ttl_seconds: int?
   persistent_apk_packages:
     - str?
   persistent_pip_packages:
