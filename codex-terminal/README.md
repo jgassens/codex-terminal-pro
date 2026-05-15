@@ -35,10 +35,9 @@ data; on iOS and Android, the upload button opens the device photo picker as the
 reliable fallback.
 
 Fresh installs add supported Codex TUI defaults in `/data/.codex/config.toml`:
-Catppuccin Mocha theme colors, a richer footer with run state, task progress,
-context remaining, rate-limit percentages, git metadata, and Codex version,
-plus an activity-aware terminal title. Existing user-customized Codex TUI
-config is left untouched.
+Catppuccin Mocha theme colors and a compact footer with run state, model,
+context remaining, current directory, and git branch. Existing user-customized
+Codex TUI config is left untouched.
 
 ![Codex Terminal Pro screenshot](screenshot.png)
 

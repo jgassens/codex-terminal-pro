@@ -1156,6 +1156,14 @@
         });
 
         async function handleImagePaste(e) {
+            if (
+                e.type === 'beforeinput' &&
+                e.inputType !== 'insertFromPaste' &&
+                e.inputType !== 'insertFromDrop'
+            ) {
+                return false;
+            }
+
             if (handledImagePasteEvents.has(e)) {
                 return true;
             }

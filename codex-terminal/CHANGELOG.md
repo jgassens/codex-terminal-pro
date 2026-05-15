@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.20
+
+- Reduce Codex TUI redraw noise by trimming the managed status line back to
+  low-cost essentials: run state, model, context remaining, directory, and git
+  branch.
+- Remove the managed terminal-title override to avoid extra title/redraw churn.
+- Make image `beforeinput` paste handling return immediately for normal typing.
+- Replace the fixed 3-second image-service startup wait with a fast health poll.
+
 ## 0.1.19
 
 - Add a mobile-visible **Select Text** mode for the embedded terminal.

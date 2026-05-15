@@ -20,8 +20,8 @@ This is an MVP fork. It is not an official OpenAI add-on.
 - Codex CLI installed with `npm install -g @openai/codex`.
 - Starts in `/config` so Codex can inspect Home Assistant YAML and storage.
 - Persistent Codex state under `/data/.codex`.
-- Supported Codex TUI HUD defaults for theme colors, model, task progress,
-  context, usage limits, git metadata, and Codex version.
+- Supported Codex TUI defaults for theme colors, model, context, directory, and
+  git branch.
 - Device-code login helper for headless add-on use.
 - Image paste, drag-drop, and mobile photo-picker upload support with files
   saved in `/data/images` and paths inserted into the prompt.

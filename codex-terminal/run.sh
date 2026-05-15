@@ -118,7 +118,7 @@ ensure_codex_tui_defaults() {
     fi
 
     if grep -q '^# Codex Terminal Pro default TUI\.' "$config_file" && \
-       grep -Eq '^status_line = .*("context-used"|"permissions"|"approval-mode")' "$config_file"; then
+       grep -Eq '^status_line = .*("context-used"|"permissions"|"approval-mode"|"five-hour-limit"|"weekly-limit"|"branch-changes"|"pull-request-number"|"codex-version")' "$config_file"; then
         bashio::log.info "Updating managed Codex Terminal Pro TUI defaults"
         sed -i '/^# Codex Terminal Pro default TUI\./,$d' "$config_file"
         write_codex_tui_defaults "$config_file"
@@ -142,8 +142,7 @@ write_codex_tui_defaults() {
 [tui]
 theme = "catppuccin-mocha"
 status_line_use_colors = true
-status_line = ["run-state", "task-progress", "model-with-reasoning", "context-remaining", "five-hour-limit", "weekly-limit", "current-dir", "git-branch", "branch-changes", "pull-request-number", "codex-version"]
-terminal_title = ["activity", "project-name", "git-branch", "model-with-reasoning"]
+status_line = ["run-state", "model-with-reasoning", "context-remaining", "current-dir", "git-branch"]
 TUI_EOF
 }
 
@@ -167,7 +166,7 @@ install_tools() {
 
 log_startup_diagnostics() {
     local app_name="${APP_NAME:-${ADDON_NAME:-Codex Terminal Pro}}"
-    local app_version="${BUILD_VERSION:-${APP_VERSION:-0.1.19}}"
+    local app_version="${BUILD_VERSION:-${APP_VERSION:-0.1.20}}"
 
     bashio::log.info "Startup diagnostics:"
     bashio::log.info "  - Date: $(date)"
@@ -430,6 +429,8 @@ start_image_service() {
     local server_file="${service_dir}/server.js"
     local image_retention_days
     local image_retention_max_bytes
+    local image_service_ready="false"
+    local i
 
     bashio::log.info "Starting image upload service on port ${image_port}..."
 
@@ -464,9 +465,21 @@ start_image_service() {
 
     local image_service_pid=$!
     bashio::log.info "Image service started (PID: ${image_service_pid})"
-    sleep 3
 
-    if kill -0 "${image_service_pid}" 2>/dev/null; then
+    for i in $(seq 1 20); do
+        if curl -fsS "http://127.0.0.1:${image_port}/health" >/dev/null 2>&1; then
+            image_service_ready="true"
+            break
+        fi
+
+        if ! kill -0 "${image_service_pid}" 2>/dev/null; then
+            break
+        fi
+
+        sleep 0.1
+    done
+
+    if [ "${image_service_ready}" = "true" ]; then
         bashio::log.info "Image service is running successfully"
     else
         bashio::log.error "Image service failed to start"
