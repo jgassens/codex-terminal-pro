@@ -27,8 +27,11 @@ Highlighted terminal text is copied to the browser clipboard when the selection
 finishes. tmux mouse selections are forwarded to the browser clipboard through
 OSC 52 support.
 
-Dropped or pasted images are uploaded to `/data/images`, and the saved image
-path is inserted directly into the Codex prompt.
+Dropped, selected, or pasted images are uploaded to `/data/images`, and the
+saved image path is inserted directly into the Codex prompt. Paste is captured
+inside the embedded terminal iframe when the browser exposes image clipboard
+data; on iOS and Android, the upload button opens the device photo picker as the
+reliable fallback.
 
 Fresh installs add supported Codex TUI defaults in `/data/.codex/config.toml`:
 Catppuccin Mocha theme colors, a richer footer with run state, task progress,

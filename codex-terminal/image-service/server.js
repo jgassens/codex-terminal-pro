@@ -30,10 +30,50 @@ const TMUX_TARGET = process.env.TMUX_TARGET || 'codex-terminal:0.0';
 const UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
 const IMAGE_RETENTION_DAYS = parseNonNegativeInt(process.env.IMAGE_RETENTION_DAYS, 30);
 const IMAGE_RETENTION_MAX_BYTES = parseNonNegativeInt(process.env.IMAGE_RETENTION_MAX_BYTES, 256 * 1024 * 1024);
+const ALLOWED_IMAGE_MIMES = new Set([
+    'image/jpeg',
+    'image/png',
+    'image/gif',
+    'image/webp',
+    'image/svg+xml',
+    'image/heic',
+    'image/heif',
+    'image/heic-sequence',
+    'image/heif-sequence'
+]);
+const ALLOWED_IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.heic', '.heif']);
 
 function parseNonNegativeInt(value, fallback) {
     const parsed = Number.parseInt(value, 10);
     return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+function extensionForMime(mimetype) {
+    switch (mimetype) {
+        case 'image/jpeg':
+            return '.jpg';
+        case 'image/png':
+            return '.png';
+        case 'image/gif':
+            return '.gif';
+        case 'image/webp':
+            return '.webp';
+        case 'image/svg+xml':
+            return '.svg';
+        case 'image/heic':
+        case 'image/heic-sequence':
+            return '.heic';
+        case 'image/heif':
+        case 'image/heif-sequence':
+            return '.heif';
+        default:
+            return '.png';
+    }
+}
+
+function isAllowedImage(file) {
+    const ext = path.extname(file.originalname || '').toLowerCase();
+    return ALLOWED_IMAGE_MIMES.has(file.mimetype) || ALLOWED_IMAGE_EXTENSIONS.has(ext);
 }
 
 // Home Assistant ingress can serve this page from a URL ending in a double
@@ -132,7 +172,10 @@ const storage = multer.diskStorage({
     },
     filename: (req, file, cb) => {
         const timestamp = Date.now();
-        const ext = path.extname(file.originalname) || '.png';
+        const originalExt = path.extname(file.originalname || '').toLowerCase();
+        const ext = ALLOWED_IMAGE_EXTENSIONS.has(originalExt)
+            ? originalExt
+            : extensionForMime(file.mimetype);
         const filename = `pasted-${timestamp}${ext}`;
         cb(null, filename);
     }
@@ -144,9 +187,7 @@ const upload = multer({
         fileSize: UPLOAD_MAX_BYTES // 10MB max file size
     },
     fileFilter: (req, file, cb) => {
-        // Accept images only
-        const allowedMimes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml'];
-        if (allowedMimes.includes(file.mimetype)) {
+        if (isAllowedImage(file)) {
             cb(null, true);
         } else {
             cb(new Error('Only image files are allowed'));

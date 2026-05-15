@@ -22,7 +22,8 @@ This is an MVP fork. It is not an official OpenAI add-on.
 - Supported Codex TUI HUD defaults for theme colors, model, task progress,
   context, usage limits, git metadata, and Codex version.
 - Device-code login helper for headless add-on use.
-- Image paste, drag-drop, and upload support with files saved in `/data/images`.
+- Image paste, drag-drop, and mobile photo-picker upload support with files
+  saved in `/data/images` and paths inserted into the prompt.
 - Persistent APK and Python package helpers under `/data/packages`.
 - Home Assistant CLI (`ha`) and GitHub CLI (`gh`) included.
 

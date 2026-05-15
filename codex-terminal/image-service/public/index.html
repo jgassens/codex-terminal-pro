@@ -403,7 +403,7 @@
             </div>
         </div>
     </div>
-    <input type="file" id="file-input" accept="image/*">
+    <input type="file" id="file-input" accept="image/*,.heic,.heif" multiple>
 
     <!-- Voice Input Modal -->
     <div id="voice-modal">
@@ -424,6 +424,9 @@
         let uploadDir = '/data/images';
         let lastCopiedTerminalSelection = '';
         let lastCopiedTerminalSelectionAt = 0;
+        let lastImagePasteSignature = '';
+        let lastImagePasteAt = 0;
+        const handledImagePasteEvents = new WeakSet();
 
         function ingressPath(path) {
             const cleanPath = String(path).replace(/^\/+/, '');
@@ -781,8 +784,84 @@
             return fallbackCopyToClipboard(text, clipboardDocument);
         }
 
+        function isImageFile(file) {
+            if (!file) {
+                return false;
+            }
+
+            if (file.type && file.type.startsWith('image/')) {
+                return true;
+            }
+
+            return /\.(heic|heif|jpe?g|png|gif|webp|svg)$/i.test(file.name || '');
+        }
+
+        function imageFilesFromFileList(fileList) {
+            return Array.from(fileList || []).filter(isImageFile);
+        }
+
+        function imageFilesFromItems(items) {
+            return Array.from(items || [])
+                .filter((item) => item.kind === 'file' && typeof item.getAsFile === 'function')
+                .map((item) => item.getAsFile())
+                .filter(isImageFile);
+        }
+
+        function imageFilesFromTransfer(transfer) {
+            if (!transfer) {
+                return [];
+            }
+
+            const files = [
+                ...imageFilesFromFileList(transfer.files),
+                ...imageFilesFromItems(transfer.items)
+            ];
+            const seen = new Set();
+
+            return files.filter((file) => {
+                const key = `${file.name || 'image'}:${file.type || 'unknown'}:${file.size}:${file.lastModified || 0}`;
+                if (seen.has(key)) {
+                    return false;
+                }
+                seen.add(key);
+                return true;
+            });
+        }
+
+        function imageFilesFromEvent(e) {
+            return [
+                ...imageFilesFromTransfer(e.clipboardData),
+                ...imageFilesFromTransfer(e.dataTransfer)
+            ];
+        }
+
+        function imagePasteSignature(files) {
+            return files
+                .map((file) => `${file.name || 'image'}:${file.type || 'unknown'}:${file.size}:${file.lastModified || 0}`)
+                .join('|');
+        }
+
+        async function uploadImageFiles(files, sourceLabel = 'selected') {
+            const imageFiles = imageFilesFromFileList(files);
+
+            if (imageFiles.length === 0) {
+                setStatus('Please select an image file', 'error');
+                return;
+            }
+
+            if (imageFiles.length > 1) {
+                setStatus(`Uploading ${imageFiles.length} images...`, 'success');
+            } else if (sourceLabel === 'pasted') {
+                setStatus('Uploading pasted image...', 'success');
+            }
+
+            for (const file of imageFiles) {
+                await uploadImage(file);
+            }
+        }
+
         async function uploadImage(file) {
-            if (!file || !file.type.startsWith('image/')) {
+            if (!isImageFile(file)) {
                 setStatus('Please select an image file', 'error');
                 return;
             }
@@ -910,45 +989,49 @@
         });
 
         // File input change
-        fileInput.addEventListener('change', (e) => {
+        fileInput.addEventListener('change', async (e) => {
             if (e.target.files.length > 0) {
-                uploadImage(e.target.files[0]);
+                await uploadImageFiles(e.target.files, 'selected');
+                e.target.value = '';
             }
         });
 
-        // Paste handling
-        document.addEventListener('paste', async (e) => {
-            console.log('Paste event detected');
-            const items = e.clipboardData?.items;
-
-            if (!items) {
-                console.log('No clipboard items found');
-                return;
+        async function handleImagePaste(e) {
+            if (handledImagePasteEvents.has(e)) {
+                return true;
             }
 
-            console.log('Clipboard items:', Array.from(items).map(i => i.type));
-
-            for (let item of items) {
-                if (item.type.startsWith('image/')) {
-                    console.log('Image found in clipboard:', item.type);
-                    e.preventDefault();
-                    const file = item.getAsFile();
-                    if (file) {
-                        console.log('File extracted from clipboard:', file.name, file.size);
-                        await uploadImage(file);
-                    } else {
-                        console.error('Failed to extract file from clipboard item');
-                    }
-                    break;
-                }
+            const files = imageFilesFromEvent(e);
+            if (files.length === 0) {
+                return false;
             }
-        });
 
-        // Also handle paste on window for better compatibility
-        window.addEventListener('paste', async (e) => {
-            // This ensures paste works even when iframe has focus
-            console.log('Window paste event detected');
-        });
+            const signature = imagePasteSignature(files);
+            const now = Date.now();
+            if (signature && signature === lastImagePasteSignature && now - lastImagePasteAt < 1500) {
+                e.preventDefault();
+                e.stopPropagation();
+                handledImagePasteEvents.add(e);
+                return true;
+            }
+
+            handledImagePasteEvents.add(e);
+            lastImagePasteSignature = signature;
+            lastImagePasteAt = now;
+            e.preventDefault();
+            e.stopPropagation();
+
+            console.log('Image paste detected:', files.map((file) => file.type || file.name));
+            await uploadImageFiles(files, 'pasted');
+            return true;
+        }
+
+        // Paste handling. Capture phase matters because ttyd/xterm handles
+        // paste inside an iframe before normal wrapper listeners can see it.
+        document.addEventListener('paste', handleImagePaste, true);
+        document.addEventListener('beforeinput', handleImagePaste, true);
+        window.addEventListener('paste', handleImagePaste, true);
+        window.addEventListener('beforeinput', handleImagePaste, true);
 
         // Drag and drop handling
         let dragCounter = 0;
@@ -978,14 +1061,11 @@
             dragCounter = 0;
             dropZone.classList.remove('active');
 
-            const files = e.dataTransfer?.files;
-            if (files && files.length > 0) {
-                const file = files[0];
-                if (file.type.startsWith('image/')) {
-                    await uploadImage(file);
-                } else {
-                    setStatus('Please drop an image file', 'error');
-                }
+            const files = imageFilesFromTransfer(e.dataTransfer);
+            if (files.length > 0) {
+                await uploadImageFiles(files, 'dropped');
+            } else {
+                setStatus('Please drop an image file', 'error');
             }
         }
 
@@ -1136,13 +1216,15 @@
             }
         }
 
-        // Forward image drops over the terminal iframe to the wrapper upload
-        // flow. Without this, ttyd can swallow drops before the parent page sees
-        // them.
+        // Forward image paste/drop events over the terminal iframe to the
+        // wrapper upload flow. Without this, ttyd/xterm can swallow them before
+        // the parent page sees them.
         window.addEventListener('load', () => {
             const iframe = document.getElementById('terminal-frame');
             iframe.addEventListener('dragover', (e) => e.preventDefault());
             iframe.addEventListener('drop', handleImageDrop);
+            iframe.addEventListener('paste', handleImagePaste, true);
+            iframe.addEventListener('beforeinput', handleImagePaste, true);
             iframe.addEventListener('load', () => {
                 try {
                     const iframeDocument = iframe.contentWindow?.document;
@@ -1152,8 +1234,15 @@
 
                     iframeDocument.addEventListener('dragover', (e) => e.preventDefault(), true);
                     iframeDocument.addEventListener('drop', handleImageDrop, true);
+                    iframeDocument.addEventListener('paste', handleImagePaste, true);
+                    iframeDocument.addEventListener('beforeinput', handleImagePaste, true);
+
+                    if (iframe.contentWindow) {
+                        iframe.contentWindow.addEventListener('paste', handleImagePaste, true);
+                        iframe.contentWindow.addEventListener('beforeinput', handleImagePaste, true);
+                    }
                 } catch (err) {
-                    console.log('Cannot attach terminal drop handler:', err);
+                    console.log('Cannot attach terminal image handlers:', err);
                 }
             });
         });

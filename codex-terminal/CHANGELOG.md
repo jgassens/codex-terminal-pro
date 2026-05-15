@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.18
+
+- Capture image paste events inside the embedded ttyd terminal iframe so
+  pasting an image at the Codex prompt uploads it and inserts the saved path.
+- Handle image paste from `paste` and `beforeinput` events for better mobile
+  browser compatibility.
+- Support multiple selected, dropped, or pasted images and accept common iOS
+  photo formats (`HEIC`/`HEIF`) in addition to JPEG, PNG, GIF, WebP, and SVG.
+
 ## 0.1.17
 
 - Remove `permissions` and `approval-mode` from the managed Codex TUI status
