@@ -1,0 +1,98 @@
+#!/usr/bin/env python3
+"""Small Modbus TCP reachability scanner for Codex Terminal Pro."""
+
+from __future__ import annotations
+
+import argparse
+import ipaddress
+import json
+import socket
+import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Iterable
+
+
+VERSION = "0.1.27"
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Check which hosts accept TCP connections on a Modbus port.",
+        epilog="Example: modbus-scan 192.168.50.0/24 --port 502 --open-only",
+    )
+    parser.add_argument("--version", action="version", version=f"modbus-scan {VERSION}")
+    parser.add_argument("targets", nargs="+", help="Hosts, IPs, comma lists, or CIDR networks")
+    parser.add_argument("--port", type=int, default=502, help="TCP port to check (default: 502)")
+    parser.add_argument("--timeout", type=float, default=0.75, help="Socket timeout in seconds")
+    parser.add_argument("--workers", type=int, default=32, help="Concurrent connection attempts")
+    parser.add_argument("--max-hosts", type=int, default=512, help="Safety cap for expanded CIDR hosts")
+    parser.add_argument("--open-only", action="store_true", help="Only print hosts that accept connections")
+    return parser
+
+
+def expand_targets(raw_targets: Iterable[str], max_hosts: int) -> list[str]:
+    expanded: list[str] = []
+
+    for raw_target in raw_targets:
+        for item in raw_target.split(","):
+            target = item.strip()
+            if not target:
+                continue
+
+            if "/" in target:
+                network = ipaddress.ip_network(target, strict=False)
+                hosts = [str(host) for host in network.hosts()]
+                if len(expanded) + len(hosts) > max_hosts:
+                    raise ValueError(f"target expansion exceeds --max-hosts {max_hosts}")
+                expanded.extend(hosts)
+            else:
+                expanded.append(target)
+
+    return sorted(dict.fromkeys(expanded))
+
+
+def probe(host: str, port: int, timeout: float) -> dict[str, object]:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(timeout)
+        try:
+            sock.connect((host, port))
+            return {"host": host, "port": port, "open": True}
+        except OSError as exc:
+            return {"host": host, "port": port, "open": False, "error": str(exc)}
+
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+
+    if args.port <= 0 or args.port > 65535:
+        parser.error("--port must be between 1 and 65535")
+    if args.timeout <= 0:
+        parser.error("--timeout must be greater than zero")
+    if args.workers <= 0:
+        parser.error("--workers must be greater than zero")
+    if args.max_hosts <= 0:
+        parser.error("--max-hosts must be greater than zero")
+
+    try:
+        targets = expand_targets(args.targets, args.max_hosts)
+    except ValueError as exc:
+        parser.error(str(exc))
+
+    results: list[dict[str, object]] = []
+    workers = min(args.workers, max(len(targets), 1))
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        future_map = {executor.submit(probe, target, args.port, args.timeout): target for target in targets}
+        for future in as_completed(future_map):
+            result = future.result()
+            if args.open_only and not result["open"]:
+                continue
+            results.append(result)
+
+    results.sort(key=lambda entry: entry["host"])
+    print(json.dumps({"ok": True, "port": args.port, "count": len(results), "results": results}, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

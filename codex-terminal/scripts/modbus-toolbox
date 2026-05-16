@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+export PYTHONPATH="/opt/modbus-python:${PYTHONPATH:-}"
+
+if [ "${1:-}" = "--versions" ]; then
+    echo "modbus-toolbox 0.1.27"
+    command -v modbus-read >/dev/null 2>&1 && modbus-read --version || true
+    command -v modbus-scan >/dev/null 2>&1 && modbus-scan --version || true
+    command -v ncat >/dev/null 2>&1 && ncat --version 2>&1 | head -1 || true
+    command -v socat >/dev/null 2>&1 && socat -V 2>&1 | head -1 || true
+    command -v tcpdump >/dev/null 2>&1 && tcpdump --version 2>&1 | head -1 || true
+    python3 - <<'PY' || true
+from importlib import metadata
+
+for package in ("pymodbus", "minimalmodbus", "pyserial"):
+    try:
+        print(f"{package} {metadata.version(package)}")
+    except metadata.PackageNotFoundError:
+        print(f"{package} not installed")
+PY
+    exit 0
+fi
+
+cat <<'EOF'
+Codex Terminal Pro Modbus Toolbox
+
+Read-only helpers:
+  modbus-scan 192.168.50.0/24 --port 502 --open-only
+  modbus-read --host 192.168.50.25 --unit 1 --type holding --address 40001 --address-base modicon --count 2
+  modbus-read --host 192.168.50.25 --unit 1 --type input --address 30001 --address-base modicon --count 2
+
+Installed supporting tools:
+  ncat       quick TCP checks, for example: ncat -vz 192.168.50.25 502
+  socat      serial/TCP bridges and low-level connectivity tests
+  tcpdump    packet capture inside the add-on network namespace
+  libmodbus  C library for compiling or running libmodbus-based tools
+
+Python modules exposed on PYTHONPATH:
+  pymodbus[serial], minimalmodbus, pyserial
+
+Docs:
+  /opt/modbus/MODBUS.md
+  /opt/modbus/schneider/README.md
+
+Safety:
+  These packaged helpers do not write coils or registers. Schneider Electric
+  register maps vary by product and firmware; verify the map, unit ID,
+  address base, scale, and word order before trusting a decoded value.
+EOF

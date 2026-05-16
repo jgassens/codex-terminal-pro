@@ -1,7 +1,7 @@
 FROM ghcr.io/home-assistant/base:latest
 
 LABEL \
-    io.hass.version="0.1.26" \
+    io.hass.version="0.1.27" \
     io.hass.type="addon" \
     io.hass.arch="aarch64|amd64" \
     org.opencontainers.image.title="Home Assistant Add-on: Codex Terminal Pro" \
@@ -19,6 +19,7 @@ RUN apk add --no-cache \
     nano \
     python3 \
     py3-pip \
+    py3-pyserial \
     py3-requests \
     py3-aiohttp \
     py3-yaml \
@@ -27,6 +28,10 @@ RUN apk add --no-cache \
     yq \
     git \
     ripgrep \
+    nmap-ncat \
+    socat \
+    tcpdump \
+    libmodbus \
     vim \
     wget \
     tree \
@@ -37,6 +42,15 @@ RUN apk add --no-cache \
 # Install Codex CLI.
 RUN npm install -g @openai/codex \
     && npm cache clean --force
+
+# Install read-only Modbus Python tooling into an isolated import path.
+RUN python3 -m pip install --no-cache-dir --target /opt/modbus-python \
+        'pymodbus[serial]==3.13.0' \
+        'minimalmodbus==2.1.1' \
+        'pyserial==3.5' \
+    && PYTHONPATH=/opt/modbus-python python3 -c "import minimalmodbus, pymodbus, serial; print('Modbus Python tooling installed')"
+
+ENV PYTHONPATH="/opt/modbus-python"
 
 # Install Home Assistant CLI (ha command).
 # Download appropriate binary based on build architecture.
@@ -73,6 +87,10 @@ RUN case "${TARGETARCH:-amd64}" in \
 
 WORKDIR /config
 
+RUN mkdir -p /opt/modbus
+COPY MODBUS.md /opt/modbus/MODBUS.md
+COPY modbus/ /opt/modbus/
+
 # Copy and install image service.
 COPY image-service/ /opt/image-service/
 RUN cd /opt/image-service \
@@ -89,7 +107,11 @@ RUN mkdir -p /usr/libexec/codex-terminal \
     && chmod +x /usr/bin/ha /usr/libexec/codex-terminal/ha-real \
     && chmod +x /run.sh \
     && chmod +x /opt/scripts/*.sh \
-    && chmod +x /opt/scripts/persist-install
+    && chmod +x /opt/scripts/persist-install \
+    && chmod +x /opt/scripts/modbus-* \
+    && ln -sf /opt/scripts/modbus-read /usr/local/bin/modbus-read \
+    && ln -sf /opt/scripts/modbus-scan /usr/local/bin/modbus-scan \
+    && ln -sf /opt/scripts/modbus-toolbox /usr/local/bin/modbus-toolbox
 
 # Use exec form for better signal handling.
 CMD ["/run.sh"]

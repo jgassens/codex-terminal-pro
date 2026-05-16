@@ -29,6 +29,10 @@ manual tap-and-hold copy panel is the reliable fallback.
 Dropped or pasted images are uploaded to `/data/images`, and the saved path is
 inserted directly into the Codex prompt through the persistent tmux session.
 
+The add-on includes read-only Modbus helpers for Home Assistant troubleshooting
+and Schneider Electric discovery work. Run `modbus-toolbox` in the terminal for
+examples, or see `/opt/modbus/MODBUS.md`.
+
 ## Install
 
 1. Go to **Settings** -> **Add-ons** -> **Add-on Store**.
@@ -105,6 +109,10 @@ When auto-launch is disabled, or after Codex exits, the menu provides:
 - Uploaded images: `/data/images`
 - Persistent packages: `/data/packages`
 
+Modbus helper docs are installed at `/opt/modbus/MODBUS.md`. Site-specific
+register notes can live under `/config/modbus/` if you want them backed up with
+Home Assistant configuration.
+
 The add-on forces file credential storage with:
 
 ```toml
@@ -164,6 +172,25 @@ for accountability and troubleshooting, not tamper-proof audit. A determined
 root process can bypass the broker, read `/data/.supervisor/token`, call the
 real CLI, alter PATH, or edit logs. This is a guardrail, not a security
 boundary.
+
+## Modbus Toolbox
+
+The bundled Modbus tooling is read-only by default:
+
+```bash
+modbus-scan 192.168.50.0/24 --port 502 --open-only
+modbus-read --host 192.168.50.25 --unit 1 --type holding --address 40001 --address-base modicon --count 2
+```
+
+Included support tools are `ncat`, `socat`, `tcpdump`, `libmodbus`,
+`pymodbus[serial]`, `minimalmodbus`, and `pyserial`. `mbpoll` is not bundled
+yet because it needs a separate multi-architecture packaging pass.
+
+For Schneider Electric devices, verify the exact product and firmware register
+map before reading values. Unit IDs, address bases, scale factors, and 32-bit
+word order vary. The add-on does not ship Modbus write helpers because writes
+can change live inverter, charger, meter, relay, or building-controller
+behavior.
 
 ## Architecture
 

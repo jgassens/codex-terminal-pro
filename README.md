@@ -6,7 +6,7 @@ Codex Terminal Pro is an unofficial Home Assistant add-on that runs the OpenAI
 Codex CLI in a browser terminal, starting in your Home Assistant `/config`
 directory. It keeps the upstream add-on wrapper, ingress terminal, image paste
 service, persistent package helpers, Home Assistant CLI, GitHub CLI, and
-persistent `/data` state.
+read-only Modbus helpers, and persistent `/data` state.
 
 This is an MVP fork. It is not an official OpenAI add-on.
 
@@ -27,6 +27,9 @@ This is an MVP fork. It is not an official OpenAI add-on.
   saved in `/data/images` and paths inserted into the prompt.
 - Persistent APK and Python package helpers under `/data/packages`.
 - Home Assistant CLI (`ha`) and GitHub CLI (`gh`) included.
+- Read-only Modbus toolbox with `modbus-read`, `modbus-scan`, `ncat`,
+  `socat`, `tcpdump`, `libmodbus`, `pymodbus`, `minimalmodbus`, and
+  `pyserial`.
 
 ## Installation
 
@@ -88,6 +91,20 @@ clipboard through OSC 52 support.
 
 Dropping or pasting an image uploads it to `/data/images` and inserts the saved
 image path directly into the Codex prompt.
+
+## Modbus Toolbox
+
+Run `modbus-toolbox` inside the terminal for quick examples and installed
+versions. The bundled helpers are read-only:
+
+```bash
+modbus-scan 192.168.50.0/24 --port 502 --open-only
+modbus-read --host 192.168.50.25 --unit 1 --type holding --address 40001 --address-base modicon --count 2
+```
+
+Schneider Electric maps vary by product and firmware. Verify the register map,
+unit ID, address base, scale, and word order before trusting decoded values.
+Write-register helpers are intentionally not bundled.
 
 ## Authentication
 

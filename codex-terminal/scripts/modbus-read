@@ -1,0 +1,319 @@
+#!/usr/bin/env python3
+"""Read Modbus values safely from Codex Terminal Pro.
+
+This helper intentionally implements read operations only. Write-register and
+write-coil operations are not included because many Schneider Electric devices
+use Modbus writes for live configuration and control.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import struct
+import sys
+from typing import Any, Callable
+
+
+MODBUS_SITE = "/opt/modbus-python"
+if os.path.isdir(MODBUS_SITE) and MODBUS_SITE not in sys.path:
+    sys.path.insert(0, MODBUS_SITE)
+
+VERSION = "0.1.27"
+
+if "--version" in sys.argv[1:]:
+    print(f"modbus-read {VERSION}")
+    sys.exit(0)
+
+READ_METHODS = {
+    "holding": ("read_holding_registers", "registers", 0x03),
+    "input": ("read_input_registers", "registers", 0x04),
+    "coil": ("read_coils", "bits", 0x01),
+    "discrete": ("read_discrete_inputs", "bits", 0x02),
+}
+
+ModbusSerialClient: Any | None = None
+ModbusTcpClient: Any | None = None
+
+
+def load_modbus_clients() -> tuple[Any, Any]:
+    global ModbusSerialClient, ModbusTcpClient
+
+    if ModbusSerialClient is not None and ModbusTcpClient is not None:
+        return ModbusSerialClient, ModbusTcpClient
+
+    try:
+        from pymodbus.client import ModbusSerialClient as SerialClient
+        from pymodbus.client import ModbusTcpClient as TcpClient
+    except Exception as exc:  # pragma: no cover - this is for broken runtime images.
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": "pymodbus is not available",
+                    "detail": str(exc),
+                    "hint": "The add-on image should install pymodbus under /opt/modbus-python.",
+                },
+                indent=2,
+            ),
+            file=sys.stderr,
+        )
+        sys.exit(127)
+
+    ModbusSerialClient = SerialClient
+    ModbusTcpClient = TcpClient
+    return ModbusSerialClient, ModbusTcpClient
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Read Modbus TCP or RTU values and print JSON. Read-only by design.",
+        epilog=(
+            "Examples: "
+            "modbus-read --host 192.168.50.25 --unit 1 --type holding --address 40001 --address-base modicon --count 2; "
+            "modbus-read --serial /dev/ttyUSB0 --baudrate 9600 --unit 1 --type input --address 1 --address-base one"
+        ),
+    )
+    parser.add_argument("--version", action="version", version=f"modbus-read {VERSION}")
+
+    transport = parser.add_mutually_exclusive_group(required=True)
+    transport.add_argument("--host", help="Modbus TCP host or IP address")
+    transport.add_argument("--serial", help="Modbus RTU serial device, if exposed to the add-on")
+
+    parser.add_argument("--port", type=int, default=502, help="Modbus TCP port (default: 502)")
+    parser.add_argument("--unit", "--slave", dest="unit", type=int, default=1, help="Unit/slave ID (default: 1)")
+    parser.add_argument(
+        "--type",
+        choices=sorted(READ_METHODS),
+        default="holding",
+        help="Modbus data area to read (default: holding)",
+    )
+    parser.add_argument("--address", type=int, required=True, help="Register/coil address from the device manual")
+    parser.add_argument("--count", type=int, default=1, help="Number of registers/coils to read")
+    parser.add_argument(
+        "--address-base",
+        choices=("zero", "one", "modicon"),
+        default="zero",
+        help="How to convert the entered address to the 0-based Modbus frame address",
+    )
+    parser.add_argument("--timeout", type=float, default=3.0, help="Connection/read timeout in seconds")
+
+    parser.add_argument("--baudrate", type=int, default=9600, help="RTU baud rate")
+    parser.add_argument("--bytesize", type=int, default=8, help="RTU byte size")
+    parser.add_argument("--parity", default="N", choices=("N", "E", "O"), help="RTU parity")
+    parser.add_argument("--stopbits", type=int, default=1, help="RTU stop bits")
+
+    parser.add_argument("--byte-order", choices=("big", "little"), default="big", help="Byte order inside each register")
+    parser.add_argument("--word-order", choices=("big", "little"), default="big", help="Word order for 32-bit values")
+    return parser
+
+
+def normalize_address(kind: str, address: int, base: str) -> int:
+    if address < 0:
+        raise ValueError("address must be non-negative")
+
+    if base == "zero":
+        normalized = address
+    elif base == "one":
+        normalized = address - 1
+    else:
+        normalized = normalize_modicon_address(kind, address)
+
+    if normalized < 0:
+        raise ValueError(f"address {address} with base {base} maps below zero")
+    if normalized > 0xFFFF:
+        raise ValueError(f"normalized address {normalized} exceeds the 16-bit Modbus address range")
+    return normalized
+
+
+def normalize_modicon_address(kind: str, address: int) -> int:
+    prefixes = {
+        "coil": 1,
+        "discrete": 10001,
+        "input": 30001,
+        "holding": 40001,
+    }
+    prefix = prefixes[kind]
+
+    if address >= prefix:
+        return address - prefix
+    return address - 1
+
+
+def make_client(args: argparse.Namespace) -> tuple[Any, str]:
+    serial_client, tcp_client = load_modbus_clients()
+
+    if args.host:
+        try:
+            return tcp_client(host=args.host, port=args.port, timeout=args.timeout), "tcp"
+        except TypeError:
+            return tcp_client(args.host, port=args.port, timeout=args.timeout), "tcp"
+
+    return (
+        serial_client(
+            port=args.serial,
+            baudrate=args.baudrate,
+            bytesize=args.bytesize,
+            parity=args.parity,
+            stopbits=args.stopbits,
+            timeout=args.timeout,
+        ),
+        "rtu",
+    )
+
+
+def call_read(method: Callable[..., Any], address: int, count: int, unit: int) -> Any:
+    attempts = (
+        lambda: method(address=address, count=count, device_id=unit),
+        lambda: method(address=address, count=count, slave=unit),
+        lambda: method(address, count=count, device_id=unit),
+        lambda: method(address, count=count, slave=unit),
+        lambda: method(address, count=count, unit=unit),
+        lambda: method(address, count),
+    )
+    last_error: Exception | None = None
+
+    for attempt in attempts:
+        try:
+            return attempt()
+        except TypeError as exc:
+            last_error = exc
+
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("no Modbus read attempt was made")
+
+
+def response_is_error(response: Any) -> bool:
+    is_error = getattr(response, "isError", None)
+    if callable(is_error):
+        return bool(is_error())
+    return bool(getattr(response, "is_error", False))
+
+
+def pair_words(registers: list[int]) -> list[list[int]]:
+    return [registers[index : index + 2] for index in range(0, len(registers) - 1, 2)]
+
+
+def words_to_bytes(words: list[int], byte_order: str, word_order: str) -> bytes:
+    ordered = list(words)
+    if len(ordered) == 2 and word_order == "little":
+        ordered = [ordered[1], ordered[0]]
+
+    payload = bytearray()
+    for word in ordered:
+        payload.extend(int(word & 0xFFFF).to_bytes(2, byte_order))
+    return bytes(payload)
+
+
+def decode_registers(registers: list[int], byte_order: str, word_order: str) -> dict[str, Any]:
+    decoded: dict[str, Any] = {
+        "uint16": registers,
+        "int16": [value - 0x10000 if value & 0x8000 else value for value in registers],
+        "hex16": [f"0x{value:04x}" for value in registers],
+    }
+
+    pairs = pair_words(registers)
+    if pairs:
+        decoded["uint32_pairs"] = []
+        decoded["int32_pairs"] = []
+        decoded["float32_pairs"] = []
+        decoded["hex32_pairs"] = []
+
+    for pair in pairs:
+        payload = words_to_bytes(pair, byte_order, word_order)
+        uint_value = int.from_bytes(payload, "big", signed=False)
+        int_value = int.from_bytes(payload, "big", signed=True)
+        float_value = struct.unpack(">f", payload)[0]
+        decoded["uint32_pairs"].append(uint_value)
+        decoded["int32_pairs"].append(int_value)
+        decoded["float32_pairs"].append(float_value)
+        decoded["hex32_pairs"].append("0x" + payload.hex())
+
+    text_bytes = words_to_bytes(registers, byte_order, "big")
+    printable = bytes(byte for byte in text_bytes if byte not in (0,)).decode("latin-1", errors="replace")
+    if printable:
+        decoded["ascii_lossy"] = printable
+
+    return decoded
+
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+
+    if args.count <= 0:
+        parser.error("--count must be greater than zero")
+    if args.unit < 0 or args.unit > 247:
+        parser.error("--unit must be between 0 and 247")
+
+    method_name, attr_name, function_code = READ_METHODS[args.type]
+
+    try:
+        address_zero_based = normalize_address(args.type, args.address, args.address_base)
+    except ValueError as exc:
+        parser.error(str(exc))
+
+    client, transport = make_client(args)
+    connected = client.connect()
+    if not connected:
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": "connection failed",
+                    "transport": transport,
+                    "host": args.host,
+                    "port": args.port if args.host else None,
+                    "serial": args.serial,
+                },
+                indent=2,
+            )
+        )
+        return 2
+
+    try:
+        response = call_read(getattr(client, method_name), address_zero_based, args.count, args.unit)
+    finally:
+        close = getattr(client, "close", None)
+        if callable(close):
+            close()
+
+    request = {
+        "transport": transport,
+        "host": args.host,
+        "port": args.port if args.host else None,
+        "serial": args.serial,
+        "unit": args.unit,
+        "type": args.type,
+        "function_code": function_code,
+        "address_input": args.address,
+        "address_base": args.address_base,
+        "address_zero_based": address_zero_based,
+        "count": args.count,
+    }
+
+    if response_is_error(response):
+        print(json.dumps({"ok": False, "request": request, "modbus_error": str(response)}, indent=2))
+        return 3
+
+    values = list(getattr(response, attr_name, []))
+    if attr_name == "bits":
+        values = values[: args.count]
+
+    output: dict[str, Any] = {
+        "ok": True,
+        "request": request,
+        "response": {attr_name: values},
+    }
+
+    if attr_name == "registers":
+        output["decoded"] = decode_registers(values, args.byte_order, args.word_order)
+
+    print(json.dumps(output, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

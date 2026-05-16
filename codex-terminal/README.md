@@ -6,7 +6,7 @@ Unofficial OpenAI Codex CLI terminal for Home Assistant.
 
 Codex Terminal Pro provides a Home Assistant ingress web terminal that starts in
 `/config`, with Codex CLI, image paste support, persistent packages, Home
-Assistant CLI, and GitHub CLI preinstalled.
+Assistant CLI, GitHub CLI, and read-only Modbus helpers preinstalled.
 
 It registers an admin-only Home Assistant sidebar panel titled **Codex Terminal
 Pro** through ingress.
@@ -33,6 +33,11 @@ saved image path is inserted directly into the Codex prompt. Paste is captured
 inside the embedded terminal iframe when the browser exposes image clipboard
 data; on iOS and Android, the upload button opens the device photo picker as the
 reliable fallback.
+
+The add-on also includes a read-only Modbus toolbox for Home Assistant and
+Schneider Electric troubleshooting: `modbus-toolbox`, `modbus-scan`,
+`modbus-read`, `ncat`, `socat`, `tcpdump`, `libmodbus`, and Python modules for
+`pymodbus`, `minimalmodbus`, and `pyserial`.
 
 Fresh installs add supported Codex TUI defaults in `/data/.codex/config.toml`:
 Catppuccin Mocha theme colors and a compact footer with run state, model,
@@ -152,6 +157,20 @@ not a security boundary.
 Clipboard support depends on browser security rules. Nabu Casa and HTTPS
 contexts can use browser clipboard APIs; plain HTTP LAN access may need the
 manual tap-and-hold copy fallback, especially on iOS.
+
+## Modbus
+
+Run `modbus-toolbox` inside the terminal for examples. The bundled helpers are
+read-only by design:
+
+```bash
+modbus-scan 192.168.50.0/24 --port 502 --open-only
+modbus-read --host 192.168.50.25 --unit 1 --type holding --address 40001 --address-base modicon --count 2
+```
+
+Schneider Electric register maps vary by product and firmware. Verify the
+exact map, unit ID, address base, scale, and word order before trusting a
+decoded value. Modbus write helpers are intentionally not bundled.
 
 ## Architecture
 

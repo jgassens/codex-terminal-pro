@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.27
+
+- Add a read-only Modbus toolbox for Home Assistant and Schneider Electric
+  debugging workflows.
+- Install `pymodbus[serial]`, `minimalmodbus`, `pyserial`, `nmap-ncat`,
+  `socat`, `tcpdump`, and `libmodbus` in the add-on image.
+- Add `modbus-toolbox`, `modbus-scan`, and `modbus-read` helper commands.
+- Document Schneider-safe read patterns, address-base handling, and why Modbus
+  write helpers are intentionally not bundled.
+
 ## 0.1.26
 
 - Stop showing the manual-copy fallback panel for normal desktop terminal

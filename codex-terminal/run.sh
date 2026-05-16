@@ -48,6 +48,9 @@ init_environment() {
     export XDG_DATA_HOME="$data_dir"
     export CODEX_HOME="$codex_home"
     export GH_CONFIG_DIR="$gh_config_dir"
+    if [ -d "/opt/modbus-python" ]; then
+        export PYTHONPATH="/opt/modbus-python:${PYTHONPATH:-}"
+    fi
 
     ensure_codex_file_credentials
     ensure_codex_tui_defaults
@@ -78,6 +81,9 @@ export GH_CONFIG_DIR="/data/.config/gh"
 export PATH="/data/packages/guard/bin:/data/packages/bin:/data/packages/python/venv/bin:$PATH"
 export LD_LIBRARY_PATH="/data/packages/lib:${LD_LIBRARY_PATH:-}"
 export PKG_CONFIG_PATH="/data/packages/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+if [ -d "/opt/modbus-python" ]; then
+    export PYTHONPATH="/opt/modbus-python:${PYTHONPATH:-}"
+fi
 unset SUPERVISOR_TOKEN
 
 if [ -d "/data/packages/python/venv" ]; then
@@ -160,6 +166,10 @@ install_tools() {
     command -v tmux >/dev/null 2>&1 || missing+=("tmux")
     command -v bwrap >/dev/null 2>&1 || missing+=("bubblewrap")
     command -v rg >/dev/null 2>&1 || missing+=("ripgrep")
+    command -v ncat >/dev/null 2>&1 || missing+=("nmap-ncat")
+    command -v socat >/dev/null 2>&1 || missing+=("socat")
+    command -v tcpdump >/dev/null 2>&1 || missing+=("tcpdump")
+    apk info -e libmodbus >/dev/null 2>&1 || missing+=("libmodbus")
     command -v jq >/dev/null 2>&1 || missing+=("jq")
     command -v curl >/dev/null 2>&1 || missing+=("curl")
 
@@ -174,7 +184,7 @@ install_tools() {
 
 log_startup_diagnostics() {
     local app_name="${APP_NAME:-${ADDON_NAME:-Codex Terminal Pro}}"
-    local app_version="${BUILD_VERSION:-${APP_VERSION:-0.1.26}}"
+    local app_version="${BUILD_VERSION:-${APP_VERSION:-0.1.27}}"
 
     bashio::log.info "Startup diagnostics:"
     bashio::log.info "  - Date: $(date)"
@@ -190,9 +200,29 @@ log_startup_diagnostics() {
     bashio::log.info "  - bwrap version: $(bwrap --version 2>&1 || true)"
     bashio::log.info "  - which rg: $(which rg 2>/dev/null || true)"
     bashio::log.info "  - rg version: $(rg --version 2>&1 | head -1 || true)"
+    bashio::log.info "  - which ncat: $(which ncat 2>/dev/null || true)"
+    bashio::log.info "  - which socat: $(which socat 2>/dev/null || true)"
+    bashio::log.info "  - which tcpdump: $(which tcpdump 2>/dev/null || true)"
+    bashio::log.info "  - which modbus-read: $(which modbus-read 2>/dev/null || true)"
+    bashio::log.info "  - modbus-read version: $(modbus-read --version 2>&1 || true)"
     bashio::log.info "  - which codex: $(which codex 2>/dev/null || true)"
     bashio::log.info "  - codex version: $(codex --version 2>&1 || true)"
     bashio::log.info "  - which ha: $(which ha 2>/dev/null || true)"
+}
+
+setup_modbus_tools() {
+    local tool
+
+    for tool in modbus-read modbus-scan modbus-toolbox; do
+        if [ -f "/opt/scripts/${tool}" ]; then
+            cp "/opt/scripts/${tool}" "/usr/local/bin/${tool}"
+            chmod 755 "/usr/local/bin/${tool}"
+        else
+            bashio::log.warning "Modbus helper missing: /opt/scripts/${tool}"
+        fi
+    done
+
+    bashio::log.info "Modbus toolbox installed: modbus-toolbox, modbus-scan, modbus-read"
 }
 
 setup_session_picker() {
@@ -417,6 +447,7 @@ export GH_CONFIG_DIR="${GH_CONFIG_DIR}"
 export PATH="${PATH}"
 export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"
 export PKG_CONFIG_PATH="${PKG_CONFIG_PATH:-}"
+export PYTHONPATH="${PYTHONPATH:-}"
 unset SUPERVISOR_TOKEN
 
 ${launch_command}
@@ -668,6 +699,7 @@ main() {
 
     init_environment
     install_tools
+    setup_modbus_tools
     log_startup_diagnostics
     setup_session_picker
     setup_persistent_packages
