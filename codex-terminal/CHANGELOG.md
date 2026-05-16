@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.25
+
+- Install Alpine's `ripgrep` package so Codex and shell workflows can use
+  `rg` inside the add-on.
+- Add `rg` path and version to startup diagnostics.
+
 ## 0.1.24
 
 - Add a Supervisor broker guardrail for Home Assistant management commands.

@@ -159,6 +159,7 @@ install_tools() {
     command -v ttyd >/dev/null 2>&1 || missing+=("ttyd")
     command -v tmux >/dev/null 2>&1 || missing+=("tmux")
     command -v bwrap >/dev/null 2>&1 || missing+=("bubblewrap")
+    command -v rg >/dev/null 2>&1 || missing+=("ripgrep")
     command -v jq >/dev/null 2>&1 || missing+=("jq")
     command -v curl >/dev/null 2>&1 || missing+=("curl")
 
@@ -173,7 +174,7 @@ install_tools() {
 
 log_startup_diagnostics() {
     local app_name="${APP_NAME:-${ADDON_NAME:-Codex Terminal Pro}}"
-    local app_version="${BUILD_VERSION:-${APP_VERSION:-0.1.24}}"
+    local app_version="${BUILD_VERSION:-${APP_VERSION:-0.1.25}}"
 
     bashio::log.info "Startup diagnostics:"
     bashio::log.info "  - Date: $(date)"
@@ -187,6 +188,8 @@ log_startup_diagnostics() {
     bashio::log.info "  - tmux version: $(tmux -V 2>/dev/null || true)"
     bashio::log.info "  - which bwrap: $(which bwrap 2>/dev/null || true)"
     bashio::log.info "  - bwrap version: $(bwrap --version 2>&1 || true)"
+    bashio::log.info "  - which rg: $(which rg 2>/dev/null || true)"
+    bashio::log.info "  - rg version: $(rg --version 2>&1 | head -1 || true)"
     bashio::log.info "  - which codex: $(which codex 2>/dev/null || true)"
     bashio::log.info "  - codex version: $(codex --version 2>&1 || true)"
     bashio::log.info "  - which ha: $(which ha 2>/dev/null || true)"
