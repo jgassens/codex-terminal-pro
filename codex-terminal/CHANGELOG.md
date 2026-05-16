@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.26
+
+- Stop showing the manual-copy fallback panel for normal desktop terminal
+  highlighting when a secondary clipboard attempt reports a false failure.
+- Keep the manual-copy panel for explicit copy actions and touch-select
+  fallback cases.
+
 ## 0.1.25
 
 - Install Alpine's `ripgrep` package so Codex and shell workflows can use

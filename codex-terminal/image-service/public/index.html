@@ -706,10 +706,10 @@
                         const copyResult = copyToClipboardFromGesture(selectedText, iframeDocument);
                         if (copyResult && typeof copyResult.then === 'function') {
                             copyResult.then((copied) => {
-                                updateTerminalSelectionCopyStatus(copied, selectedText);
+                                updateTerminalSelectionCopyStatus(copied, selectedText, { showManualFallback: true });
                             });
                         } else {
-                            updateTerminalSelectionCopyStatus(Boolean(copyResult), selectedText);
+                            updateTerminalSelectionCopyStatus(Boolean(copyResult), selectedText, { showManualFallback: true });
                         }
                     };
 
@@ -970,14 +970,20 @@
             return lines.join('\n').trim();
         }
 
-        function updateTerminalSelectionCopyStatus(copied, selectedText) {
+        function updateTerminalSelectionCopyStatus(copied, selectedText, options = {}) {
             if (copied) {
                 lastCopiedTerminalSelection = selectedText;
                 lastCopiedTerminalSelectionAt = Date.now();
                 setStatus('Copied terminal selection', 'success', false);
-            } else {
+            } else if (options.showManualFallback) {
+                lastCopiedTerminalSelection = selectedText;
+                lastCopiedTerminalSelectionAt = Date.now();
                 showManualCopy(selectedText, 'Copy failed. Tap and hold to Copy, or use the selected text below.');
                 setStatus('Selection ready for manual copy', 'error', false);
+            } else {
+                lastCopiedTerminalSelection = selectedText;
+                lastCopiedTerminalSelectionAt = Date.now();
+                setStatus('');
             }
         }
 
