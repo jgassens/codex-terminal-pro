@@ -1,7 +1,7 @@
 ---
 name: "Codex Terminal Pro"
 description: "Unofficial OpenAI Codex CLI terminal for Home Assistant with persistent package management, Home Assistant utilities, and image paste support."
-version: "0.1.29"
+version: "0.1.30"
 slug: "codex_terminal_pro"
 init: false
 

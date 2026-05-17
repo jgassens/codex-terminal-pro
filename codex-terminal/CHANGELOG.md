@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.30
+
+- Hide the mobile-only Select Text and Paste controls on desktop layouts while
+  keeping them visible on phone-sized and touch-oriented browser layouts.
+
 ## 0.1.29
 
 - Fix the background health-check logger so missing bashio shell functions do
