@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.29
+
+- Fix the background health-check logger so missing bashio shell functions do
+  not make otherwise successful checks report as failed.
+
 ## 0.1.28
 
 - Stop showing the manual "Copy failed" panel after mobile Select Text when

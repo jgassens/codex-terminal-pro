@@ -7,27 +7,30 @@ set -uo pipefail
 errors=0
 
 log_info() {
-    if command -v bashio >/dev/null 2>&1; then
+    if type bashio::log.info >/dev/null 2>&1; then
         bashio::log.info "$1"
     else
         echo "[INFO] $1"
     fi
+    return 0
 }
 
 log_warning() {
-    if command -v bashio >/dev/null 2>&1; then
+    if type bashio::log.warning >/dev/null 2>&1; then
         bashio::log.warning "$1"
     else
         echo "[WARN] $1"
     fi
+    return 0
 }
 
 log_error() {
-    if command -v bashio >/dev/null 2>&1; then
+    if type bashio::log.error >/dev/null 2>&1; then
         bashio::log.error "$1"
     else
         echo "[ERROR] $1"
     fi
+    return 0
 }
 
 check_command() {
