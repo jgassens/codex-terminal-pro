@@ -147,6 +147,34 @@
             display: none;
         }
 
+        #mobile-scroll-controls {
+            position: absolute;
+            right: 10px;
+            bottom: 10px;
+            z-index: 1200;
+            display: none;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .scroll-btn {
+            width: 38px;
+            height: 38px;
+            border: 1px solid rgba(121, 199, 197, 0.32);
+            border-radius: 999px;
+            background: rgba(23, 27, 29, 0.88);
+            color: var(--text);
+            box-shadow: 0 8px 24px var(--shadow);
+            font-size: 16px;
+            font-weight: 700;
+        }
+
+        .scroll-btn:active {
+            background: rgba(240, 180, 91, 0.22);
+            border-color: rgba(240, 180, 91, 0.65);
+            color: var(--accent-strong);
+        }
+
         @keyframes pulse {
             0%, 100% { opacity: 1; }
             50% { opacity: 0.7; }
@@ -228,7 +256,8 @@
             display: none;
         }
 
-        #manual-copy-panel {
+        #manual-copy-panel,
+        #manual-paste-panel {
             position: fixed;
             left: 16px;
             right: 16px;
@@ -244,17 +273,20 @@
             box-shadow: 0 18px 45px var(--shadow);
         }
 
-        #manual-copy-panel.active {
+        #manual-copy-panel.active,
+        #manual-paste-panel.active {
             display: flex;
         }
 
-        #manual-copy-message {
+        #manual-copy-message,
+        #manual-paste-message {
             color: var(--text);
             font-size: 13px;
             line-height: 1.4;
         }
 
-        #manual-copy-text {
+        #manual-copy-text,
+        #manual-paste-text {
             width: 100%;
             min-height: 72px;
             resize: vertical;
@@ -404,21 +436,29 @@
 
             #header-actions {
                 width: 100%;
-                justify-content: space-between;
+                justify-content: flex-start;
+                flex-wrap: wrap;
                 gap: 8px;
             }
 
             #status {
-                flex: 1;
+                flex: 1 0 100%;
+                order: 2;
                 max-width: none;
                 padding-left: 0;
             }
 
             .header-btn {
+                flex: 1 1 calc(50% - 8px);
+                justify-content: center;
                 padding: 7px 9px;
             }
 
             #touch-select-btn {
+                display: flex;
+            }
+
+            #mobile-scroll-controls {
                 display: flex;
             }
 
@@ -429,6 +469,10 @@
 
         @media (pointer: coarse) {
             #touch-select-btn {
+                display: flex;
+            }
+
+            #mobile-scroll-controls {
                 display: flex;
             }
         }
@@ -452,6 +496,10 @@
                     <span>▣</span>
                     <span>Select Text</span>
                 </button>
+                <button id="paste-btn" class="header-btn" title="Paste text or an image from the clipboard into the terminal">
+                    <span>📋</span>
+                    <span>Paste</span>
+                </button>
                 <button id="upload-btn" class="header-btn">
                     <span>📎</span>
                     <span>Upload Image</span>
@@ -463,6 +511,11 @@
             <div id="drop-zone">
                 <div id="drop-zone-text">Drop image to upload into Codex</div>
             </div>
+            <div id="mobile-scroll-controls" aria-label="Terminal scroll controls">
+                <button class="scroll-btn" data-terminal-action="scroll-up" title="Scroll terminal back" aria-label="Scroll terminal back">↑</button>
+                <button class="scroll-btn" data-terminal-action="scroll-down" title="Scroll terminal forward" aria-label="Scroll terminal forward">↓</button>
+                <button class="scroll-btn" data-terminal-action="scroll-bottom" title="Return to live prompt" aria-label="Return to live prompt">⌄</button>
+            </div>
         </div>
     </div>
     <input type="file" id="file-input" accept="image/*,.heic,.heif" multiple>
@@ -472,6 +525,15 @@
         <textarea id="manual-copy-text" readonly></textarea>
         <div class="modal-buttons">
             <button id="manual-copy-dismiss" class="modal-btn modal-btn-secondary">Dismiss</button>
+        </div>
+    </div>
+
+    <div id="manual-paste-panel" aria-live="polite">
+        <div id="manual-paste-message">Paste text below, then insert it into the terminal.</div>
+        <textarea id="manual-paste-text" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false"></textarea>
+        <div class="modal-buttons">
+            <button id="manual-paste-insert" class="modal-btn modal-btn-primary">Insert</button>
+            <button id="manual-paste-dismiss" class="modal-btn modal-btn-secondary">Dismiss</button>
         </div>
     </div>
 
@@ -538,12 +600,17 @@
         const status = document.getElementById('status');
         const uploadBtn = document.getElementById('upload-btn');
         const touchSelectBtn = document.getElementById('touch-select-btn');
+        const pasteBtn = document.getElementById('paste-btn');
         const fileInput = document.getElementById('file-input');
         const dropZone = document.getElementById('drop-zone');
         const manualCopyPanel = document.getElementById('manual-copy-panel');
         const manualCopyText = document.getElementById('manual-copy-text');
         const manualCopyMessage = document.getElementById('manual-copy-message');
         const manualCopyDismiss = document.getElementById('manual-copy-dismiss');
+        const manualPastePanel = document.getElementById('manual-paste-panel');
+        const manualPasteText = document.getElementById('manual-paste-text');
+        const manualPasteInsert = document.getElementById('manual-paste-insert');
+        const manualPasteDismiss = document.getElementById('manual-paste-dismiss');
 
         function setStatus(message, type = '', persistent = false) {
             status.textContent = message;
@@ -706,10 +773,14 @@
                         const copyResult = copyToClipboardFromGesture(selectedText, iframeDocument);
                         if (copyResult && typeof copyResult.then === 'function') {
                             copyResult.then((copied) => {
-                                updateTerminalSelectionCopyStatus(copied, selectedText, { showManualFallback: true });
+                                updateTerminalSelectionCopyStatus(copied, selectedText, {
+                                    selectionReadyMessage: 'Text selected. Use the selection handles to Copy if needed.'
+                                });
                             });
                         } else {
-                            updateTerminalSelectionCopyStatus(Boolean(copyResult), selectedText, { showManualFallback: true });
+                            updateTerminalSelectionCopyStatus(Boolean(copyResult), selectedText, {
+                                selectionReadyMessage: 'Text selected. Use the selection handles to Copy if needed.'
+                            });
                         }
                     };
 
@@ -975,6 +1046,10 @@
                 lastCopiedTerminalSelection = selectedText;
                 lastCopiedTerminalSelectionAt = Date.now();
                 setStatus('Copied terminal selection', 'success', false);
+            } else if (options.selectionReadyMessage) {
+                lastCopiedTerminalSelection = selectedText;
+                lastCopiedTerminalSelectionAt = Date.now();
+                setStatus(options.selectionReadyMessage, 'success', false);
             } else if (options.showManualFallback) {
                 lastCopiedTerminalSelection = selectedText;
                 lastCopiedTerminalSelectionAt = Date.now();
@@ -1280,6 +1355,110 @@
             }
         }
 
+        async function pasteTextIntoTerminal(text) {
+            try {
+                const response = await fetch(ingressPath('terminal-paste'), {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ text })
+                });
+
+                if (!response.ok) {
+                    const body = await response.text();
+                    console.log('Terminal paste failed:', body);
+                    return false;
+                }
+
+                const result = await response.json();
+                return Boolean(result.success);
+            } catch (err) {
+                console.log('Terminal paste failed:', err);
+                return false;
+            }
+        }
+
+        async function sendTerminalControl(action) {
+            try {
+                const response = await fetch(ingressPath('terminal-control'), {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ action })
+                });
+
+                if (!response.ok) {
+                    const body = await response.text();
+                    console.log('Terminal control failed:', body);
+                    return false;
+                }
+
+                const result = await response.json();
+                return Boolean(result.success);
+            } catch (err) {
+                console.log('Terminal control failed:', err);
+                return false;
+            }
+        }
+
+        async function clipboardImageFiles() {
+            if (!navigator.clipboard || typeof navigator.clipboard.read !== 'function') {
+                return [];
+            }
+
+            const items = await navigator.clipboard.read();
+            const files = [];
+
+            for (const item of items) {
+                const imageType = item.types.find((type) => type.startsWith('image/'));
+                if (!imageType) {
+                    continue;
+                }
+
+                const blob = await item.getType(imageType);
+                const extension = imageType.split('/')[1] || 'png';
+                files.push(new File([blob], `clipboard-image.${extension}`, { type: imageType }));
+            }
+
+            return files;
+        }
+
+        async function pasteClipboardIntoTerminal() {
+            manualPastePanel.classList.remove('active');
+            setStatus('Reading clipboard...', 'success', false);
+
+            try {
+                const imageFiles = await clipboardImageFiles();
+                if (imageFiles.length > 0) {
+                    await uploadImageFiles(imageFiles, 'pasted');
+                    return;
+                }
+            } catch (err) {
+                console.log('Clipboard image read failed:', err);
+            }
+
+            if (navigator.clipboard && typeof navigator.clipboard.readText === 'function') {
+                try {
+                    const text = await navigator.clipboard.readText();
+                    if (text.trim()) {
+                        const inserted = await pasteTextIntoTerminal(text);
+                        setStatus(inserted ? 'Pasted clipboard text' : 'Could not paste into terminal', inserted ? 'success' : 'error', false);
+                        return;
+                    }
+
+                    setStatus('Clipboard did not contain text or an image', 'error', false);
+                    return;
+                } catch (err) {
+                    console.log('Clipboard text read failed:', err);
+                }
+            }
+
+            showManualPaste('');
+            setStatus('Clipboard access blocked. Paste below, then tap Insert.', 'error', false);
+        }
+
         // Helper to copy text to clipboard
         async function copyToClipboard(text) {
             if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -1341,8 +1520,50 @@
             manualCopyText.select();
         }
 
+        function showManualPaste(text = '') {
+            manualPasteText.value = text;
+            manualPastePanel.classList.add('active');
+            manualPasteText.focus({ preventScroll: true });
+        }
+
         manualCopyDismiss.addEventListener('click', () => {
             manualCopyPanel.classList.remove('active');
+        });
+
+        manualPasteDismiss.addEventListener('click', () => {
+            manualPastePanel.classList.remove('active');
+        });
+
+        manualPasteInsert.addEventListener('click', async () => {
+            const text = manualPasteText.value;
+            if (!text.trim()) {
+                setStatus('No text to paste', 'error', false);
+                return;
+            }
+
+            manualPasteInsert.disabled = true;
+            const inserted = await pasteTextIntoTerminal(text);
+            manualPasteInsert.disabled = false;
+
+            if (inserted) {
+                manualPastePanel.classList.remove('active');
+                manualPasteText.value = '';
+                setStatus('Inserted pasted text', 'success', false);
+            } else {
+                setStatus('Could not paste into terminal', 'error', false);
+            }
+        });
+
+        pasteBtn.addEventListener('click', pasteClipboardIntoTerminal);
+
+        document.querySelectorAll('[data-terminal-action]').forEach((button) => {
+            button.addEventListener('click', async () => {
+                const action = button.getAttribute('data-terminal-action');
+                const ok = await sendTerminalControl(action);
+                if (!ok) {
+                    setStatus('Could not scroll terminal', 'error', false);
+                }
+            });
         });
 
         // Forward image paste/drop events over the terminal iframe to the

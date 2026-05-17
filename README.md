@@ -17,6 +17,8 @@ This is an MVP fork. It is not an official OpenAI add-on.
 - Polished Codex-focused web wrapper with image upload and voice controls.
 - Persistent `tmux` session so browser reconnects do not kill Codex.
 - Touch-friendly terminal text selection mode for phones and tablets.
+- Paste button with clipboard-text/image support and manual mobile fallback.
+- Mobile scroll controls for tmux scrollback and return-to-prompt.
 - Codex CLI installed with `npm install -g @openai/codex`.
 - Starts in `/config` so Codex can inspect Home Assistant YAML and storage.
 - Persistent Codex state under `/data/.codex`.
@@ -91,6 +93,12 @@ clipboard through OSC 52 support.
 
 Dropping or pasting an image uploads it to `/data/images` and inserts the saved
 image path directly into the Codex prompt.
+
+The toolbar includes a **Paste** button. It can paste clipboard text into the
+terminal, upload clipboard images when the browser exposes them, or open a
+manual paste box on mobile browsers that block direct clipboard reads. Touch
+devices also show compact scroll controls for paging through tmux scrollback
+and returning to the live prompt.
 
 ## Modbus Toolbox
 

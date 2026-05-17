@@ -16,7 +16,7 @@
 
 const express = require('express');
 const http = require('http');
-const { execFile } = require('child_process');
+const { execFile, spawn } = require('child_process');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
@@ -98,6 +98,10 @@ function isSameOriginBrowserRequest(req) {
 
 function hasControlCharacters(value) {
     return /[\u0000-\u001f\u007f]/.test(value);
+}
+
+function hasUnsupportedPasteCharacters(value) {
+    return /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value);
 }
 
 function readFileHead(filePath, maxBytes = 4096) {
@@ -363,6 +367,94 @@ app.post('/terminal-input', (req, res) => {
                 success: false,
                 error: 'Failed to insert text into terminal session'
             });
+        }
+
+        res.json({ success: true });
+    });
+});
+
+// Paste user-supplied clipboard text into the terminal. Unlike /terminal-input,
+// this endpoint accepts tabs/newlines because it is bound to an explicit Paste
+// button gesture in the browser UI.
+app.post('/terminal-paste', (req, res) => {
+    const text = typeof req.body?.text === 'string' ? req.body.text : '';
+
+    if (!isSameOriginBrowserRequest(req)) {
+        return res.status(403).json({ success: false, error: 'Cross-origin terminal paste is not allowed' });
+    }
+
+    if (!text.trim()) {
+        return res.status(400).json({ success: false, error: 'No terminal paste text provided' });
+    }
+
+    if (text.length > 16384) {
+        return res.status(400).json({ success: false, error: 'Terminal paste is too long' });
+    }
+
+    if (hasUnsupportedPasteCharacters(text)) {
+        return res.status(400).json({ success: false, error: 'Terminal paste contains unsupported control characters' });
+    }
+
+    const bufferName = `codex-terminal-paste-${Date.now()}`;
+    const loader = spawn('tmux', ['load-buffer', '-b', bufferName, '-'], {
+        stdio: ['pipe', 'ignore', 'pipe']
+    });
+    let stderr = '';
+    let responded = false;
+
+    loader.stderr.on('data', (chunk) => {
+        stderr += chunk.toString();
+    });
+
+    loader.on('error', (err) => {
+        console.error(`Failed to load tmux paste buffer for ${TMUX_TARGET}:`, err.message);
+        responded = true;
+        res.status(502).json({ success: false, error: 'Failed to prepare terminal paste' });
+    });
+
+    loader.on('close', (code) => {
+        if (responded) {
+            return;
+        }
+
+        if (code !== 0) {
+            console.error(`tmux load-buffer failed for ${TMUX_TARGET}:`, stderr.trim());
+            return res.status(502).json({ success: false, error: 'Failed to prepare terminal paste' });
+        }
+
+        execFile('tmux', ['paste-buffer', '-p', '-d', '-b', bufferName, '-t', TMUX_TARGET], { timeout: 3000 }, (err) => {
+            if (err) {
+                console.error(`Failed to paste into ${TMUX_TARGET}:`, err.message);
+                return res.status(502).json({ success: false, error: 'Failed to paste into terminal session' });
+            }
+
+            res.json({ success: true });
+        });
+    });
+
+    loader.stdin.end(text);
+});
+
+app.post('/terminal-control', (req, res) => {
+    const action = typeof req.body?.action === 'string' ? req.body.action : '';
+    const commands = {
+        'scroll-up': ['copy-mode', '-t', TMUX_TARGET, '-u'],
+        'scroll-down': ['send-keys', '-t', TMUX_TARGET, '-X', 'page-down'],
+        'scroll-bottom': ['send-keys', '-t', TMUX_TARGET, '-X', 'cancel']
+    };
+
+    if (!isSameOriginBrowserRequest(req)) {
+        return res.status(403).json({ success: false, error: 'Cross-origin terminal control is not allowed' });
+    }
+
+    if (!commands[action]) {
+        return res.status(400).json({ success: false, error: 'Unsupported terminal control action' });
+    }
+
+    execFile('tmux', commands[action], { timeout: 3000 }, (err) => {
+        if (err) {
+            console.error(`Terminal control ${action} failed for ${TMUX_TARGET}:`, err.message);
+            return res.status(502).json({ success: false, error: 'Failed to control terminal session' });
         }
 
         res.json({ success: true });

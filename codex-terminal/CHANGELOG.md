@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.28
+
+- Stop showing the manual "Copy failed" panel after mobile Select Text when
+  the terminal selection itself succeeded but the browser clipboard API is
+  unavailable.
+- Add a Paste button that reads text or images from the browser clipboard when
+  allowed, with a manual paste fallback for mobile browsers that block
+  clipboard reads.
+- Add mobile terminal scroll controls for page-up, page-down, and return to the
+  live prompt through tightly allowed tmux control actions.
+
 ## 0.1.27
 
 - Add a read-only Modbus toolbox for Home Assistant and Schneider Electric

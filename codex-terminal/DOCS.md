@@ -24,10 +24,17 @@ clipboard through OSC 52 support.
 
 On iOS and other restricted mobile browsers, clipboard APIs may require HTTPS.
 Use the Nabu Casa/HTTPS URL for best results. Over plain HTTP LAN access, the
-manual tap-and-hold copy panel is the reliable fallback.
+visible selection handles and manual paste/copy panels are the reliable
+fallback.
 
 Dropped or pasted images are uploaded to `/data/images`, and the saved path is
 inserted directly into the Codex prompt through the persistent tmux session.
+
+The toolbar **Paste** button reads text or images from the browser clipboard
+when allowed. If the browser blocks clipboard reads, it opens a manual paste box
+so text can still be inserted into the terminal. Touch devices also show
+compact scroll controls for paging up/down in tmux scrollback and returning to
+the live prompt.
 
 The add-on includes read-only Modbus helpers for Home Assistant troubleshooting
 and Schneider Electric discovery work. Run `modbus-toolbox` in the terminal for

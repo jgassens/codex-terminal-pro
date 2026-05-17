@@ -26,13 +26,21 @@ file as sensitive.
 Highlighted terminal text is copied to the browser clipboard when the selection
 finishes. tmux mouse selections are forwarded to the browser clipboard through
 OSC 52 support. On touch devices, use **Select Text** in the terminal toolbar,
-then drag across the terminal text to select and copy it.
+then drag across the terminal text to select it. Mobile browser clipboard APIs
+are best-effort, so the selection remains visible even when the browser blocks
+automatic copy.
 
 Dropped, selected, or pasted images are uploaded to `/data/images`, and the
 saved image path is inserted directly into the Codex prompt. Paste is captured
 inside the embedded terminal iframe when the browser exposes image clipboard
 data; on iOS and Android, the upload button opens the device photo picker as the
 reliable fallback.
+
+The toolbar includes a **Paste** button for mobile and desktop browsers. It
+reads text or images from the clipboard when the browser allows it; if mobile
+clipboard access is blocked, it opens a manual paste box that can insert text
+into the persistent terminal session. Touch devices also show compact scroll
+controls for paging through tmux scrollback and returning to the live prompt.
 
 The add-on also includes a read-only Modbus toolbox for Home Assistant and
 Schneider Electric troubleshooting: `modbus-toolbox`, `modbus-scan`,
