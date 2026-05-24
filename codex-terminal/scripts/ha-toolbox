@@ -1,0 +1,436 @@
+#!/usr/bin/env python3
+"""Read-only Home Assistant helper for Codex Terminal Pro."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+from collections import Counter
+from pathlib import Path
+from typing import Any
+
+
+VERSION = "1.42"
+
+EXPECTED_PATHS = (
+    "configuration.yaml",
+    "automations.yaml",
+    "scripts.yaml",
+    "scenes.yaml",
+    "secrets.yaml",
+    "packages",
+    "custom_components",
+    "blueprints",
+    "www",
+    ".storage",
+    ".storage/core.entity_registry",
+    ".storage/core.device_registry",
+    ".storage/core.config_entries",
+    ".storage/lovelace",
+    ".storage/energy",
+    "home-assistant_v2.db",
+)
+
+KEYWORDS = (
+    "automation",
+    "script",
+    "scene",
+    "template",
+    "sensor",
+    "binary_sensor",
+    "switch",
+    "light",
+    "climate",
+    "cover",
+    "camera",
+    "media_player",
+    "person",
+    "zone",
+    "device_tracker",
+    "recorder",
+    "history",
+    "logger",
+    "lovelace",
+    "energy",
+    "utility_meter",
+    "statistics",
+    "mqtt",
+    "zha",
+    "zigbee",
+    "zwave",
+    "matter",
+    "esphome",
+    "modbus",
+    "mobile_app",
+    "homekit",
+    "nest",
+    "shelly",
+    "fordpass",
+    "solar",
+    "battery",
+)
+
+SENSITIVE_FILENAMES = {
+    "secrets.yaml",
+    "auth",
+    "auth_provider.homeassistant",
+}
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Read-only Home Assistant toolbox for Codex Terminal Pro.",
+    )
+    parser.add_argument("--version", action="version", version=f"ha-toolbox {VERSION}")
+
+    subparsers = parser.add_subparsers(dest="command")
+    subparsers.add_parser("guide", help="Print the Home Assistant field guide")
+
+    audit = subparsers.add_parser("audit-config", help="Read-only config and storage audit")
+    audit.add_argument("--config", default="/config", help="Home Assistant config directory")
+    audit.add_argument("--json", action="store_true", help="Print JSON")
+    audit.add_argument("--max-files", type=int, default=350, help="Maximum YAML files to inspect")
+
+    states = subparsers.add_parser("states", help="Summarize live Home Assistant states")
+    states.add_argument("--domain", help="Filter by entity domain")
+    states.add_argument("--pattern", help="Case-insensitive entity/state/attribute text filter")
+    states.add_argument("--limit", type=int, default=80, help="Maximum matching entities to print")
+    states.add_argument("--json", action="store_true", help="Print JSON")
+
+    services = subparsers.add_parser("services", help="Summarize live Home Assistant services")
+    services.add_argument("--domain", help="Filter by service domain")
+    services.add_argument("--json", action="store_true", help="Print JSON")
+
+    subparsers.add_parser("tools", help="List expected Home Assistant helper tools")
+    return parser
+
+
+def print_guide() -> None:
+    print(
+        """Codex Terminal Pro Home Assistant Toolbox
+
+Read-only first moves:
+  ha-toolbox audit-config --config /config
+  ha-toolbox states
+  ha-toolbox services
+  ha core check
+  supervisor-api /core/api/states | jq 'length'
+
+Common work areas:
+  - YAML/packages/includes, automations, scripts, scenes, helpers, templates
+  - Entity/device/area registries and dashboard-critical unavailable entities
+  - Lovelace dashboards, Energy dashboard metadata, statistics, recorder DB
+  - MQTT, Zigbee/ZHA, Z-Wave JS, Matter, ESPHome, Shelly, mobile_app, HomeKit
+  - Add-ons, Supervisor, backups, network/DNS, ingress, logs, and updates
+
+Bundled docs:
+  /opt/home-assistant/HA.md
+  /opt/solar/SOLAR.md
+  /opt/modbus/MODBUS.md
+
+Use current official Home Assistant docs or live service schemas when behavior
+could have changed.
+"""
+    )
+
+
+def command_path(name: str) -> str | None:
+    return shutil.which(name)
+
+
+def print_tools() -> None:
+    commands = (
+        "ha",
+        "supervisor-api",
+        "ha-toolbox",
+        "codex-shell-dispatch",
+        "jq",
+        "yq",
+        "sqlite3",
+        "mosquitto_sub",
+        "mosquitto_pub",
+        "dig",
+        "nslookup",
+        "ping",
+        "ncat",
+        "socat",
+        "tcpdump",
+        "openssl",
+        "ssh",
+        "rsync",
+        "rg",
+        "git",
+        "gh",
+        "curl",
+    )
+    for name in commands:
+        path = command_path(name)
+        print(f"{name:22} {path or 'not found'}")
+
+
+def yaml_loader() -> Any:
+    try:
+        import yaml
+    except Exception as exc:  # pragma: no cover - runtime environment check
+        raise RuntimeError(f"PyYAML is not available: {exc}") from exc
+
+    class Loader(yaml.SafeLoader):
+        pass
+
+    def construct_unknown(loader: Any, tag_suffix: str, node: Any) -> Any:
+        if isinstance(node, yaml.ScalarNode):
+            return loader.construct_scalar(node)
+        if isinstance(node, yaml.SequenceNode):
+            return loader.construct_sequence(node)
+        if isinstance(node, yaml.MappingNode):
+            return loader.construct_mapping(node)
+        return None
+
+    Loader.add_multi_constructor("!", construct_unknown)
+    return yaml, Loader
+
+
+def read_yaml(path: Path) -> tuple[bool, Any | str]:
+    try:
+        yaml, loader = yaml_loader()
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            return True, yaml.load(handle, Loader=loader)
+    except Exception as exc:
+        return False, str(exc)
+
+
+def maybe_relative(path: Path, root: Path) -> str:
+    try:
+        return str(path.relative_to(root))
+    except ValueError:
+        return str(path)
+
+
+def should_skip_path(path: Path) -> bool:
+    skip_parts = {
+        ".git",
+        "__pycache__",
+        "node_modules",
+        ".venv",
+        "venv",
+        ".tox",
+        ".pytest_cache",
+    }
+    return any(part in skip_parts for part in path.parts)
+
+
+def audit_config(args: argparse.Namespace) -> int:
+    root = Path(args.config).expanduser()
+    result: dict[str, Any] = {
+        "config": str(root),
+        "exists": root.is_dir(),
+        "expected_paths": {},
+        "yaml": {"checked": 0, "ok": 0, "errors": []},
+        "root_keys": {},
+        "counts": {},
+        "custom_components": [],
+        "keyword_files": {},
+        "suggested_next_commands": [
+            "ha core check",
+            "ha-toolbox states --domain automation",
+            "ha-toolbox services --domain homeassistant",
+        ],
+    }
+
+    if not root.is_dir():
+        print(json.dumps(result, indent=2) if args.json else f"Config directory not found: {root}")
+        return 1
+
+    for expected in EXPECTED_PATHS:
+        result["expected_paths"][expected] = (root / expected).exists()
+
+    custom_components = root / "custom_components"
+    if custom_components.is_dir():
+        result["custom_components"] = sorted(
+            child.name for child in custom_components.iterdir() if child.is_dir()
+        )
+
+    yaml_files = sorted(
+        path
+        for path in root.rglob("*")
+        if path.is_file()
+        and path.suffix.lower() in {".yaml", ".yml"}
+        and not should_skip_path(path)
+    )[: max(0, args.max_files)]
+
+    root_key_counter: Counter[str] = Counter()
+    for path in yaml_files:
+        rel = maybe_relative(path, root)
+        result["yaml"]["checked"] += 1
+        if path.stat().st_size > 2_000_000:
+            result["yaml"]["errors"].append({"path": rel, "error": "file larger than 2 MB, skipped"})
+            continue
+
+        ok, payload = read_yaml(path)
+        if not ok:
+            result["yaml"]["errors"].append({"path": rel, "error": payload})
+            continue
+
+        result["yaml"]["ok"] += 1
+        if isinstance(payload, dict):
+            root_key_counter.update(str(key) for key in payload.keys())
+
+        if path.name not in SENSITIVE_FILENAMES:
+            text = path.read_text(encoding="utf-8", errors="replace").lower()
+            matches = [keyword for keyword in KEYWORDS if keyword in text]
+            if matches:
+                result["keyword_files"][rel] = matches
+
+    result["root_keys"] = dict(root_key_counter.most_common())
+    result["counts"] = {
+        "yaml_files_seen": len(yaml_files),
+        "custom_components": len(result["custom_components"]),
+        "storage_files": len(list((root / ".storage").glob("*"))) if (root / ".storage").is_dir() else 0,
+        "package_files": len(list((root / "packages").rglob("*.yaml"))) if (root / "packages").is_dir() else 0,
+    }
+
+    if args.json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(f"Home Assistant config: {root}")
+        print(f"YAML checked: {result['yaml']['checked']} ({result['yaml']['ok']} ok)")
+        if result["yaml"]["errors"]:
+            print("YAML issues:")
+            for item in result["yaml"]["errors"][:20]:
+                print(f"  - {item['path']}: {item['error']}")
+        print("Expected paths:")
+        for path, exists in result["expected_paths"].items():
+            print(f"  {'yes' if exists else ' no'}  {path}")
+        if result["custom_components"]:
+            print("Custom components:")
+            for name in result["custom_components"][:60]:
+                print(f"  - {name}")
+        print("Common root keys:")
+        for key, count in list(result["root_keys"].items())[:40]:
+            print(f"  - {key}: {count}")
+        print("Suggested next commands:")
+        for command in result["suggested_next_commands"]:
+            print(f"  {command}")
+
+    return 0 if not result["yaml"]["errors"] else 2
+
+
+def supervisor_get(path: str) -> Any:
+    helper = command_path("supervisor-api")
+    if not helper:
+        raise RuntimeError("supervisor-api helper is not available")
+    completed = subprocess.run(
+        [helper, path],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=30,
+    )
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or completed.stdout.strip()
+        raise RuntimeError(detail or f"supervisor-api exited {completed.returncode}")
+    return json.loads(completed.stdout or "null")
+
+
+def states(args: argparse.Namespace) -> int:
+    payload = supervisor_get("/core/api/states")
+    if not isinstance(payload, list):
+        raise RuntimeError("unexpected states response")
+
+    pattern = (args.pattern or "").lower()
+    domain_filter = (args.domain or "").lower()
+    rows = []
+    domains: Counter[str] = Counter()
+
+    for item in payload:
+        entity_id = str(item.get("entity_id", ""))
+        domain = entity_id.split(".", 1)[0] if "." in entity_id else ""
+        domains[domain] += 1
+        haystack = json.dumps(item, sort_keys=True).lower()
+        if domain_filter and domain != domain_filter:
+            continue
+        if pattern and pattern not in haystack:
+            continue
+        rows.append(
+            {
+                "entity_id": entity_id,
+                "state": item.get("state"),
+                "friendly_name": item.get("attributes", {}).get("friendly_name"),
+                "last_changed": item.get("last_changed"),
+            }
+        )
+
+    result = {"domain_counts": dict(domains.most_common()), "matches": rows[: args.limit]}
+    if args.json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(f"States: {len(payload)} entities")
+        print("Top domains:")
+        for domain, count in domains.most_common(30):
+            print(f"  - {domain}: {count}")
+        print("Matches:")
+        for row in rows[: args.limit]:
+            friendly = f" ({row['friendly_name']})" if row.get("friendly_name") else ""
+            print(f"  - {row['entity_id']}: {row['state']}{friendly}")
+    return 0
+
+
+def services(args: argparse.Namespace) -> int:
+    payload = supervisor_get("/core/api/services")
+    if not isinstance(payload, list):
+        raise RuntimeError("unexpected services response")
+
+    domain_filter = (args.domain or "").lower()
+    rows = []
+    for item in payload:
+        domain = str(item.get("domain", ""))
+        if domain_filter and domain != domain_filter:
+            continue
+        rows.append(
+            {
+                "domain": domain,
+                "services": sorted((item.get("services") or {}).keys()),
+            }
+        )
+
+    if args.json:
+        print(json.dumps(rows, indent=2, sort_keys=True))
+    else:
+        print(f"Service domains: {len(payload)}")
+        for item in rows:
+            service_names = ", ".join(item["services"])
+            print(f"  - {item['domain']}: {service_names}")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    try:
+        if args.command in (None, "guide"):
+            print_guide()
+            return 0
+        if args.command == "audit-config":
+            return audit_config(args)
+        if args.command == "states":
+            return states(args)
+        if args.command == "services":
+            return services(args)
+        if args.command == "tools":
+            print_tools()
+            return 0
+        parser.print_help()
+        return 64
+    except Exception as exc:
+        print(f"ha-toolbox: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

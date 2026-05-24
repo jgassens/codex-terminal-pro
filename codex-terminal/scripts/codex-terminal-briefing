@@ -42,11 +42,28 @@ Treat this file as the local map of the room.
 
 - `ha`: Home Assistant CLI, routed through the Supervisor broker.
 - `supervisor-api`: direct Supervisor HTTP helper, also brokered.
+- `ha-toolbox`: read-only Home Assistant guide, config audit, states summary,
+  services summary, and helper-tool inventory.
 - `codex-shell-dispatch`: sends a human `,,` command to the hidden Shell pane
   and returns completed output to the Codex view.
 - `codex-auth-helper`: login/import helper for Codex credentials.
 - `codex-session-picker`: menu for starting or resuming Codex sessions.
 - `persist-install`: persistent APK/Python package helper.
+- `sqlite3`: recorder database inspection when safe.
+- `mosquitto_sub` / `mosquitto_pub`: MQTT diagnostics.
+- `dig`, `nslookup`, `ping`, `ncat`, `socat`, `tcpdump`, and `openssl`:
+  network, DNS, TLS, port, and packet diagnostics.
+
+## Home Assistant Work
+
+- Start with `ha-toolbox audit-config --config /config` for local config shape.
+- Use `ha-toolbox states --pattern <text>` and `ha-toolbox services` before
+  guessing entity IDs or reload service names.
+- Use `/opt/home-assistant/HA.md` as the local Home Assistant field guide.
+- Know the common layers: YAML/includes/packages, automations, scripts, scenes,
+  helpers, templates, dashboards, entity/device registries, integrations,
+  add-ons, Supervisor, backups, recorder/statistics, MQTT, Zigbee/ZHA,
+  Z-Wave JS, Matter, ESPHome, mobile_app, HomeKit, and Energy.
 
 ## Solar, Battery, Inverter, And Modbus Tools
 
@@ -58,6 +75,7 @@ Treat this file as the local map of the room.
 - `modbus-scan`: read-only TCP/RTU discovery helper.
 - `modbus-read`: read-only register read helper.
 - Reference docs:
+  - `/opt/home-assistant/HA.md`
   - `/opt/solar/SOLAR.md`
   - `/opt/modbus/MODBUS.md`
 
@@ -101,6 +119,7 @@ for command_name in \
     persist-install \
     ha \
     supervisor-api \
+    ha-toolbox \
     solar-toolbox \
     modbus-toolbox \
     modbus-scan \
@@ -109,6 +128,18 @@ for command_name in \
     rg \
     jq \
     yq \
+    sqlite3 \
+    mosquitto_sub \
+    mosquitto_pub \
+    dig \
+    nslookup \
+    ping \
+    ncat \
+    socat \
+    tcpdump \
+    openssl \
+    ssh \
+    rsync \
     tmux \
     ttyd
 do

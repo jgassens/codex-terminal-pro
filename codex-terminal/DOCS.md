@@ -192,9 +192,32 @@ codex-terminal-briefing
 ```
 
 The briefing covers `,,` shell dispatch, `codex-shell-dispatch`, `ha`,
-`supervisor-api`, Shell mode, mobile command input, `solar-toolbox`,
-`modbus-toolbox`, `modbus-scan`, `modbus-read`, and the sensitive files it
-should avoid.
+`supervisor-api`, `ha-toolbox`, Shell mode, mobile command input,
+`solar-toolbox`, `modbus-toolbox`, `modbus-scan`, `modbus-read`, and the
+sensitive files it should avoid.
+
+## Home Assistant Toolbox
+
+`ha-toolbox` is the local Home Assistant orientation helper. It is read-only and
+is meant to give Codex a reliable first move before broad Home Assistant work.
+
+```bash
+ha-toolbox
+ha-toolbox audit-config --config /config
+ha-toolbox states --pattern battery
+ha-toolbox states --domain automation
+ha-toolbox services --domain homeassistant
+ha-toolbox tools
+```
+
+The bundled field guide at `/opt/home-assistant/HA.md` covers configuration
+layout, automations, scripts, scenes, helpers, templates, dashboards, entity and
+device registries, integrations, add-ons, Supervisor, backups, recorder and
+statistics, MQTT, Zigbee/ZHA, Z-Wave JS, Matter, ESPHome, mobile app, HomeKit,
+Energy, and safe reload choices.
+
+Common support tools include `sqlite3`, `mosquitto_sub`, `mosquitto_pub`, `dig`,
+`nslookup`, `ping`, `ncat`, `socat`, `tcpdump`, `openssl`, `ssh`, and `rsync`.
 
 ## Supervisor Broker Guardrail
 

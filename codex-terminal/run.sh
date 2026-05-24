@@ -171,6 +171,14 @@ install_tools() {
     command -v tcpdump >/dev/null 2>&1 || missing+=("tcpdump")
     apk info -e libmodbus >/dev/null 2>&1 || missing+=("libmodbus")
     command -v jq >/dev/null 2>&1 || missing+=("jq")
+    command -v yq >/dev/null 2>&1 || missing+=("yq")
+    command -v sqlite3 >/dev/null 2>&1 || missing+=("sqlite")
+    command -v mosquitto_sub >/dev/null 2>&1 || missing+=("mosquitto-clients")
+    command -v dig >/dev/null 2>&1 || missing+=("bind-tools")
+    command -v ping >/dev/null 2>&1 || missing+=("iputils")
+    command -v openssl >/dev/null 2>&1 || missing+=("openssl")
+    command -v ssh >/dev/null 2>&1 || missing+=("openssh-client")
+    command -v rsync >/dev/null 2>&1 || missing+=("rsync")
     command -v curl >/dev/null 2>&1 || missing+=("curl")
 
     if [ "${#missing[@]}" -gt 0 ]; then
@@ -184,7 +192,7 @@ install_tools() {
 
 log_startup_diagnostics() {
     local app_name="${APP_NAME:-${ADDON_NAME:-Codex Terminal Pro}}"
-    local app_version="${BUILD_VERSION:-${APP_VERSION:-0.1.41}}"
+    local app_version="${BUILD_VERSION:-${APP_VERSION:-1.42}}"
 
     bashio::log.info "Startup diagnostics:"
     bashio::log.info "  - Date: $(date)"
@@ -205,6 +213,11 @@ log_startup_diagnostics() {
     bashio::log.info "  - which tcpdump: $(which tcpdump 2>/dev/null || true)"
     bashio::log.info "  - which modbus-read: $(which modbus-read 2>/dev/null || true)"
     bashio::log.info "  - modbus-read version: $(modbus-read --version 2>&1 || true)"
+    bashio::log.info "  - which ha-toolbox: $(which ha-toolbox 2>/dev/null || true)"
+    bashio::log.info "  - ha-toolbox version: $(ha-toolbox --version 2>&1 || true)"
+    bashio::log.info "  - which sqlite3: $(which sqlite3 2>/dev/null || true)"
+    bashio::log.info "  - which mosquitto_sub: $(which mosquitto_sub 2>/dev/null || true)"
+    bashio::log.info "  - which dig: $(which dig 2>/dev/null || true)"
     bashio::log.info "  - which codex: $(which codex 2>/dev/null || true)"
     bashio::log.info "  - codex version: $(codex --version 2>&1 || true)"
     bashio::log.info "  - which ha: $(which ha 2>/dev/null || true)"
@@ -223,6 +236,16 @@ setup_modbus_tools() {
     done
 
     bashio::log.info "Modbus toolbox installed: modbus-toolbox, modbus-scan, modbus-read"
+}
+
+setup_ha_tools() {
+    if [ -f "/opt/scripts/ha-toolbox" ]; then
+        cp "/opt/scripts/ha-toolbox" "/usr/local/bin/ha-toolbox"
+        chmod 755 "/usr/local/bin/ha-toolbox"
+        bashio::log.info "Home Assistant toolbox installed: ha-toolbox"
+    else
+        bashio::log.warning "Home Assistant toolbox missing: /opt/scripts/ha-toolbox"
+    fi
 }
 
 setup_session_picker() {
@@ -335,6 +358,9 @@ write_codex_terminal_agents_block() {
   guessing.
 - Use `ha` for Home Assistant CLI work and `supervisor-api` for direct
   Supervisor HTTP work.
+- Use `ha-toolbox`, `ha-toolbox audit-config --config /config`,
+  `ha-toolbox states`, and `ha-toolbox services` for read-only Home Assistant
+  orientation before broad changes.
 - `,,` is a Codex Terminal Pro shell-dispatch prefix. If the human prompt starts
   with `,,`, strip that prefix and run the rest through `codex-shell-dispatch`.
   Do not run the stripped command directly through Codex's normal shell path.
@@ -347,6 +373,10 @@ write_codex_terminal_agents_block() {
 - Human Shell commands typed in Shell mode or dispatched with `,,` may run
   without a second broker confirmation. Codex/non-interactive management
   operations remain broker-guarded.
+- Use `/opt/home-assistant/HA.md` as the local Home Assistant field guide.
+- Search current official Home Assistant documentation or inspect live service
+  schemas when integration behavior, service payloads, or Supervisor behavior
+  could have changed.
 - Use `solar-toolbox`, `solar-toolbox audit-ha --config /config`, and
   `solar-toolbox snapshot-plan` for solar, battery, inverter, meter, and Home
   Assistant Energy work.
@@ -767,6 +797,7 @@ main() {
     init_environment
     install_tools
     setup_modbus_tools
+    setup_ha_tools
     log_startup_diagnostics
     setup_session_picker
     setup_persistent_packages

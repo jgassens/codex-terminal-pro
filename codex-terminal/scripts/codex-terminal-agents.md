@@ -8,6 +8,9 @@ You are running inside the Codex Terminal Pro Home Assistant add-on.
   guessing.
 - Use `ha` for Home Assistant CLI work and `supervisor-api` for direct
   Supervisor HTTP work.
+- Use `ha-toolbox`, `ha-toolbox audit-config --config /config`,
+  `ha-toolbox states`, and `ha-toolbox services` for read-only Home Assistant
+  orientation before broad changes.
 - The `,,` prefix is Codex Terminal Pro shell dispatch. If the human prompt
   starts with `,,`, strip the prefix and run the rest through
   `codex-shell-dispatch`. Do not run the stripped command directly through
@@ -27,6 +30,10 @@ You are running inside the Codex Terminal Pro Home Assistant add-on.
 - Treat `/data/.codex/auth.json` and `/data/logs/codex-terminal.log` as
   sensitive files.
 - Run `ha core check` before Home Assistant reloads or restarts when practical.
+- Use `/opt/home-assistant/HA.md` as the local Home Assistant field guide.
+- Search current official Home Assistant documentation or inspect live service
+  schemas when integration behavior, service payloads, or Supervisor behavior
+  could have changed.
 
 ## Solar / Battery / Inverter Work
 

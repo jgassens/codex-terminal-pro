@@ -6,8 +6,8 @@ Unofficial OpenAI Codex CLI terminal for Home Assistant.
 
 Codex Terminal Pro provides a Home Assistant ingress web terminal that starts in
 `/config`, with Codex CLI, image paste support, persistent packages, Home
-Assistant CLI, GitHub CLI, read-only Modbus helpers, and a solar commissioning
-toolbox preinstalled.
+Assistant CLI, `ha-toolbox`, GitHub CLI, read-only Modbus helpers, and a solar
+commissioning toolbox preinstalled.
 
 It registers an admin-only Home Assistant sidebar panel titled **Codex Terminal
 Pro** through ingress.
@@ -89,8 +89,32 @@ If that file already exists, the full guidance is written to
 capabilities block is appended to `/config/AGENTS.md` or refreshed in place.
 
 This guidance tells Codex about `,,`, `codex-shell-dispatch`, `ha`,
-`supervisor-api`, `solar-toolbox`, `modbus-toolbox`, `modbus-scan`, and
-`modbus-read`.
+`supervisor-api`, `ha-toolbox`, `solar-toolbox`, `modbus-toolbox`,
+`modbus-scan`, and `modbus-read`.
+
+## Home Assistant Readiness
+
+The add-on includes `ha-toolbox` and `/opt/home-assistant/HA.md` so Codex has a
+local Home Assistant field guide and read-only discovery commands before it
+starts guessing. The toolbox covers config audits, live states, live services,
+helper inventory, dashboards, registries, add-ons, Supervisor, recorder,
+statistics, MQTT, Zigbee/ZHA, Z-Wave JS, Matter, ESPHome, mobile app, HomeKit,
+and Energy work.
+
+Useful Home Assistant commands:
+
+```bash
+ha-toolbox
+ha-toolbox audit-config --config /config
+ha-toolbox states --pattern battery
+ha-toolbox states --domain automation
+ha-toolbox services --domain homeassistant
+ha-toolbox tools
+```
+
+The image also bundles practical Home Assistant admin utilities including
+`sqlite3`, `mosquitto_sub`, `mosquitto_pub`, `dig`, `nslookup`, `ping`, `ncat`,
+`socat`, `tcpdump`, `openssl`, `ssh`, and `rsync`.
 
 ## Solar And Modbus Readiness
 

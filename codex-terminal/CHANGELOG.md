@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.42
+
+- Move Codex Terminal Pro to the 1.x release line for the Home Assistant-native
+  toolbox release.
+- Add `ha-toolbox`, a read-only Home Assistant command for local field guidance,
+  config audits, live state summaries, service summaries, and helper inventory.
+- Add `/opt/home-assistant/HA.md`, a bundled Home Assistant field guide covering
+  YAML, automations, scripts, scenes, helpers, templates, dashboards, entity and
+  device registries, add-ons, Supervisor, recorder/statistics, MQTT, Zigbee,
+  Z-Wave JS, Matter, ESPHome, mobile app, HomeKit, and Energy work.
+- Bundle common Home Assistant admin utilities: `sqlite3`, MQTT clients,
+  DNS/network tools, OpenSSL, OpenSSH client, and `rsync`.
+- Teach the runtime briefing and installed agent guidance to use `ha-toolbox`
+  and `/opt/home-assistant/HA.md` before broad Home Assistant changes.
+
 ## 0.1.41
 
 - Add `codex-terminal-briefing`, a local environment briefing command that

@@ -37,7 +37,10 @@ This is an MVP fork. It is not an official OpenAI add-on.
 - Image paste, drag-drop, and mobile photo-picker upload support with files
   saved in `/data/images` and paths inserted into the prompt.
 - Persistent APK and Python package helpers under `/data/packages`.
-- Home Assistant CLI (`ha`) and GitHub CLI (`gh`) included.
+- Home Assistant CLI (`ha`), `ha-toolbox`, and GitHub CLI (`gh`) included.
+- Home Assistant field guide at `/opt/home-assistant/HA.md` plus common admin
+  utilities including `sqlite3`, MQTT clients, DNS/network tools, OpenSSL,
+  OpenSSH client, and `rsync`.
 - Solar commissioning toolbox with `solar-toolbox` for site intake, read-only
   gateway discovery, Home Assistant energy/entity audits, protocol/vendor
   recognition, and pre-change restore planning.
@@ -173,8 +176,28 @@ codex-terminal-briefing
 ```
 
 That guidance tells Codex about `,,`, `codex-shell-dispatch`, `ha`,
-`supervisor-api`, `solar-toolbox`, `modbus-toolbox`, `modbus-scan`, and
-`modbus-read`.
+`supervisor-api`, `ha-toolbox`, `solar-toolbox`, `modbus-toolbox`,
+`modbus-scan`, and `modbus-read`.
+
+## Home Assistant Toolbox
+
+Run `ha-toolbox` inside the terminal for Home Assistant-native orientation.
+It is read-only by default and gives Codex a local map for configuration,
+states, services, dashboards, registries, add-ons, Supervisor, recorder,
+MQTT, Zigbee/ZHA, Z-Wave JS, Matter, ESPHome, mobile app, HomeKit, Energy, and
+common troubleshooting paths.
+
+```bash
+ha-toolbox
+ha-toolbox audit-config --config /config
+ha-toolbox states --pattern battery
+ha-toolbox states --domain automation
+ha-toolbox services --domain homeassistant
+ha-toolbox tools
+```
+
+The detailed Home Assistant field guide is installed at
+`/opt/home-assistant/HA.md`.
 
 ## Solar Toolbox
 

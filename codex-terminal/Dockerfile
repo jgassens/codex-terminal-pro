@@ -1,7 +1,7 @@
 FROM ghcr.io/home-assistant/base:latest
 
 LABEL \
-    io.hass.version="0.1.41" \
+    io.hass.version="1.42" \
     io.hass.type="addon" \
     io.hass.arch="aarch64|amd64" \
     org.opencontainers.image.title="Home Assistant Add-on: Codex Terminal Pro" \
@@ -32,6 +32,13 @@ RUN apk add --no-cache \
     socat \
     tcpdump \
     libmodbus \
+    sqlite \
+    mosquitto-clients \
+    bind-tools \
+    iputils \
+    openssl \
+    openssh-client \
+    rsync \
     vim \
     wget \
     tree \
@@ -87,10 +94,11 @@ RUN case "${TARGETARCH:-amd64}" in \
 
 WORKDIR /config
 
-RUN mkdir -p /opt/modbus /opt/solar
+RUN mkdir -p /opt/modbus /opt/solar /opt/home-assistant
 COPY MODBUS.md /opt/modbus/MODBUS.md
 COPY modbus/ /opt/modbus/
 COPY SOLAR.md /opt/solar/SOLAR.md
+COPY HA.md /opt/home-assistant/HA.md
 
 # Copy and install image service.
 COPY image-service/ /opt/image-service/
@@ -111,10 +119,12 @@ RUN mkdir -p /usr/libexec/codex-terminal \
     && chmod +x /opt/scripts/persist-install \
     && chmod +x /opt/scripts/codex-shell-dispatch \
     && chmod +x /opt/scripts/codex-terminal-briefing \
+    && chmod +x /opt/scripts/ha-toolbox \
     && chmod +x /opt/scripts/modbus-* \
     && chmod +x /opt/scripts/solar-* \
     && ln -sf /opt/scripts/codex-shell-dispatch /usr/local/bin/codex-shell-dispatch \
     && ln -sf /opt/scripts/codex-terminal-briefing /usr/local/bin/codex-terminal-briefing \
+    && ln -sf /opt/scripts/ha-toolbox /usr/local/bin/ha-toolbox \
     && ln -sf /opt/scripts/modbus-read /usr/local/bin/modbus-read \
     && ln -sf /opt/scripts/modbus-scan /usr/local/bin/modbus-scan \
     && ln -sf /opt/scripts/modbus-toolbox /usr/local/bin/modbus-toolbox \
