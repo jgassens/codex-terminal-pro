@@ -8,6 +8,7 @@ AUDIT_LOG="/data/logs/supervisor-broker.log"
 
 SUPERVISOR_BROKER_ENABLED="true"
 SUPERVISOR_BROKER_T1_TTL_SECONDS="120"
+SUPERVISOR_BROKER_COMMA_DISPATCH_ENABLED="true"
 
 if [ -f "$CONF_FILE" ]; then
     # shellcheck disable=SC1090
@@ -38,6 +39,86 @@ is_interactive() {
 
 is_trusted_human_shell() {
     [ "${CODEX_TERMINAL_HUMAN_SHELL:-}" = "1" ] && [ -t 0 ]
+}
+
+normalize_command_text() {
+    printf '%s' "$1" | tr -s '[:space:]' ' ' | sed 's/^ //; s/ $//'
+}
+
+command_matches_any() {
+    local candidate="$1"
+    shift
+    local expected
+
+    for expected in "$@"; do
+        if [ "$candidate" = "$(normalize_command_text "$expected")" ]; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+recent_comma_dispatch_prompt_authorizes() {
+    local source="$1"
+    local op="$2"
+    shift 2
+    local target="${CODEX_TMUX_TARGET:-${TMUX_TARGET:-${TMUX_SESSION:-codex-terminal}:0.0}}"
+    local capture
+    local line
+    local normalized_line
+    local prefix
+    local candidate
+    local -a expected_commands=()
+
+    if [ "${SUPERVISOR_BROKER_COMMA_DISPATCH_ENABLED:-true}" != "true" ]; then
+        return 1
+    fi
+
+    command -v tmux >/dev/null 2>&1 || return 1
+    capture="$(tmux capture-pane -p -J -t "$target" -S -80 2>/dev/null || true)"
+    [ -n "$capture" ] || return 1
+
+    expected_commands+=("$op")
+    if [ "$source" = "rest" ]; then
+        local method="${1:-GET}"
+        local path="${2:-/}"
+        local method_upper
+        local method_lower
+
+        method_upper="$(printf '%s' "$method" | tr '[:lower:]' '[:upper:]')"
+        method_lower="$(printf '%s' "$method" | tr '[:upper:]' '[:lower:]')"
+        expected_commands+=(
+            "supervisor-api -X $method_upper $path"
+            "supervisor-api -X $method_lower $path"
+            "supervisor-api --request $method_upper $path"
+            "supervisor-api --request $method_lower $path"
+            "supervisor-api $method_upper $path"
+            "supervisor-api $method_lower $path"
+        )
+    fi
+
+    while IFS= read -r line; do
+        normalized_line="$(normalize_command_text "$line")"
+        case "$normalized_line" in
+            *,,*) ;;
+            *) continue ;;
+        esac
+
+        # Only trust prompt-like lines. This avoids examples or docs later in
+        # the pane granting unrelated broker approval.
+        prefix="${normalized_line%%,,*}"
+        [ "${#prefix}" -le 4 ] || continue
+
+        candidate="$(normalize_command_text "${normalized_line#*,,}")"
+        if command_matches_any "$candidate" "${expected_commands[@]}"; then
+            return 0
+        fi
+    done <<EOF
+$capture
+EOF
+
+    return 1
 }
 
 strip_global_flags() {
@@ -325,8 +406,10 @@ authorize() {
             phrase="confirm ${noun}${verb:+ ${verb}}"
             ;;
         rest)
-            tier="$(classify_rest "${1:-GET}" "${2:-/}")"
-            op="supervisor-api ${1:-GET} ${2:-/}"
+            local rest_method
+            rest_method="$(printf '%s' "${1:-GET}" | tr '[:lower:]' '[:upper:]')"
+            tier="$(classify_rest "$rest_method" "${2:-/}")"
+            op="supervisor-api ${rest_method} ${2:-/}"
             phrase="confirm supervisor api"
             ;;
         *)
@@ -338,6 +421,11 @@ authorize() {
 
     if [ "$tier" != "T0" ] && is_trusted_human_shell; then
         audit "$op" "$tier" "allow" "trusted-human-shell"
+        return 0
+    fi
+
+    if [ "$tier" != "T0" ] && recent_comma_dispatch_prompt_authorizes "$source" "$op" "$@"; then
+        audit "$op" "$tier" "allow" "recent-comma-dispatch-prompt"
         return 0
     fi
 

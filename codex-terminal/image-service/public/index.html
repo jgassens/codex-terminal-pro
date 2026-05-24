@@ -1109,10 +1109,6 @@
         }
 
         function shellCommandFromDispatchPrefix(text) {
-            if (terminalMode !== 'codex') {
-                return null;
-            }
-
             const normalized = text.replace(/^\s+/, '');
             if (!normalized.startsWith(SHELL_DISPATCH_PREFIX)) {
                 return null;
@@ -1219,23 +1215,18 @@
             return true;
         }
 
-        function trackTerminalPromptKeydown(event) {
-            if (!claimTerminalEvent(event)) {
-                return;
-            }
-
+        function handleTerminalPromptKeydown(event) {
             if (event.defaultPrevented || event.isComposing) {
-                return;
+                return true;
             }
 
             if (event.key === 'Enter') {
-                dispatchTerminalLineBuffer(event);
-                return;
+                return !dispatchTerminalLineBuffer(event);
             }
 
             if (event.key === 'Backspace') {
                 terminalLineBuffer = terminalLineBuffer.slice(0, -1);
-                return;
+                return true;
             }
 
             if (
@@ -1245,27 +1236,37 @@
                 event.key === 'PageDown'
             ) {
                 resetTerminalLineBuffer();
-                return;
+                return true;
             }
 
             if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'u') {
                 resetTerminalLineBuffer();
-                return;
+                return true;
             }
 
             if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'v') {
-                return;
+                return true;
             }
 
             if (event.ctrlKey || event.metaKey || event.altKey) {
                 resetTerminalLineBuffer();
-                return;
+                return true;
             }
 
             if (event.key.length === 1) {
                 appendTerminalLineText(event.key, 'keydown');
                 lastPrintableKey = { text: event.key, at: Date.now() };
             }
+
+            return true;
+        }
+
+        function trackTerminalPromptKeydown(event) {
+            if (!claimTerminalEvent(event)) {
+                return;
+            }
+
+            handleTerminalPromptKeydown(event);
         }
 
         function trackTerminalPromptBeforeInput(event) {
@@ -1642,6 +1643,24 @@
                             iframeWindow.term.onSelectionChange(rememberTerminalSelection);
                         } catch (err) {
                             console.log('Cannot attach xterm selection tracker:', err);
+                        }
+
+                        try {
+                            if (
+                                typeof iframeWindow.term.attachCustomKeyEventHandler === 'function' &&
+                                !iframeWindow.__codexShellDispatchKeyHandlerInstalled
+                            ) {
+                                iframeWindow.__codexShellDispatchKeyHandlerInstalled = true;
+                                iframeWindow.term.attachCustomKeyEventHandler((event) => {
+                                    if (!claimTerminalEvent(event)) {
+                                        return true;
+                                    }
+
+                                    return handleTerminalPromptKeydown(event);
+                                });
+                            }
+                        } catch (err) {
+                            console.log('Cannot attach xterm shell dispatch key handler:', err);
                         }
 
                         installOsc52ClipboardBridge(iframeWindow, iframeDocument);

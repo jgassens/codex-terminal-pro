@@ -142,7 +142,9 @@ and uninstall operations cannot silently answer their own prompts.
 
 If browser interception ever misses a `,,` line and Codex sees it as a prompt,
 the shipped `codex-shell-dispatch` helper is the fallback path Codex should use
-instead of running the stripped command directly.
+instead of running the stripped command directly. The broker also recognizes a
+recent exact `,,ha ...` or `,, supervisor-api ...` line in the Codex pane as
+human dispatch intent for the matching operation.
 
 Useful update commands from Codex mode:
 

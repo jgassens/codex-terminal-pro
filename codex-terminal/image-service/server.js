@@ -963,7 +963,13 @@ app.use('/terminal', terminalProxy);
 // Serve static files (HTML interface) - MUST be after API routes.
 // Do not expose /data/images through express.static; uploaded files are paths
 // for Codex to read, not browser-served content.
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'public'), {
+    etag: false,
+    lastModified: false,
+    setHeaders: (res) => {
+        res.setHeader('Cache-Control', 'no-store');
+    }
+}));
 
 // Multer error handling middleware
 app.use((err, req, res, next) => {

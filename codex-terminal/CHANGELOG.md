@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.40
+
+- Attach an xterm.js custom key handler so typed `,,` shell-dispatch commands
+  are intercepted before ttyd sends Enter to Codex.
+- Serve the wrapper UI with `Cache-Control: no-store` so Home Assistant reloads
+  pick up frontend fixes instead of leaving a stale shell-dispatch script in
+  the browser.
+- Teach the Supervisor broker to recognize a recent exact `,,ha ...` or
+  `,, supervisor-api ...` prompt in the live Codex tmux pane as the human's
+  shell-dispatch intent if browser interception and agent guidance both miss.
+- Export the Codex tmux target into the launched session so brokered commands
+  can verify the prompt that authorized them.
+- Add an expert broker option to disable recent `,,` prompt authorization while
+  keeping the default workflow smooth for human-typed shell dispatches.
+
 ## 0.1.39
 
 - Harden `,,` dispatch capture inside the ttyd iframe by tracking paste and

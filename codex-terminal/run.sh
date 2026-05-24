@@ -339,6 +339,8 @@ write_codex_terminal_agents_block() {
 - Example: `,, supervisor-api -X POST /core/api/services/automation/reload`
   becomes
   `codex-shell-dispatch supervisor-api -X POST /core/api/services/automation/reload`.
+- Do not ask for another confirmation before using `codex-shell-dispatch` for a
+  `,,` prompt; the prefix is the human's direct shell-dispatch instruction.
 - Human Shell commands typed in Shell mode or dispatched with `,,` may run
   without a second broker confirmation. Codex/non-interactive management
   operations remain broker-guarded.
@@ -361,11 +363,13 @@ setup_supervisor_broker() {
     local supervisor_dir="/data/.supervisor"
     local broker_enabled
     local broker_ttl
+    local broker_comma_dispatch_enabled
     local target_agents="/config/AGENTS.md"
     local fallback_agents="/config/AGENTS.codex-terminal-pro.md"
 
     broker_enabled=$(bashio::config 'supervisor_broker_enabled' 'true')
     broker_ttl=$(normalize_nonnegative_int "$(bashio::config 'supervisor_broker_t1_ttl_seconds' '120')" "120")
+    broker_comma_dispatch_enabled=$(bashio::config 'supervisor_broker_comma_dispatch_enabled' 'true')
 
     mkdir -p "$guard_dir" "$supervisor_dir/confirm" "/data/logs"
     chmod 700 "/data/packages/guard" "$guard_dir" "$supervisor_dir" "$supervisor_dir/confirm" "/data/logs"
@@ -380,6 +384,7 @@ setup_supervisor_broker() {
     cat > "$supervisor_dir/broker.conf" << BROKER_CONF
 SUPERVISOR_BROKER_ENABLED="${broker_enabled}"
 SUPERVISOR_BROKER_T1_TTL_SECONDS="${broker_ttl}"
+SUPERVISOR_BROKER_COMMA_DISPATCH_ENABLED="${broker_comma_dispatch_enabled}"
 BROKER_CONF
     chmod 600 "$supervisor_dir/broker.conf"
 
@@ -412,7 +417,7 @@ BROKER_CONF
     fi
 
     unset SUPERVISOR_TOKEN
-    bashio::log.info "Supervisor broker: enabled=${broker_enabled}, T1 TTL=${broker_ttl}s"
+    bashio::log.info "Supervisor broker: enabled=${broker_enabled}, T1 TTL=${broker_ttl}s, comma dispatch=${broker_comma_dispatch_enabled}"
 }
 
 get_codex_launch_command() {
@@ -493,6 +498,9 @@ export PATH="${PATH}"
 export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"
 export PKG_CONFIG_PATH="${PKG_CONFIG_PATH:-}"
 export PYTHONPATH="${PYTHONPATH:-}"
+export TMUX_SESSION="${TMUX_SESSION}"
+export TMUX_TARGET="${TMUX_TARGET}"
+export CODEX_TMUX_TARGET="${CODEX_TMUX_TARGET}"
 unset SUPERVISOR_TOKEN
 
 ${launch_command}

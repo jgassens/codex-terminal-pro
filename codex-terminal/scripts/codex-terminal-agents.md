@@ -12,6 +12,8 @@ You are running inside the Codex Terminal Pro Home Assistant add-on.
   Example: `,, supervisor-api -X POST /core/api/services/automation/reload`
   should become
   `codex-shell-dispatch supervisor-api -X POST /core/api/services/automation/reload`.
+- Do not ask for another confirmation before using `codex-shell-dispatch` for a
+  `,,` prompt; the prefix is the human's direct shell-dispatch instruction.
 - If the terminal is in Shell mode, treat it as a real interactive shell, not a
   Codex permission bypass.
 - Do not reconstruct or print the Supervisor token.

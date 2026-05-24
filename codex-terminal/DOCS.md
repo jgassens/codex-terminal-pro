@@ -158,6 +158,7 @@ image_retention_days: 30
 image_retention_max_bytes: 268435456
 supervisor_broker_enabled: true
 supervisor_broker_t1_ttl_seconds: 120
+supervisor_broker_comma_dispatch_enabled: true
 persistent_apk_packages: []
 persistent_pip_packages: []
 ```
@@ -196,6 +197,10 @@ confirmation broker.
 - Commands typed in the Shell pane or sent from Codex with `,,` are treated as
   human shell commands and run directly. Codex/non-interactive operations still
   use the broker guardrail.
+- `supervisor_broker_comma_dispatch_enabled` also lets the broker accept a
+  recent exact `,,ha ...` or `,, supervisor-api ...` line visible in the Codex
+  pane as human dispatch intent if the browser shortcut or Codex guidance misses
+  it.
 
 The broker writes decisions to `/data/logs/supervisor-broker.log`. This log is
 for accountability and troubleshooting, not tamper-proof audit. A determined
