@@ -32,6 +32,9 @@ const RAW_TERMINAL_WINDOW = process.env.RAW_TERMINAL_WINDOW || 'raw-shell';
 const RAW_TMUX_TARGET = `${TMUX_SESSION}:${RAW_TERMINAL_WINDOW}.0`;
 const UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
 const RAW_SHELL_COMMAND_MAX_LENGTH = 4096;
+const RAW_SHELL_COMMAND_TIMEOUT_MS = parseNonNegativeInt(process.env.RAW_SHELL_COMMAND_TIMEOUT_MS, 45000);
+const RAW_SHELL_CAPTURE_LINES = parseNonNegativeInt(process.env.RAW_SHELL_CAPTURE_LINES, 4000);
+const RAW_SHELL_OUTPUT_MAX_CHARS = parseNonNegativeInt(process.env.RAW_SHELL_OUTPUT_MAX_CHARS, 20000);
 const IMAGE_RETENTION_DAYS = parseNonNegativeInt(process.env.IMAGE_RETENTION_DAYS, 30);
 const IMAGE_RETENTION_MAX_BYTES = parseNonNegativeInt(process.env.IMAGE_RETENTION_MAX_BYTES, 256 * 1024 * 1024);
 const SCROLL_CONTROL_ACTIONS = new Set(['scroll-up', 'scroll-down', 'scroll-bottom']);
@@ -276,6 +279,106 @@ function pasteTextToTarget(text, target, logContext, callback) {
     }, target);
 }
 
+function capturePaneText(target, callback) {
+    runTmux([
+        'capture-pane',
+        '-p',
+        '-J',
+        '-t',
+        target,
+        '-S',
+        `-${RAW_SHELL_CAPTURE_LINES}`
+    ], callback);
+}
+
+function truncateShellOutput(output) {
+    if (output.length <= RAW_SHELL_OUTPUT_MAX_CHARS) {
+        return { output, truncated: false };
+    }
+
+    const notice = '\n...[output truncated]\n';
+    const keep = Math.max(0, RAW_SHELL_OUTPUT_MAX_CHARS - notice.length);
+    return {
+        output: `${output.slice(0, keep)}${notice}`,
+        truncated: true
+    };
+}
+
+function parseMarkedShellOutput(captured, startMarker, endMarker) {
+    const lines = String(captured || '').replace(/\r/g, '').split('\n');
+    const endPrefix = `${endMarker}:`;
+    let startIndex = -1;
+    let endIndex = -1;
+    let exitCode = null;
+
+    for (let i = 0; i < lines.length; i += 1) {
+        const line = lines[i].trim();
+        if (startIndex === -1) {
+            if (line === startMarker) {
+                startIndex = i;
+            }
+            continue;
+        }
+
+        if (line.startsWith(endPrefix)) {
+            endIndex = i;
+            const parsed = Number.parseInt(line.slice(endPrefix.length), 10);
+            exitCode = Number.isFinite(parsed) ? parsed : null;
+            break;
+        }
+    }
+
+    if (startIndex === -1) {
+        return { started: false, complete: false, output: '', exitCode: null, truncated: false };
+    }
+
+    if (endIndex === -1) {
+        return { started: true, complete: false, output: '', exitCode: null, truncated: false };
+    }
+
+    const rawOutput = lines
+        .slice(startIndex + 1, endIndex)
+        .join('\n')
+        .replace(/^\n+/, '')
+        .replace(/\n+$/, '');
+    const truncated = truncateShellOutput(rawOutput);
+    return {
+        started: true,
+        complete: true,
+        output: truncated.output,
+        exitCode,
+        truncated: truncated.truncated
+    };
+}
+
+function waitForMarkedShellOutput(startMarker, endMarker, callback) {
+    const deadline = Date.now() + RAW_SHELL_COMMAND_TIMEOUT_MS;
+
+    const poll = () => {
+        capturePaneText(RAW_TMUX_TARGET, (captureErr, stdout) => {
+            if (captureErr) {
+                callback(captureErr);
+                return;
+            }
+
+            const parsed = parseMarkedShellOutput(stdout, startMarker, endMarker);
+            if (parsed.complete) {
+                callback(null, { ...parsed, timedOut: false });
+                return;
+            }
+
+            if (Date.now() >= deadline) {
+                callback(null, { ...parsed, timedOut: true });
+                return;
+            }
+
+            setTimeout(poll, 250);
+        });
+    };
+
+    poll();
+}
+
 function ensureRawTerminal(callback) {
     runTmux(['list-windows', '-t', TMUX_SESSION, '-F', '#{window_name}'], (listErr, stdout) => {
         if (listErr) {
@@ -347,20 +450,71 @@ function selectTerminalMode(mode, callback) {
 }
 
 function dispatchRawShellCommand(command, callback) {
-    selectTerminalMode('raw', (selectErr) => {
-        if (selectErr) {
-            callback(selectErr);
+    ensureRawTerminal((ensureErr) => {
+        if (ensureErr) {
+            callback(ensureErr);
             return;
         }
 
-        pasteTextToTarget(command, RAW_TMUX_TARGET, RAW_TMUX_TARGET, (pasteErr) => {
-            if (pasteErr) {
-                callback(pasteErr);
+        const markerSuffix = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+        const startMarker = `__CTP_SHELL_START_${markerSuffix}__`;
+        const endMarker = `__CTP_SHELL_END_${markerSuffix}__`;
+        const wrappedCommand = `printf '\\n${startMarker}\\n'; ${command}; __ctp_status=$?; printf '\\n${endMarker}:%s\\n' "$__ctp_status"`;
+
+        cancelCopyModeIfNeeded((modeErr) => {
+            if (modeErr) {
+                callback(modeErr);
                 return;
             }
 
-            runTmux(['send-keys', '-t', RAW_TMUX_TARGET, 'Enter'], callback);
-        });
+            runTmux(['send-keys', '-t', RAW_TMUX_TARGET, 'C-u'], (clearErr) => {
+                if (clearErr) {
+                    callback(clearErr);
+                    return;
+                }
+
+                pasteTextToTarget(wrappedCommand, RAW_TMUX_TARGET, RAW_TMUX_TARGET, (pasteErr) => {
+                    if (pasteErr) {
+                        callback(pasteErr);
+                        return;
+                    }
+
+                    runTmux(['send-keys', '-t', RAW_TMUX_TARGET, 'Enter'], (enterErr) => {
+                        if (enterErr) {
+                            callback(enterErr);
+                            return;
+                        }
+
+                        waitForMarkedShellOutput(startMarker, endMarker, (waitErr, result) => {
+                            if (waitErr) {
+                                callback(waitErr);
+                                return;
+                            }
+
+                            if (result.timedOut) {
+                                selectTerminalMode('raw', (selectErr) => {
+                                    if (selectErr) {
+                                        callback(selectErr);
+                                        return;
+                                    }
+
+                                    callback(null, {
+                                        ...result,
+                                        mode: activeTerminalMode
+                                    });
+                                });
+                                return;
+                            }
+
+                            callback(null, {
+                                ...result,
+                                mode: activeTerminalMode
+                            });
+                        });
+                    });
+                });
+            });
+        }, RAW_TMUX_TARGET);
     });
 }
 
@@ -743,13 +897,20 @@ app.post('/terminal-shell-command', (req, res) => {
         return res.status(400).json({ success: false, error: 'Shell command contains unsupported control characters' });
     }
 
-    dispatchRawShellCommand(command, (err) => {
+    dispatchRawShellCommand(command, (err, result = {}) => {
         if (err) {
             console.error(`Failed to dispatch raw shell command to ${RAW_TMUX_TARGET}:`, err.message);
             return res.status(502).json({ success: false, error: 'Failed to dispatch shell command' });
         }
 
-        res.json({ success: true, mode: activeTerminalMode });
+        res.json({
+            success: true,
+            mode: result.mode || activeTerminalMode,
+            output: result.output || '',
+            exitCode: result.exitCode,
+            timedOut: Boolean(result.timedOut),
+            truncated: Boolean(result.truncated)
+        });
     });
 });
 

@@ -111,8 +111,9 @@ Use the **Shell** mode switch for raw terminal commands. It changes the ttyd
 view to a real interactive tmux shell in `/config`; **Codex** switches back to
 the Codex TUI window. From Codex mode, prefix a line with `,,` to send the rest
 directly to the Shell pane, for example `,, ha store reload` or
-`,,ha store reload`. The display switches to Shell so the command and output are
-visible.
+`,,ha store reload`. Completed commands stay in Codex mode and return their
+output in the Codex view. Long-running commands switch to Shell mode so they can
+be controlled interactively.
 
 ## Modbus Toolbox
 

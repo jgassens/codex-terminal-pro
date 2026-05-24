@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.38
+
+- Run `,,` shell dispatches in the hidden Shell pane without switching away from
+  Codex when the command completes quickly.
+- Capture command output and show it back in the Codex view with copy/dismiss
+  controls. Long-running commands still fall back to Shell mode so the user can
+  interact with them.
+
 ## 0.1.37
 
 - Change `,,` from a mode toggle into a shell dispatch prefix: `,, ha store

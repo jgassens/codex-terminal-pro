@@ -384,7 +384,8 @@
         }
 
         #manual-copy-panel,
-        #manual-paste-panel {
+        #manual-paste-panel,
+        #shell-output-panel {
             position: fixed;
             left: 16px;
             right: 16px;
@@ -403,12 +404,14 @@
         }
 
         #manual-copy-panel.active,
-        #manual-paste-panel.active {
+        #manual-paste-panel.active,
+        #shell-output-panel.active {
             display: flex;
         }
 
         #manual-copy-message,
-        #manual-paste-message {
+        #manual-paste-message,
+        #shell-output-message {
             color: var(--text);
             font-size: 13px;
             line-height: 1.4;
@@ -426,6 +429,22 @@
             padding: 10px;
             font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
             max-height: min(220px, calc(var(--app-height, 100vh) - 180px));
+        }
+
+        #shell-output-text {
+            margin: 0;
+            width: 100%;
+            min-height: 72px;
+            max-height: min(320px, calc(var(--app-height, 100vh) - 180px));
+            overflow: auto;
+            white-space: pre-wrap;
+            word-break: break-word;
+            border: 1px solid var(--border-soft);
+            border-radius: 6px;
+            background: #0d1112;
+            color: var(--text);
+            padding: 10px;
+            font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
         }
 
         .spinner {
@@ -747,6 +766,15 @@
         </div>
     </div>
 
+    <div id="shell-output-panel" aria-live="polite">
+        <div id="shell-output-message">Shell command completed.</div>
+        <pre id="shell-output-text"></pre>
+        <div class="modal-buttons">
+            <button id="shell-output-copy" class="modal-btn modal-btn-primary">Copy Output</button>
+            <button id="shell-output-dismiss" class="modal-btn modal-btn-secondary">Dismiss</button>
+        </div>
+    </div>
+
     <!-- Voice Input Modal -->
     <div id="voice-modal">
         <div id="voice-modal-content">
@@ -945,11 +973,17 @@
         const manualPasteText = document.getElementById('manual-paste-text');
         const manualPasteInsert = document.getElementById('manual-paste-insert');
         const manualPasteDismiss = document.getElementById('manual-paste-dismiss');
+        const shellOutputPanel = document.getElementById('shell-output-panel');
+        const shellOutputMessage = document.getElementById('shell-output-message');
+        const shellOutputText = document.getElementById('shell-output-text');
+        const shellOutputCopy = document.getElementById('shell-output-copy');
+        const shellOutputDismiss = document.getElementById('shell-output-dismiss');
         const mobileInputRow = document.getElementById('mobile-input-row');
         const mobileTerminalInput = document.getElementById('mobile-terminal-input');
         const mobileSendBtn = document.getElementById('mobile-send-btn');
         const SHELL_DISPATCH_PREFIX = ',,';
         let terminalLineBuffer = '';
+        let latestShellOutput = '';
 
         function setStatus(message, type = '', persistent = false) {
             if (statusTimer) {
@@ -1054,8 +1088,20 @@
             return normalized.slice(SHELL_DISPATCH_PREFIX.length).replace(/^\s+/, '');
         }
 
+        function showShellOutput(command, result) {
+            const exitText = Number.isInteger(result.exitCode) ? `exit ${result.exitCode}` : 'exit unknown';
+            const truncatedText = result.truncated ? ' truncated' : '';
+            const output = result.output || `(no output; ${exitText})`;
+
+            latestShellOutput = output;
+            shellOutputMessage.textContent = `$ ${command} (${exitText}${truncatedText})`;
+            shellOutputText.textContent = output;
+            shellOutputPanel.classList.add('active');
+        }
+
         async function dispatchShellCommand(command) {
             try {
+                shellOutputPanel.classList.remove('active');
                 const response = await fetch(ingressPath('terminal-shell-command'), {
                     method: 'POST',
                     headers: {
@@ -1069,14 +1115,25 @@
                     throw new Error(result.error || 'Shell command dispatch failed');
                 }
 
-                setTerminalModeState(result.mode || 'raw');
+                setTerminalModeState(result.mode || terminalMode);
                 scheduleTerminalViewportSync(true);
                 if (isMobileInputMode()) {
                     focusMobileTerminalInput();
                 } else {
                     focusTerminal(true);
                 }
-                setStatus('Sent to shell', 'success', false);
+
+                if (result.timedOut) {
+                    setStatus('Shell command is still running', 'success', true);
+                    return true;
+                }
+
+                showShellOutput(command, result);
+                setStatus(
+                    result.exitCode === 0 ? 'Shell command completed' : `Shell command exited ${result.exitCode}`,
+                    result.exitCode === 0 ? 'success' : 'error',
+                    false
+                );
                 return true;
             } catch (err) {
                 console.log('Shell command dispatch failed:', err);
@@ -2274,6 +2331,24 @@
 
         manualPasteDismiss.addEventListener('click', () => {
             manualPastePanel.classList.remove('active');
+        });
+
+        shellOutputDismiss.addEventListener('click', () => {
+            shellOutputPanel.classList.remove('active');
+            focusMobileTerminalInput() || focusTerminal(false);
+        });
+
+        shellOutputCopy.addEventListener('click', async () => {
+            if (!latestShellOutput) {
+                setStatus('No shell output to copy', 'error', false);
+                return;
+            }
+
+            const copied = await copyToClipboard(latestShellOutput);
+            setStatus(copied ? 'Shell output copied' : 'Copy failed', copied ? 'success' : 'error', false);
+            if (!copied) {
+                showManualCopy(latestShellOutput, 'Copy failed. Tap and hold to Copy, or use the selected text below.');
+            }
         });
 
         manualPasteInsert.addEventListener('click', async () => {

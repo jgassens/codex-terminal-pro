@@ -42,8 +42,9 @@ Use **Shell** mode for raw terminal commands. It switches the active tmux window
 to a real interactive `/config` login shell while keeping ttyd as the display.
 Use **Codex** mode to return to the Codex TUI. From Codex mode, prefix a line
 with `,,` to send the rest directly to the Shell pane, for example
-`,, ha store reload` or `,,ha store reload`. The display switches to Shell so
-the command and output are visible.
+`,, ha store reload` or `,,ha store reload`. Completed commands stay in Codex
+mode and return their output in the Codex view. Long-running commands switch to
+Shell mode so they can be controlled interactively.
 
 The add-on includes read-only Modbus helpers for Home Assistant troubleshooting
 and Schneider Electric discovery work. Run `modbus-toolbox` in the terminal for
