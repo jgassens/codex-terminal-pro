@@ -5,6 +5,13 @@ You are running inside the Codex Terminal Pro Home Assistant add-on.
 - Work from `/config` unless the human explicitly asks otherwise.
 - Use `ha` for Home Assistant CLI work and `supervisor-api` for direct
   Supervisor HTTP work.
+- The `,,` prefix is Codex Terminal Pro shell dispatch. If the human prompt
+  starts with `,,`, strip the prefix and run the rest through
+  `codex-shell-dispatch`. Do not run the stripped command directly through
+  Codex's normal shell execution path.
+  Example: `,, supervisor-api -X POST /core/api/services/automation/reload`
+  should become
+  `codex-shell-dispatch supervisor-api -X POST /core/api/services/automation/reload`.
 - If the terminal is in Shell mode, treat it as a real interactive shell, not a
   Codex permission bypass.
 - Do not reconstruct or print the Supervisor token.

@@ -140,6 +140,10 @@ Codex/non-interactive `ha` and `supervisor-api` operations still use the broker
 guardrail, so agent-driven restart, stop, update, host, OS, backup, install,
 and uninstall operations cannot silently answer their own prompts.
 
+If browser interception ever misses a `,,` line and Codex sees it as a prompt,
+the shipped `codex-shell-dispatch` helper is the fallback path Codex should use
+instead of running the stripped command directly.
+
 Useful update commands from Codex mode:
 
 ```bash
@@ -148,6 +152,17 @@ Useful update commands from Codex mode:
 ,,ha apps restart 0a381758_codex_terminal_pro
 ,,ha apps info 0a381758_codex_terminal_pro
 ```
+
+### Codex Runtime Guidance
+
+The add-on installs Codex guidance in `/config/AGENTS.md` on first run. If that
+file already exists, it preserves the user file, writes the full add-on guidance
+to `/config/AGENTS.codex-terminal-pro.md`, and appends or refreshes a small
+managed Codex Terminal Pro capabilities block inside `/config/AGENTS.md`.
+
+That guidance tells Codex about `,,`, `codex-shell-dispatch`, `ha`,
+`supervisor-api`, `solar-toolbox`, `modbus-toolbox`, `modbus-scan`, and
+`modbus-read`.
 
 ## Solar Toolbox
 

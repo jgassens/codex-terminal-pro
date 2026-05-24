@@ -984,6 +984,9 @@
         const SHELL_DISPATCH_PREFIX = ',,';
         let terminalLineBuffer = '';
         let latestShellOutput = '';
+        let lastPrintableKey = null;
+        let lastPasteText = null;
+        const trackedTerminalEvents = new WeakSet();
 
         function setStatus(message, type = '', persistent = false) {
             if (statusTimer) {
@@ -1073,6 +1076,36 @@
 
         function resetTerminalLineBuffer() {
             terminalLineBuffer = '';
+            lastPrintableKey = null;
+            lastPasteText = null;
+        }
+
+        function appendTerminalLineText(text, source = '') {
+            if (!text) {
+                return;
+            }
+
+            if (
+                source === 'beforeinput' &&
+                lastPrintableKey &&
+                lastPrintableKey.text === text &&
+                Date.now() - lastPrintableKey.at < 250
+            ) {
+                lastPrintableKey = null;
+                return;
+            }
+
+            if (
+                source === 'beforeinput' &&
+                lastPasteText &&
+                lastPasteText.text === text &&
+                Date.now() - lastPasteText.at < 250
+            ) {
+                lastPasteText = null;
+                return;
+            }
+
+            terminalLineBuffer = `${terminalLineBuffer}${text}`.slice(-512);
         }
 
         function shellCommandFromDispatchPrefix(text) {
@@ -1086,6 +1119,23 @@
             }
 
             return normalized.slice(SHELL_DISPATCH_PREFIX.length).replace(/^\s+/, '');
+        }
+
+        function stopTerminalInputEvent(event) {
+            event.preventDefault();
+            event.stopPropagation();
+            if (typeof event.stopImmediatePropagation === 'function') {
+                event.stopImmediatePropagation();
+            }
+        }
+
+        function claimTerminalEvent(event) {
+            if (trackedTerminalEvents.has(event)) {
+                return false;
+            }
+
+            trackedTerminalEvents.add(event);
+            return true;
         }
 
         function showShellOutput(command, result) {
@@ -1157,22 +1207,29 @@
             await dispatchShellCommand(command);
         }
 
-        function trackTerminalPromptDispatch(event) {
+        function dispatchTerminalLineBuffer(event) {
+            const shellCommand = shellCommandFromDispatchPrefix(terminalLineBuffer);
+            resetTerminalLineBuffer();
+            if (shellCommand === null) {
+                return false;
+            }
+
+            stopTerminalInputEvent(event);
+            dispatchShellCommandFromPrompt(shellCommand);
+            return true;
+        }
+
+        function trackTerminalPromptKeydown(event) {
+            if (!claimTerminalEvent(event)) {
+                return;
+            }
+
             if (event.defaultPrevented || event.isComposing) {
                 return;
             }
 
             if (event.key === 'Enter') {
-                const shellCommand = shellCommandFromDispatchPrefix(terminalLineBuffer);
-                resetTerminalLineBuffer();
-                if (shellCommand !== null) {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    if (typeof event.stopImmediatePropagation === 'function') {
-                        event.stopImmediatePropagation();
-                    }
-                    dispatchShellCommandFromPrompt(shellCommand);
-                }
+                dispatchTerminalLineBuffer(event);
                 return;
             }
 
@@ -1196,14 +1253,78 @@
                 return;
             }
 
+            if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'v') {
+                return;
+            }
+
             if (event.ctrlKey || event.metaKey || event.altKey) {
                 resetTerminalLineBuffer();
                 return;
             }
 
             if (event.key.length === 1) {
-                terminalLineBuffer = `${terminalLineBuffer}${event.key}`.slice(-80);
+                appendTerminalLineText(event.key, 'keydown');
+                lastPrintableKey = { text: event.key, at: Date.now() };
             }
+        }
+
+        function trackTerminalPromptBeforeInput(event) {
+            if (!claimTerminalEvent(event)) {
+                return;
+            }
+
+            if (event.defaultPrevented || event.isComposing) {
+                return;
+            }
+
+            if (event.inputType === 'insertLineBreak') {
+                dispatchTerminalLineBuffer(event);
+                return;
+            }
+
+            if (event.inputType === 'deleteContentBackward') {
+                terminalLineBuffer = terminalLineBuffer.slice(0, -1);
+                return;
+            }
+
+            if (event.inputType === 'deleteContentForward') {
+                return;
+            }
+
+            if (event.inputType === 'insertText' || event.inputType === 'insertCompositionText') {
+                appendTerminalLineText(event.data || '', 'beforeinput');
+                return;
+            }
+
+            if (event.inputType === 'insertFromPaste') {
+                appendTerminalLineText(event.data || '', 'beforeinput');
+            }
+        }
+
+        function trackTerminalPromptPaste(event) {
+            if (!claimTerminalEvent(event)) {
+                return;
+            }
+
+            if (event.defaultPrevented || terminalMode !== 'codex') {
+                return;
+            }
+
+            const text = event.clipboardData?.getData('text/plain') || '';
+            if (!text) {
+                return;
+            }
+
+            const command = shellCommandFromDispatchPrefix(text);
+            if (command !== null && /[\r\n]$/.test(text)) {
+                stopTerminalInputEvent(event);
+                resetTerminalLineBuffer();
+                dispatchShellCommandFromPrompt(command);
+                return;
+            }
+
+            appendTerminalLineText(text, 'paste');
+            lastPasteText = { text, at: Date.now() };
         }
 
         function resizeMobileTerminalInput() {
@@ -1494,7 +1615,12 @@
                     };
 
                     iframeDocument.addEventListener('selectionchange', rememberTerminalSelection, true);
-                    iframeDocument.addEventListener('keydown', trackTerminalPromptDispatch, { capture: true });
+                    iframeWindow.addEventListener('keydown', trackTerminalPromptKeydown, { capture: true });
+                    iframeWindow.addEventListener('beforeinput', trackTerminalPromptBeforeInput, { capture: true });
+                    iframeWindow.addEventListener('paste', trackTerminalPromptPaste, { capture: true });
+                    iframeDocument.addEventListener('keydown', trackTerminalPromptKeydown, { capture: true });
+                    iframeDocument.addEventListener('beforeinput', trackTerminalPromptBeforeInput, { capture: true });
+                    iframeDocument.addEventListener('paste', trackTerminalPromptPaste, { capture: true });
                     iframeDocument.addEventListener('mousedown', rememberDragStart, true);
                     iframeDocument.addEventListener('mouseup', copyDraggedTerminalText, true);
                     iframeDocument.addEventListener('touchstart', rememberTouchSelectionStart, { capture: true, passive: false });

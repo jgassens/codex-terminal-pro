@@ -109,8 +109,10 @@ RUN mkdir -p /usr/libexec/codex-terminal \
     && chmod +x /run.sh \
     && chmod +x /opt/scripts/*.sh \
     && chmod +x /opt/scripts/persist-install \
+    && chmod +x /opt/scripts/codex-shell-dispatch \
     && chmod +x /opt/scripts/modbus-* \
     && chmod +x /opt/scripts/solar-* \
+    && ln -sf /opt/scripts/codex-shell-dispatch /usr/local/bin/codex-shell-dispatch \
     && ln -sf /opt/scripts/modbus-read /usr/local/bin/modbus-read \
     && ln -sf /opt/scripts/modbus-scan /usr/local/bin/modbus-scan \
     && ln -sf /opt/scripts/modbus-toolbox /usr/local/bin/modbus-toolbox \

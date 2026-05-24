@@ -68,6 +68,10 @@ treated as human shell commands and do not require a second broker confirmation.
 Codex/non-interactive `ha` and `supervisor-api` operations still use the broker
 guardrail.
 
+If browser interception ever misses a `,,` line and Codex sees it as a prompt,
+the shipped `codex-shell-dispatch` helper is the fallback path Codex should use
+instead of running the stripped command directly.
+
 Common update flow from Codex mode:
 
 ```bash
@@ -76,6 +80,17 @@ Common update flow from Codex mode:
 ,,ha apps restart 0a381758_codex_terminal_pro
 ,,ha apps info 0a381758_codex_terminal_pro
 ```
+
+## Codex Runtime Guidance
+
+On first run, the add-on installs its runtime guidance at `/config/AGENTS.md`.
+If that file already exists, the full guidance is written to
+`/config/AGENTS.codex-terminal-pro.md`, and a small managed Codex Terminal Pro
+capabilities block is appended to `/config/AGENTS.md` or refreshed in place.
+
+This guidance tells Codex about `,,`, `codex-shell-dispatch`, `ha`,
+`supervisor-api`, `solar-toolbox`, `modbus-toolbox`, `modbus-scan`, and
+`modbus-read`.
 
 ## Solar And Modbus Readiness
 

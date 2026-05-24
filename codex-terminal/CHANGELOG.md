@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.39
+
+- Harden `,,` dispatch capture inside the ttyd iframe by tracking paste and
+  `beforeinput` events in addition to keydown.
+- Add `codex-shell-dispatch` as a fallback helper so Codex can route a human
+  `,,` prompt through the same Shell-pane dispatch path if browser interception
+  misses it.
+- Update installed agent guidance and add an idempotent managed block to an
+  existing `/config/AGENTS.md` so Codex learns the add-on tools and `,,`
+  behavior without replacing user guidance.
+
 ## 0.1.38
 
 - Run `,,` shell dispatches in the hidden Shell pane without switching away from

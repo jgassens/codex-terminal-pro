@@ -46,6 +46,11 @@ with `,,` to send the rest directly to the Shell pane, for example
 mode and return their output in the Codex view. Long-running commands switch to
 Shell mode so they can be controlled interactively.
 
+If Codex sees a `,,` prompt because browser interception missed it, the add-on
+also ships `codex-shell-dispatch`. Codex should strip the `,,` prefix and run
+the remaining command through that helper, not through normal Codex shell
+execution.
+
 The add-on includes read-only Modbus helpers for Home Assistant troubleshooting
 and Schneider Electric discovery work. Run `modbus-toolbox` in the terminal for
 examples, or see `/opt/modbus/MODBUS.md`.

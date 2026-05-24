@@ -312,6 +312,50 @@ auto_install_packages() {
     fi
 }
 
+write_codex_terminal_agents_block() {
+    local target_file="$1"
+    local tmp_file
+
+    tmp_file="$(mktemp)"
+    awk '
+        /^<!-- BEGIN CODEX TERMINAL PRO MANAGED GUIDANCE -->$/ { skip = 1; next }
+        /^<!-- END CODEX TERMINAL PRO MANAGED GUIDANCE -->$/ { skip = 0; next }
+        !skip { print }
+    ' "$target_file" > "$tmp_file"
+
+    cat >> "$tmp_file" <<'AGENTS_BLOCK'
+
+<!-- BEGIN CODEX TERMINAL PRO MANAGED GUIDANCE -->
+## Codex Terminal Pro Capabilities
+
+- You are running inside Codex Terminal Pro for Home Assistant.
+- Work from `/config` unless the human explicitly asks otherwise.
+- Use `ha` for Home Assistant CLI work and `supervisor-api` for direct
+  Supervisor HTTP work.
+- `,,` is a Codex Terminal Pro shell-dispatch prefix. If the human prompt starts
+  with `,,`, strip that prefix and run the rest through `codex-shell-dispatch`.
+  Do not run the stripped command directly through Codex's normal shell path.
+- Example: `,,ha store reload` becomes `codex-shell-dispatch ha store reload`.
+- Example: `,, supervisor-api -X POST /core/api/services/automation/reload`
+  becomes
+  `codex-shell-dispatch supervisor-api -X POST /core/api/services/automation/reload`.
+- Human Shell commands typed in Shell mode or dispatched with `,,` may run
+  without a second broker confirmation. Codex/non-interactive management
+  operations remain broker-guarded.
+- Use `solar-toolbox`, `solar-toolbox audit-ha --config /config`, and
+  `solar-toolbox snapshot-plan` for solar, battery, inverter, meter, and Home
+  Assistant Energy work.
+- Use `modbus-toolbox`, `modbus-scan`, and `modbus-read` for read-only Modbus
+  discovery. Do not write inverter, battery, relay, export-control, or grid
+  support settings unless the human explicitly asks and the exact vendor
+  register/API is verified.
+<!-- END CODEX TERMINAL PRO MANAGED GUIDANCE -->
+AGENTS_BLOCK
+
+    mv "$tmp_file" "$target_file"
+    chmod 644 "$target_file"
+}
+
 setup_supervisor_broker() {
     local guard_dir="/data/packages/guard/bin"
     local supervisor_dir="/data/.supervisor"
@@ -362,7 +406,8 @@ BROKER_CONF
         else
             cp /opt/scripts/codex-terminal-agents.md "$fallback_agents"
             chmod 644 "$fallback_agents"
-            bashio::log.info "Existing /config/AGENTS.md preserved; wrote add-on guidance to $fallback_agents"
+            write_codex_terminal_agents_block "$target_agents"
+            bashio::log.info "Existing /config/AGENTS.md preserved and updated with managed Codex Terminal Pro guidance; full guidance also written to $fallback_agents"
         fi
     fi
 
