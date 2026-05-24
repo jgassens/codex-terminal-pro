@@ -24,6 +24,8 @@ Codex. If needed, enter tmux copy mode with `Ctrl-b [` and leave it with `q`.
 Terminal output is also mirrored to `/data/logs/codex-terminal.log`; treat that
 file as sensitive.
 
+## Browser And Mobile Terminal UX
+
 Highlighted terminal text is copied to the browser clipboard when the selection
 finishes. tmux mouse selections are forwarded to the browser clipboard through
 OSC 52 support. On touch devices, use **Select Text** in the terminal toolbar,
@@ -45,6 +47,14 @@ bar below the terminal, so typing and paste use a real browser text field while
 ttyd remains the live display. Its shortcut strip sends common control keys,
 history arrows, tmux page up/down, and return-to-prompt controls.
 
+The mobile command bar is a hybrid terminal input layer: ttyd/xterm remains the
+live output surface, while the phone keyboard, native paste, uploaded image
+paths, and voice text go through a browser textarea when practical. This avoids
+the iOS/Android iframe focus failure that can hide the command line behind the
+keyboard.
+
+## Shell Mode And `,,` Dispatch
+
 The **Codex/Shell** mode switch keeps the same ttyd display but changes the
 active tmux window. **Codex** shows the Codex TUI; **Shell** opens a real
 interactive `/config` login shell for raw terminal commands. From Codex mode,
@@ -52,6 +62,22 @@ prefix a line with `,,` to send the rest directly to the Shell pane, for
 example `,, ha store reload` or `,,ha store reload`. Completed commands stay in
 Codex mode and return their output in the Codex view. Long-running commands
 switch to Shell mode so they can be controlled interactively.
+
+Commands typed directly in Shell mode, or dispatched from Codex with `,,`, are
+treated as human shell commands and do not require a second broker confirmation.
+Codex/non-interactive `ha` and `supervisor-api` operations still use the broker
+guardrail.
+
+Common update flow from Codex mode:
+
+```bash
+,,ha store reload
+,,ha apps update 0a381758_codex_terminal_pro
+,,ha apps restart 0a381758_codex_terminal_pro
+,,ha apps info 0a381758_codex_terminal_pro
+```
+
+## Solar And Modbus Readiness
 
 The add-on also includes a read-only Modbus toolbox for Home Assistant and
 Schneider Electric troubleshooting: `modbus-toolbox`, `modbus-scan`,
@@ -63,6 +89,16 @@ For solar, battery, inverter, meter, and Home Assistant Energy work, run
 Home Assistant entity/config audits, vendor/protocol recognition notes, and a
 pre-change restore checklist. The detailed field guide is installed at
 `/opt/solar/SOLAR.md`.
+
+Useful solar commands:
+
+```bash
+solar-toolbox
+solar-toolbox brief
+solar-toolbox audit-ha --config /config
+solar-toolbox discover 192.168.50.0/24 --ports 502,80,443,1502 --open-only
+solar-toolbox snapshot-plan
+```
 
 Fresh installs add supported Codex TUI defaults in `/data/.codex/config.toml`:
 Catppuccin Mocha theme colors and a compact footer with run state, model,

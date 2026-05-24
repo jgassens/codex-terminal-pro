@@ -6,7 +6,7 @@ Codex Terminal Pro is an unofficial Home Assistant add-on that runs the OpenAI
 Codex CLI in a browser terminal, starting in your Home Assistant `/config`
 directory. It keeps the upstream add-on wrapper, ingress terminal, image paste
 service, persistent package helpers, Home Assistant CLI, GitHub CLI, and
-read-only Modbus and solar commissioning helpers, and persistent `/data` state.
+read-only Modbus and solar commissioning helpers, plus persistent `/data` state.
 
 This is an MVP fork. It is not an official OpenAI add-on.
 
@@ -22,6 +22,12 @@ This is an MVP fork. It is not an official OpenAI add-on.
 - Paste button with clipboard-text/image support and manual mobile fallback.
 - Mobile command bar with native typing, shortcut keys, tmux scrollback, and
   return-to-prompt controls.
+- `,,` shell dispatch from the Codex prompt, so commands such as
+  `,,ha store reload` run in the Shell pane instead of being sent to Codex.
+- Hidden Shell dispatch output capture for completed commands, with copy and
+  dismiss controls in the Codex view.
+- Trusted human Shell lane for commands typed in Shell mode or dispatched with
+  `,,`, while Codex/non-interactive Home Assistant operations remain guarded.
 - Codex CLI installed with `npm install -g @openai/codex`.
 - Starts in `/config` so Codex can inspect Home Assistant YAML and storage.
 - Persistent Codex state under `/data/.codex`.
@@ -93,19 +99,32 @@ output is mirrored to `/data/logs/codex-terminal.log` for debugging warnings
 that scroll away. The transcript is rotated by size; treat it as sensitive
 terminal output.
 
+### Mobile Terminal UX
+
+The terminal stays on ttyd/xterm for live output, colors, cursor behavior, and
+Codex TUI panels. On touch devices, input moves to a native browser command bar
+below the terminal so iOS and Android keyboards do not need to focus the iframe.
+
+The mobile command bar includes a real textarea, **Send** button, Ctrl-C,
+Ctrl-D, Ctrl-Z, Tab, Enter, command-history arrows, clear, tmux page up/down,
+and return-to-bottom controls. Header **Paste**, manual paste fallback, image
+upload, voice input, and selected image paths target the native command field on
+mobile when practical.
+
 Selecting text inside the embedded terminal copies it to the browser clipboard
 when the selection finishes. tmux mouse selections are forwarded to the browser
-clipboard through OSC 52 support.
+clipboard through OSC 52 support. Touch devices can use **Select Text** and drag
+across the terminal; if the browser blocks automatic copy, the selected text is
+left visible for manual copy.
 
 Dropping or pasting an image uploads it to `/data/images` and inserts the saved
 image path directly into the Codex prompt.
 
 The toolbar includes a **Paste** button. It can paste clipboard text into the
 terminal, upload clipboard images when the browser exposes them, or open a
-manual paste box on mobile browsers that block direct clipboard reads. Touch
-devices also show a native command bar below the terminal for typing, paste,
-control keys, command history, tmux scrollback, and returning to the live
-prompt.
+manual paste box on mobile browsers that block direct clipboard reads.
+
+### Shell Mode And `,,` Dispatch
 
 Use the **Shell** mode switch for raw terminal commands. It changes the ttyd
 view to a real interactive tmux shell in `/config`; **Codex** switches back to
@@ -114,6 +133,40 @@ directly to the Shell pane, for example `,, ha store reload` or
 `,,ha store reload`. Completed commands stay in Codex mode and return their
 output in the Codex view. Long-running commands switch to Shell mode so they can
 be controlled interactively.
+
+Commands typed directly in Shell mode, or sent from Codex with `,,`, are treated
+as human shell commands. They do not ask for a second broker confirmation.
+Codex/non-interactive `ha` and `supervisor-api` operations still use the broker
+guardrail, so agent-driven restart, stop, update, host, OS, backup, install,
+and uninstall operations cannot silently answer their own prompts.
+
+Useful update commands from Codex mode:
+
+```bash
+,,ha store reload
+,,ha apps update 0a381758_codex_terminal_pro
+,,ha apps restart 0a381758_codex_terminal_pro
+,,ha apps info 0a381758_codex_terminal_pro
+```
+
+## Solar Toolbox
+
+Run `solar-toolbox` inside the terminal for solar, battery, inverter, gateway,
+meter, Modbus, SunSpec, MQTT, and Home Assistant Energy work. The toolbox is
+read-only first: it helps identify topology, preserve state before changes, and
+find the right gateway/protocol path before touching installer settings.
+
+```bash
+solar-toolbox
+solar-toolbox brief
+solar-toolbox audit-ha --config /config
+solar-toolbox discover 192.168.50.0/24 --ports 502,80,443,1502 --open-only
+solar-toolbox snapshot-plan
+```
+
+The installed field guide lives at `/opt/solar/SOLAR.md` and covers site
+intake, Home Assistant Energy checks, gateway discovery, battery/backup
+readiness, vendor/protocol recognition, and pre-change restore captures.
 
 ## Modbus Toolbox
 
