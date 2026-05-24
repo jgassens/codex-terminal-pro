@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.35
+
+- Treat a command-bar input of `!` in Codex mode as a shell escape: it switches
+  to the interactive Shell tmux window instead of sending `!` to Codex.
+- Update the Codex-mode command placeholder to advertise `! for shell`.
+
 ## 0.1.34
 
 - Add a tmux-backed **Shell** mode that switches the embedded terminal from the

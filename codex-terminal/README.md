@@ -47,10 +47,12 @@ history arrows, tmux page up/down, and return-to-prompt controls.
 
 The **Codex/Shell** mode switch keeps the same ttyd display but changes the
 active tmux window. **Codex** shows the Codex TUI; **Shell** opens a real
-interactive `/config` login shell for raw terminal commands. Shell mode does
-not bypass the Supervisor broker: Home Assistant restart, stop, update,
-install, uninstall, host, OS, and backup operations still require the human to
-type the broker confirmation in the terminal.
+interactive `/config` login shell for raw terminal commands. In the mobile
+command bar, type `!` by itself from Codex mode to jump into Shell mode without
+using the switch. Shell mode does not bypass the Supervisor broker: Home
+Assistant restart, stop, update, install, uninstall, host, OS, and backup
+operations still require the human to type the broker confirmation in the
+terminal.
 
 The add-on also includes a read-only Modbus toolbox for Home Assistant and
 Schneider Electric troubleshooting: `modbus-toolbox`, `modbus-scan`,

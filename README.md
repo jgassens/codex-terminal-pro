@@ -109,10 +109,11 @@ prompt.
 
 Use the **Shell** mode switch for raw terminal commands. It changes the ttyd
 view to a real interactive tmux shell in `/config`; **Codex** switches back to
-the Codex TUI window. The shell still uses the brokered `ha` and
-`supervisor-api` commands, so restart, stop, update, install, uninstall, host,
-OS, and backup operations require the human to type the confirmation in the
-terminal.
+the Codex TUI window. In the mobile command bar, type `!` by itself from Codex
+mode to jump into Shell mode without using the switch. The shell still uses the
+brokered `ha` and `supervisor-api` commands, so restart, stop, update, install,
+uninstall, host, OS, and backup operations require the human to type the
+confirmation in the terminal.
 
 ## Modbus Toolbox
 

@@ -976,7 +976,7 @@
             if (mobileTerminalInput) {
                 mobileTerminalInput.placeholder = terminalMode === 'raw'
                     ? 'Type shell command'
-                    : 'Type Codex prompt';
+                    : 'Type Codex prompt (! for shell)';
             }
 
             if (announce) {
@@ -992,7 +992,7 @@
 
         async function switchTerminalMode(mode) {
             if (mode !== 'codex' && mode !== 'raw') {
-                return;
+                return false;
             }
 
             terminalModeButtons.forEach((button) => {
@@ -1019,10 +1019,12 @@
                 if (isMobileInputMode()) {
                     focusMobileTerminalInput();
                 }
+                return true;
             } catch (err) {
                 console.log('Terminal mode switch failed:', err);
                 setTerminalModeState(terminalMode, false);
                 setStatus('Could not switch terminal mode', 'error', false);
+                return false;
             }
         }
 
@@ -1078,6 +1080,21 @@
             }
 
             const text = mobileTerminalInput.value;
+            if (terminalMode === 'codex' && text.trim() === '!') {
+                mobileSendBtn.disabled = true;
+                try {
+                    const switched = await switchTerminalMode('raw');
+                    if (switched) {
+                        mobileTerminalInput.value = '';
+                        resizeMobileTerminalInput();
+                    }
+                    focusMobileTerminalInput();
+                } finally {
+                    mobileSendBtn.disabled = false;
+                }
+                return;
+            }
+
             mobileSendBtn.disabled = true;
 
             try {
