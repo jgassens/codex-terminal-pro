@@ -39,6 +39,7 @@ const LIVE_CONTROL_KEYS = new Map([
     ['ctrl-d', 'C-d'],
     ['ctrl-z', 'C-z'],
     ['ctrl-l', 'C-l'],
+    ['ctrl-u', 'C-u'],
     ['tab', 'Tab'],
     ['enter', 'Enter'],
     ['up', 'Up'],

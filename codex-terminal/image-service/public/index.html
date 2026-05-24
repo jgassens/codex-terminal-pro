@@ -948,6 +948,8 @@
         const mobileInputRow = document.getElementById('mobile-input-row');
         const mobileTerminalInput = document.getElementById('mobile-terminal-input');
         const mobileSendBtn = document.getElementById('mobile-send-btn');
+        const TERMINAL_MODE_ESCAPE = ',,';
+        let terminalLineBuffer = '';
 
         function setStatus(message, type = '', persistent = false) {
             if (statusTimer) {
@@ -964,6 +966,7 @@
 
         function setTerminalModeState(mode, announce = true) {
             terminalMode = mode === 'raw' ? 'raw' : 'codex';
+            resetTerminalLineBuffer();
             rootElement.dataset.terminalMode = terminalMode;
 
             terminalModeButtons.forEach((button) => {
@@ -975,8 +978,8 @@
 
             if (mobileTerminalInput) {
                 mobileTerminalInput.placeholder = terminalMode === 'raw'
-                    ? 'Type shell command'
-                    : 'Type Codex prompt (! for shell)';
+                    ? `Type shell command (${TERMINAL_MODE_ESCAPE} for Codex)`
+                    : `Type Codex prompt (${TERMINAL_MODE_ESCAPE} for shell)`;
             }
 
             if (announce) {
@@ -1018,6 +1021,8 @@
                 scheduleTerminalViewportSync(true);
                 if (isMobileInputMode()) {
                     focusMobileTerminalInput();
+                } else {
+                    focusTerminal(true);
                 }
                 return true;
             } catch (err) {
@@ -1030,6 +1035,74 @@
 
         function isMobileInputMode() {
             return Boolean(mobileTerminalInput && rootElement.classList.contains('touch-ui'));
+        }
+
+        function resetTerminalLineBuffer() {
+            terminalLineBuffer = '';
+        }
+
+        function terminalModeForEscape(text) {
+            if (text.trim() !== TERMINAL_MODE_ESCAPE) {
+                return '';
+            }
+            return terminalMode === 'codex' ? 'raw' : 'codex';
+        }
+
+        async function switchModeFromPromptEscape(mode) {
+            const cleared = await sendTerminalControl('ctrl-u');
+            if (!cleared) {
+                console.log('Could not clear terminal prompt before mode switch');
+            }
+            await switchTerminalMode(mode);
+        }
+
+        function trackTerminalPromptEscape(event) {
+            if (event.defaultPrevented || event.isComposing) {
+                return;
+            }
+
+            if (event.key === 'Enter') {
+                const requestedMode = terminalModeForEscape(terminalLineBuffer);
+                resetTerminalLineBuffer();
+                if (requestedMode) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    if (typeof event.stopImmediatePropagation === 'function') {
+                        event.stopImmediatePropagation();
+                    }
+                    switchModeFromPromptEscape(requestedMode);
+                }
+                return;
+            }
+
+            if (event.key === 'Backspace') {
+                terminalLineBuffer = terminalLineBuffer.slice(0, -1);
+                return;
+            }
+
+            if (
+                event.key === 'Escape' ||
+                event.key.startsWith('Arrow') ||
+                event.key === 'PageUp' ||
+                event.key === 'PageDown'
+            ) {
+                resetTerminalLineBuffer();
+                return;
+            }
+
+            if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'u') {
+                resetTerminalLineBuffer();
+                return;
+            }
+
+            if (event.ctrlKey || event.metaKey || event.altKey) {
+                resetTerminalLineBuffer();
+                return;
+            }
+
+            if (event.key.length === 1) {
+                terminalLineBuffer = `${terminalLineBuffer}${event.key}`.slice(-80);
+            }
         }
 
         function resizeMobileTerminalInput() {
@@ -1080,10 +1153,11 @@
             }
 
             const text = mobileTerminalInput.value;
-            if (terminalMode === 'codex' && text.trim() === '!') {
+            const requestedMode = terminalModeForEscape(text);
+            if (requestedMode) {
                 mobileSendBtn.disabled = true;
                 try {
-                    const switched = await switchTerminalMode('raw');
+                    const switched = await switchTerminalMode(requestedMode);
                     if (switched) {
                         mobileTerminalInput.value = '';
                         resizeMobileTerminalInput();
@@ -1313,6 +1387,7 @@
                     };
 
                     iframeDocument.addEventListener('selectionchange', rememberTerminalSelection, true);
+                    iframeDocument.addEventListener('keydown', trackTerminalPromptEscape, { capture: true });
                     iframeDocument.addEventListener('mousedown', rememberDragStart, true);
                     iframeDocument.addEventListener('mouseup', copyDraggedTerminalText, true);
                     iframeDocument.addEventListener('touchstart', rememberTouchSelectionStart, { capture: true, passive: false });

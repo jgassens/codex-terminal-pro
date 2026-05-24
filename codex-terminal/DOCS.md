@@ -40,8 +40,8 @@ clear, tmux page up/down, and return-to-prompt controls.
 
 Use **Shell** mode for raw terminal commands. It switches the active tmux window
 to a real interactive `/config` login shell while keeping ttyd as the display.
-Use **Codex** mode to return to the Codex TUI. In the mobile command bar, type
-`!` by itself from Codex mode to jump into Shell mode without using the switch.
+Use **Codex** mode to return to the Codex TUI. Type `,,` by itself on the
+current prompt line to toggle between Codex and Shell without using the switch.
 Shell mode deliberately keeps the brokered `ha` and `supervisor-api` paths, so
 restart, stop, update, install, uninstall, host, OS, and backup operations still
 stop for human typed confirmation inside the terminal.

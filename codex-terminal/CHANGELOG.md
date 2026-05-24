@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.36
+
+- Replace the `!` shell escape with an exact `,,` prompt-line escape because
+  Codex already owns `!command` for local shell commands.
+- Support `,,` from both the mobile command bar and direct terminal typing:
+  Codex mode switches to Shell mode, and Shell mode switches back to Codex.
+
 ## 0.1.35
 
 - Treat a command-bar input of `!` in Codex mode as a shell escape: it switches
