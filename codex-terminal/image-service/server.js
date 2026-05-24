@@ -26,10 +26,30 @@ const app = express();
 const PORT = process.env.IMAGE_SERVICE_PORT || 7680;
 const TTYD_PORT = process.env.TTYD_PORT || 7681;
 const UPLOAD_DIR = process.env.UPLOAD_DIR || '/data/images';
-const TMUX_TARGET = process.env.TMUX_TARGET || 'codex-terminal:0.0';
+const CODEX_TMUX_TARGET = process.env.CODEX_TMUX_TARGET || process.env.TMUX_TARGET || 'codex-terminal:0.0';
+const TMUX_SESSION = process.env.TMUX_SESSION || CODEX_TMUX_TARGET.split(':')[0] || 'codex-terminal';
+const RAW_TERMINAL_WINDOW = process.env.RAW_TERMINAL_WINDOW || 'raw-shell';
+const RAW_TMUX_TARGET = `${TMUX_SESSION}:${RAW_TERMINAL_WINDOW}.0`;
 const UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
 const IMAGE_RETENTION_DAYS = parseNonNegativeInt(process.env.IMAGE_RETENTION_DAYS, 30);
 const IMAGE_RETENTION_MAX_BYTES = parseNonNegativeInt(process.env.IMAGE_RETENTION_MAX_BYTES, 256 * 1024 * 1024);
+const SCROLL_CONTROL_ACTIONS = new Set(['scroll-up', 'scroll-down', 'scroll-bottom']);
+const LIVE_CONTROL_KEYS = new Map([
+    ['ctrl-c', 'C-c'],
+    ['ctrl-d', 'C-d'],
+    ['ctrl-z', 'C-z'],
+    ['ctrl-l', 'C-l'],
+    ['tab', 'Tab'],
+    ['enter', 'Enter'],
+    ['up', 'Up'],
+    ['down', 'Down']
+]);
+const SUPPORTED_TERMINAL_CONTROL_ACTIONS = new Set([
+    ...SCROLL_CONTROL_ACTIONS,
+    ...LIVE_CONTROL_KEYS.keys()
+]);
+const TERMINAL_MODES = new Set(['codex', 'raw']);
+let activeTerminalMode = 'codex';
 const ALLOWED_IMAGE_MIMES = new Set([
     'image/jpeg',
     'image/png',
@@ -167,6 +187,163 @@ function isValidImageContent(filePath, mimetype, filename) {
     }
 
     return false;
+}
+
+function runTmux(args, callback, timeout = 3000) {
+    execFile('tmux', args, { timeout }, callback);
+}
+
+function targetForMode(mode) {
+    return mode === 'raw' ? RAW_TMUX_TARGET : CODEX_TMUX_TARGET;
+}
+
+function windowTargetForMode(mode) {
+    return targetForMode(mode).replace(/\.\d+$/, '');
+}
+
+function activeTmuxTarget() {
+    return targetForMode(activeTerminalMode);
+}
+
+function getPaneInMode(callback, target = activeTmuxTarget()) {
+    runTmux(['display-message', '-p', '-t', target, '#{pane_in_mode}'], (err, stdout) => {
+        if (err) {
+            callback(err);
+            return;
+        }
+
+        callback(null, String(stdout).trim() === '1');
+    });
+}
+
+function cancelCopyModeIfNeeded(callback, target = activeTmuxTarget()) {
+    getPaneInMode((modeErr, inMode) => {
+        if (modeErr) {
+            callback(modeErr);
+            return;
+        }
+
+        if (!inMode) {
+            callback(null);
+            return;
+        }
+
+        runTmux(['send-keys', '-t', target, '-X', 'cancel'], callback);
+    }, target);
+}
+
+function ensureRawTerminal(callback) {
+    runTmux(['list-windows', '-t', TMUX_SESSION, '-F', '#{window_name}'], (listErr, stdout) => {
+        if (listErr) {
+            callback(listErr);
+            return;
+        }
+
+        const windows = String(stdout || '').split(/\r?\n/);
+        if (windows.includes(RAW_TERMINAL_WINDOW)) {
+            callback(null);
+            return;
+        }
+
+        runTmux([
+            'new-window',
+            '-d',
+            '-t',
+            TMUX_SESSION,
+            '-n',
+            RAW_TERMINAL_WINDOW,
+            '-c',
+            '/config',
+            '/bin/bash -l'
+        ], callback);
+    });
+}
+
+function selectTerminalMode(mode, callback) {
+    if (!TERMINAL_MODES.has(mode)) {
+        callback(new Error('Unsupported terminal mode'));
+        return;
+    }
+
+    const selectTarget = targetForMode(mode);
+    const selectWindowTarget = windowTargetForMode(mode);
+
+    const selectTargetWindow = () => {
+        runTmux(['select-window', '-t', selectWindowTarget], (windowErr) => {
+            if (windowErr) {
+                callback(windowErr);
+                return;
+            }
+
+            runTmux(['select-pane', '-t', selectTarget], (paneErr) => {
+                if (paneErr) {
+                    callback(paneErr);
+                    return;
+                }
+
+                activeTerminalMode = mode;
+                callback(null);
+            });
+        });
+    };
+
+    if (mode === 'raw') {
+        ensureRawTerminal((ensureErr) => {
+            if (ensureErr) {
+                callback(ensureErr);
+                return;
+            }
+
+            selectTargetWindow();
+        });
+        return;
+    }
+
+    selectTargetWindow();
+}
+
+function runTerminalControl(action, callback) {
+    if (!SUPPORTED_TERMINAL_CONTROL_ACTIONS.has(action)) {
+        callback(new Error('Unsupported terminal control action'));
+        return;
+    }
+
+    const target = activeTmuxTarget();
+
+    if (LIVE_CONTROL_KEYS.has(action)) {
+        cancelCopyModeIfNeeded((modeErr) => {
+            if (modeErr) {
+                callback(modeErr);
+                return;
+            }
+
+            runTmux(['send-keys', '-t', target, LIVE_CONTROL_KEYS.get(action)], callback);
+        }, target);
+        return;
+    }
+
+    getPaneInMode((modeErr, inMode) => {
+        if (modeErr) {
+            callback(modeErr);
+            return;
+        }
+
+        if (action === 'scroll-up') {
+            const args = inMode
+                ? ['send-keys', '-t', target, '-X', 'page-up']
+                : ['copy-mode', '-u', '-t', target];
+            runTmux(args, callback);
+            return;
+        }
+
+        if (!inMode) {
+            callback(null);
+            return;
+        }
+
+        const copyModeCommand = action === 'scroll-down' ? 'page-down' : 'cancel';
+        runTmux(['send-keys', '-t', target, '-X', copyModeCommand], callback);
+    }, target);
 }
 
 // Home Assistant ingress can serve this page from a URL ending in a double
@@ -307,7 +484,33 @@ app.get('/health', (req, res) => {
 app.get('/config', (req, res) => {
     res.json({
         ttydPort: TTYD_PORT,
-        uploadDir: UPLOAD_DIR
+        uploadDir: UPLOAD_DIR,
+        terminalMode: activeTerminalMode
+    });
+});
+
+app.get('/terminal-mode', (req, res) => {
+    res.json({ success: true, mode: activeTerminalMode });
+});
+
+app.post('/terminal-mode', (req, res) => {
+    const mode = typeof req.body?.mode === 'string' ? req.body.mode : '';
+
+    if (!isSameOriginBrowserRequest(req)) {
+        return res.status(403).json({ success: false, error: 'Cross-origin terminal mode changes are not allowed' });
+    }
+
+    if (!TERMINAL_MODES.has(mode)) {
+        return res.status(400).json({ success: false, error: 'Unsupported terminal mode' });
+    }
+
+    selectTerminalMode(mode, (err) => {
+        if (err) {
+            console.error(`Terminal mode ${mode} failed:`, err.message);
+            return res.status(502).json({ success: false, error: 'Failed to switch terminal mode' });
+        }
+
+        res.json({ success: true, mode: activeTerminalMode });
     });
 });
 
@@ -360,17 +563,29 @@ app.post('/terminal-input', (req, res) => {
         return res.status(400).json({ success: false, error: 'Terminal input contains unsupported control characters' });
     }
 
-    execFile('tmux', ['send-keys', '-t', TMUX_TARGET, '-l', '--', text], { timeout: 3000 }, (err) => {
-        if (err) {
-            console.error(`Failed to insert terminal input into ${TMUX_TARGET}:`, err.message);
+    const target = activeTmuxTarget();
+
+    cancelCopyModeIfNeeded((modeErr) => {
+        if (modeErr) {
+            console.error(`Failed to return ${target} to live prompt:`, modeErr.message);
             return res.status(502).json({
                 success: false,
                 error: 'Failed to insert text into terminal session'
             });
         }
 
-        res.json({ success: true });
-    });
+        runTmux(['send-keys', '-t', target, '-l', '--', text], (err) => {
+            if (err) {
+                console.error(`Failed to insert terminal input into ${target}:`, err.message);
+                return res.status(502).json({
+                    success: false,
+                    error: 'Failed to insert text into terminal session'
+                });
+            }
+
+            res.json({ success: true });
+        });
+    }, target);
 });
 
 // Paste user-supplied clipboard text into the terminal. Unlike /terminal-input,
@@ -395,65 +610,69 @@ app.post('/terminal-paste', (req, res) => {
         return res.status(400).json({ success: false, error: 'Terminal paste contains unsupported control characters' });
     }
 
-    const bufferName = `codex-terminal-paste-${Date.now()}`;
-    const loader = spawn('tmux', ['load-buffer', '-b', bufferName, '-'], {
-        stdio: ['pipe', 'ignore', 'pipe']
-    });
-    let stderr = '';
-    let responded = false;
+    const target = activeTmuxTarget();
 
-    loader.stderr.on('data', (chunk) => {
-        stderr += chunk.toString();
-    });
-
-    loader.on('error', (err) => {
-        console.error(`Failed to load tmux paste buffer for ${TMUX_TARGET}:`, err.message);
-        responded = true;
-        res.status(502).json({ success: false, error: 'Failed to prepare terminal paste' });
-    });
-
-    loader.on('close', (code) => {
-        if (responded) {
-            return;
-        }
-
-        if (code !== 0) {
-            console.error(`tmux load-buffer failed for ${TMUX_TARGET}:`, stderr.trim());
+    cancelCopyModeIfNeeded((modeErr) => {
+        if (modeErr) {
+            console.error(`Failed to return ${target} to live prompt before paste:`, modeErr.message);
             return res.status(502).json({ success: false, error: 'Failed to prepare terminal paste' });
         }
 
-        execFile('tmux', ['paste-buffer', '-p', '-d', '-b', bufferName, '-t', TMUX_TARGET], { timeout: 3000 }, (err) => {
-            if (err) {
-                console.error(`Failed to paste into ${TMUX_TARGET}:`, err.message);
-                return res.status(502).json({ success: false, error: 'Failed to paste into terminal session' });
+        const bufferName = `codex-terminal-paste-${Date.now()}`;
+        const loader = spawn('tmux', ['load-buffer', '-b', bufferName, '-'], {
+            stdio: ['pipe', 'ignore', 'pipe']
+        });
+        let stderr = '';
+        let responded = false;
+
+        loader.stderr.on('data', (chunk) => {
+            stderr += chunk.toString();
+        });
+
+        loader.on('error', (err) => {
+            console.error(`Failed to load tmux paste buffer for ${target}:`, err.message);
+            responded = true;
+            res.status(502).json({ success: false, error: 'Failed to prepare terminal paste' });
+        });
+
+        loader.on('close', (code) => {
+            if (responded) {
+                return;
             }
 
-            res.json({ success: true });
-        });
-    });
+            if (code !== 0) {
+                console.error(`tmux load-buffer failed for ${target}:`, stderr.trim());
+                return res.status(502).json({ success: false, error: 'Failed to prepare terminal paste' });
+            }
 
-    loader.stdin.end(text);
+            runTmux(['paste-buffer', '-p', '-d', '-b', bufferName, '-t', target], (err) => {
+                if (err) {
+                    console.error(`Failed to paste into ${target}:`, err.message);
+                    return res.status(502).json({ success: false, error: 'Failed to paste into terminal session' });
+                }
+
+                res.json({ success: true });
+            });
+        });
+
+        loader.stdin.end(text);
+    }, target);
 });
 
 app.post('/terminal-control', (req, res) => {
     const action = typeof req.body?.action === 'string' ? req.body.action : '';
-    const commands = {
-        'scroll-up': ['copy-mode', '-t', TMUX_TARGET, '-u'],
-        'scroll-down': ['send-keys', '-t', TMUX_TARGET, '-X', 'page-down'],
-        'scroll-bottom': ['send-keys', '-t', TMUX_TARGET, '-X', 'cancel']
-    };
 
     if (!isSameOriginBrowserRequest(req)) {
         return res.status(403).json({ success: false, error: 'Cross-origin terminal control is not allowed' });
     }
 
-    if (!commands[action]) {
+    if (!SUPPORTED_TERMINAL_CONTROL_ACTIONS.has(action)) {
         return res.status(400).json({ success: false, error: 'Unsupported terminal control action' });
     }
 
-    execFile('tmux', commands[action], { timeout: 3000 }, (err) => {
+    runTerminalControl(action, (err) => {
         if (err) {
-            console.error(`Terminal control ${action} failed for ${TMUX_TARGET}:`, err.message);
+            console.error(`Terminal control ${action} failed for ${activeTmuxTarget()}:`, err.message);
             return res.status(502).json({ success: false, error: 'Failed to control terminal session' });
         }
 
@@ -533,6 +752,7 @@ server.listen(PORT, '0.0.0.0', () => {
     console.log(`Upload directory: ${UPLOAD_DIR}`);
     console.log(`Upload retention: ${IMAGE_RETENTION_DAYS} day(s), ${IMAGE_RETENTION_MAX_BYTES} bytes`);
     console.log(`ttyd terminal on port: ${TTYD_PORT}`);
-    console.log(`tmux input target: ${TMUX_TARGET}`);
+    console.log(`tmux Codex target: ${CODEX_TMUX_TARGET}`);
+    console.log(`tmux raw shell target: ${RAW_TMUX_TARGET}`);
     console.log(`Terminal proxy available at /terminal/`);
 });

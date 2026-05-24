@@ -28,6 +28,14 @@
             --button-hover: #315057;
             --button-active: #20343a;
             --shadow: rgba(0, 0, 0, 0.35);
+            --app-height: 100vh;
+            --keyboard-inset: 0px;
+        }
+
+        html {
+            height: 100%;
+            overflow: hidden;
+            background: var(--bg);
         }
 
         body {
@@ -35,13 +43,19 @@
             background: var(--bg);
             color: var(--text);
             overflow: hidden;
-            height: 100vh;
+            height: var(--app-height);
+            min-height: var(--app-height);
+            width: 100%;
+            position: fixed;
+            inset: 0;
+            overscroll-behavior: none;
         }
 
         #container {
             display: flex;
             flex-direction: column;
-            height: 100vh;
+            height: var(--app-height);
+            min-height: 0;
         }
 
         #header {
@@ -99,6 +113,38 @@
             min-width: 0;
         }
 
+        #terminal-mode-switch {
+            display: flex;
+            align-items: center;
+            flex: 0 0 auto;
+            padding: 2px;
+            border: 1px solid rgba(121, 199, 197, 0.24);
+            border-radius: 7px;
+            background: #11191b;
+        }
+
+        .terminal-mode-btn {
+            border: 0;
+            border-radius: 5px;
+            background: transparent;
+            color: var(--muted);
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 650;
+            min-height: 28px;
+            padding: 5px 9px;
+        }
+
+        .terminal-mode-btn.active {
+            background: rgba(240, 180, 91, 0.2);
+            color: var(--accent-strong);
+        }
+
+        .terminal-mode-btn:disabled {
+            cursor: wait;
+            opacity: 0.65;
+        }
+
         .header-btn {
             background: var(--button);
             color: var(--text);
@@ -151,9 +197,9 @@
         #mobile-scroll-controls {
             position: absolute;
             right: 10px;
-            bottom: 10px;
+            bottom: calc(var(--keyboard-inset, 0px) + 10px + env(safe-area-inset-bottom, 0px));
             z-index: 1200;
-            display: none;
+            display: none !important;
             flex-direction: column;
             gap: 6px;
         }
@@ -212,6 +258,7 @@
             flex: 1;
             position: relative;
             overflow: hidden;
+            min-height: 0;
             background: #050708;
             border-top: 1px solid rgba(255, 255, 255, 0.03);
         }
@@ -220,7 +267,86 @@
             width: 100%;
             height: 100%;
             border: none;
+            display: block;
             background: #050708;
+        }
+
+        #mobile-input-bar {
+            display: none;
+            flex-direction: column;
+            gap: 7px;
+            flex-shrink: 0;
+            padding: 8px 9px calc(8px + env(safe-area-inset-bottom, 0px));
+            border-top: 1px solid rgba(121, 199, 197, 0.2);
+            background: rgba(23, 27, 29, 0.98);
+            box-shadow: 0 -10px 28px rgba(0, 0, 0, 0.28);
+        }
+
+        #mobile-key-strip {
+            display: flex;
+            gap: 6px;
+            overflow-x: auto;
+            overscroll-behavior-x: contain;
+            -webkit-overflow-scrolling: touch;
+            scrollbar-width: none;
+        }
+
+        #mobile-key-strip::-webkit-scrollbar {
+            display: none;
+        }
+
+        .mobile-key-btn,
+        #mobile-send-btn {
+            flex: 0 0 auto;
+            min-width: 42px;
+            height: 34px;
+            border: 1px solid rgba(121, 199, 197, 0.28);
+            border-radius: 6px;
+            background: var(--button);
+            color: var(--text);
+            font: 650 12px/1 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            cursor: pointer;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+        }
+
+        .mobile-key-btn:active,
+        #mobile-send-btn:active {
+            background: rgba(240, 180, 91, 0.22);
+            border-color: rgba(240, 180, 91, 0.65);
+            color: var(--accent-strong);
+        }
+
+        #mobile-input-row {
+            display: flex;
+            align-items: flex-end;
+            gap: 7px;
+        }
+
+        #mobile-terminal-input {
+            flex: 1 1 auto;
+            width: 100%;
+            min-height: 40px;
+            max-height: 120px;
+            resize: none;
+            overflow-y: auto;
+            border: 1px solid rgba(121, 199, 197, 0.28);
+            border-radius: 6px;
+            background: #0d1112;
+            color: var(--text);
+            padding: 10px;
+            font: 14px/1.35 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            outline: none;
+        }
+
+        #mobile-terminal-input:focus {
+            border-color: rgba(240, 180, 91, 0.65);
+            box-shadow: 0 0 0 2px rgba(240, 180, 91, 0.12);
+        }
+
+        #mobile-send-btn {
+            min-width: 58px;
+            height: 40px;
+            font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
         }
 
         #drop-zone {
@@ -262,7 +388,7 @@
             position: fixed;
             left: 16px;
             right: 16px;
-            bottom: 16px;
+            bottom: calc(var(--keyboard-inset, 0px) + 16px + env(safe-area-inset-bottom, 0px));
             z-index: 2500;
             display: none;
             gap: 10px;
@@ -272,6 +398,8 @@
             border-radius: 8px;
             background: rgba(23, 27, 29, 0.98);
             box-shadow: 0 18px 45px var(--shadow);
+            max-height: calc(var(--app-height, 100vh) - 32px);
+            overflow: auto;
         }
 
         #manual-copy-panel.active,
@@ -297,6 +425,7 @@
             color: var(--text);
             padding: 10px;
             font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            max-height: min(220px, calc(var(--app-height, 100vh) - 180px));
         }
 
         .spinner {
@@ -432,14 +561,24 @@
             #header {
                 align-items: flex-start;
                 flex-direction: column;
-                gap: 8px;
+                gap: 6px;
+                padding: 7px 10px;
             }
 
             #header-actions {
                 width: 100%;
                 justify-content: flex-start;
                 flex-wrap: wrap;
-                gap: 8px;
+                gap: 6px;
+            }
+
+            #terminal-mode-switch {
+                flex: 1 0 100%;
+                width: 100%;
+            }
+
+            .terminal-mode-btn {
+                flex: 1 1 0;
             }
 
             #status {
@@ -452,7 +591,7 @@
             .header-btn {
                 flex: 1 1 calc(50% - 8px);
                 justify-content: center;
-                padding: 7px 9px;
+                padding: 6px 8px;
             }
 
             #touch-select-btn,
@@ -460,7 +599,7 @@
                 display: flex;
             }
 
-            #mobile-scroll-controls {
+            #mobile-input-bar {
                 display: flex;
             }
 
@@ -469,13 +608,58 @@
             }
         }
 
+        html.touch-ui #touch-select-btn,
+        html.touch-ui #paste-btn {
+            display: flex;
+        }
+
+        html.touch-ui #header {
+            align-items: flex-start;
+            flex-direction: column;
+            gap: 6px;
+            padding: 7px 10px;
+        }
+
+        html.touch-ui #header-actions {
+            width: 100%;
+            justify-content: flex-start;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+
+        html.touch-ui #terminal-mode-switch {
+            flex: 1 0 100%;
+            width: 100%;
+        }
+
+        html.touch-ui .terminal-mode-btn {
+            flex: 1 1 0;
+        }
+
+        html.touch-ui #status {
+            flex: 1 0 100%;
+            order: 2;
+            max-width: none;
+            padding-left: 0;
+        }
+
+        html.touch-ui .header-btn {
+            flex: 1 1 calc(50% - 8px);
+            justify-content: center;
+            padding: 6px 8px;
+        }
+
+        html.touch-ui #mobile-input-bar {
+            display: flex;
+        }
+
         @media (pointer: coarse) {
             #touch-select-btn,
             #paste-btn {
                 display: flex;
             }
 
-            #mobile-scroll-controls {
+            #mobile-input-bar {
                 display: flex;
             }
         }
@@ -490,6 +674,10 @@
                 <span class="status-pill">/config</span>
             </div>
             <div id="header-actions">
+                <div id="terminal-mode-switch" role="group" aria-label="Terminal mode">
+                    <button type="button" class="terminal-mode-btn active" data-terminal-mode="codex" aria-pressed="true">Codex</button>
+                    <button type="button" class="terminal-mode-btn" data-terminal-mode="raw" aria-pressed="false">Shell</button>
+                </div>
                 <span id="status"></span>
                 <button id="voice-btn" class="header-btn">
                     <span>🎤</span>
@@ -519,6 +707,25 @@
                 <button class="scroll-btn" data-terminal-action="scroll-down" title="Scroll terminal forward" aria-label="Scroll terminal forward">↓</button>
                 <button class="scroll-btn" data-terminal-action="scroll-bottom" title="Return to live prompt" aria-label="Return to live prompt">⌄</button>
             </div>
+        </div>
+        <div id="mobile-input-bar" aria-label="Mobile terminal input">
+            <div id="mobile-key-strip" aria-label="Terminal shortcut keys">
+                <button type="button" class="mobile-key-btn" data-terminal-action="ctrl-c" title="Send Ctrl-C">^C</button>
+                <button type="button" class="mobile-key-btn" data-terminal-action="ctrl-d" title="Send Ctrl-D">^D</button>
+                <button type="button" class="mobile-key-btn" data-terminal-action="ctrl-z" title="Send Ctrl-Z">^Z</button>
+                <button type="button" class="mobile-key-btn" data-terminal-action="tab" title="Send Tab">Tab</button>
+                <button type="button" class="mobile-key-btn" data-terminal-action="enter" title="Send Enter">Enter</button>
+                <button type="button" class="mobile-key-btn" data-terminal-action="up" title="Previous command">↑</button>
+                <button type="button" class="mobile-key-btn" data-terminal-action="down" title="Next command">↓</button>
+                <button type="button" class="mobile-key-btn" data-terminal-action="ctrl-l" title="Clear terminal">Clr</button>
+                <button type="button" class="mobile-key-btn" data-terminal-action="scroll-up" title="Page up through terminal output">PgUp</button>
+                <button type="button" class="mobile-key-btn" data-terminal-action="scroll-down" title="Page down through terminal output">PgDn</button>
+                <button type="button" class="mobile-key-btn" data-terminal-action="scroll-bottom" title="Return to the live prompt">Bottom</button>
+            </div>
+            <form id="mobile-input-row">
+                <textarea id="mobile-terminal-input" rows="1" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="send" placeholder="Type command"></textarea>
+                <button type="submit" id="mobile-send-btn">Send</button>
+            </form>
         </div>
     </div>
     <input type="file" id="file-input" accept="image/*,.heic,.heif" multiple>
@@ -557,12 +764,131 @@
     <script>
         let ttydPort = 7681;
         let uploadDir = '/data/images';
+        let terminalMode = 'codex';
         let lastCopiedTerminalSelection = '';
         let lastCopiedTerminalSelectionAt = 0;
         let lastImagePasteSignature = '';
         let lastImagePasteAt = 0;
         let touchSelectionMode = false;
         const handledImagePasteEvents = new WeakSet();
+        const rootElement = document.documentElement;
+        let viewportSyncTimer = null;
+        let keyboardWasOpen = false;
+        let statusTimer = null;
+
+        function isTouchUi() {
+            return Boolean(
+                navigator.maxTouchPoints > 0 ||
+                window.matchMedia('(pointer: coarse)').matches ||
+                window.matchMedia('(max-width: 760px)').matches
+            );
+        }
+
+        function updateTouchUiClass() {
+            rootElement.classList.toggle('touch-ui', isTouchUi());
+        }
+
+        function updateViewportMetrics() {
+            const visualViewport = window.visualViewport;
+            const viewportHeight = Math.max(
+                320,
+                Math.round(visualViewport?.height || window.innerHeight || document.documentElement.clientHeight || 0)
+            );
+            const viewportOffsetTop = Math.round(visualViewport?.offsetTop || 0);
+            const layoutHeight = window.innerHeight || document.documentElement.clientHeight || viewportHeight;
+            const keyboardInset = Math.max(0, Math.round(layoutHeight - viewportHeight - viewportOffsetTop));
+            const keyboardOpen = keyboardInset > 80;
+
+            rootElement.style.setProperty('--app-height', `${viewportHeight}px`);
+            rootElement.style.setProperty('--keyboard-inset', `${keyboardInset}px`);
+            rootElement.classList.toggle('keyboard-open', keyboardOpen);
+
+            scheduleTerminalViewportSync(keyboardOpen);
+            if (keyboardOpen && !keyboardWasOpen) {
+                sendTerminalControl('scroll-bottom').catch((err) => {
+                    console.log('Could not return terminal to prompt after keyboard opened:', err);
+                });
+            }
+            keyboardWasOpen = keyboardOpen;
+        }
+
+        function scheduleTerminalViewportSync(scrollToBottom = false) {
+            if (viewportSyncTimer) {
+                clearTimeout(viewportSyncTimer);
+            }
+
+            viewportSyncTimer = setTimeout(() => {
+                syncTerminalViewport(scrollToBottom);
+            }, 80);
+        }
+
+        function syncTerminalViewport(scrollToBottom = false) {
+            const iframe = document.getElementById('terminal-frame');
+            let iframeWindow;
+
+            try {
+                iframeWindow = iframe?.contentWindow;
+            } catch {
+                return;
+            }
+
+            if (!iframeWindow) {
+                return;
+            }
+
+            try {
+                iframeWindow.dispatchEvent(new Event('resize'));
+                if (scrollToBottom && iframeWindow.term && typeof iframeWindow.term.scrollToBottom === 'function') {
+                    iframeWindow.term.scrollToBottom();
+                }
+            } catch (err) {
+                console.log('Could not sync terminal viewport:', err);
+            }
+        }
+
+        function focusTerminal(scrollToBottom = false) {
+            const iframe = document.getElementById('terminal-frame');
+            let iframeWindow;
+
+            try {
+                iframeWindow = iframe?.contentWindow;
+            } catch {
+                return;
+            }
+
+            if (!iframeWindow) {
+                return;
+            }
+
+            try {
+                iframeWindow.focus();
+                if (iframeWindow.term && typeof iframeWindow.term.focus === 'function') {
+                    iframeWindow.term.focus();
+                }
+                if (scrollToBottom && iframeWindow.term && typeof iframeWindow.term.scrollToBottom === 'function') {
+                    iframeWindow.term.scrollToBottom();
+                }
+            } catch (err) {
+                console.log('Could not focus terminal:', err);
+            }
+        }
+
+        updateTouchUiClass();
+        updateViewportMetrics();
+        window.addEventListener('resize', () => {
+            updateTouchUiClass();
+            updateViewportMetrics();
+        });
+        window.addEventListener('orientationchange', () => {
+            setTimeout(() => {
+                updateTouchUiClass();
+                updateViewportMetrics();
+            }, 250);
+        });
+        if (window.visualViewport) {
+            window.visualViewport.addEventListener('resize', updateViewportMetrics);
+            window.visualViewport.addEventListener('scroll', updateViewportMetrics);
+        }
 
         function ingressPath(path) {
             const cleanPath = String(path).replace(/^\/+/, '');
@@ -582,6 +908,7 @@
             .then(config => {
                 ttydPort = config.ttydPort;
                 uploadDir = config.uploadDir;
+                setTerminalModeState(config.terminalMode || 'codex', false);
                 console.log('Config loaded:', config);
                 // Load ttyd via proxy endpoint
                 loadTerminal();
@@ -596,11 +923,15 @@
             const iframe = document.getElementById('terminal-frame');
             // Use an ingress-aware absolute path to avoid //terminal/ when Home
             // Assistant serves the add-on from a double-slash ingress base URL.
+            iframe.addEventListener('load', () => {
+                scheduleTerminalViewportSync(false);
+            });
             iframe.src = ingressPath('terminal/');
             installTerminalSelectionCopy();
         }
 
         const status = document.getElementById('status');
+        const terminalModeButtons = Array.from(document.querySelectorAll('[data-terminal-mode]'));
         const uploadBtn = document.getElementById('upload-btn');
         const touchSelectBtn = document.getElementById('touch-select-btn');
         const pasteBtn = document.getElementById('paste-btn');
@@ -614,14 +945,191 @@
         const manualPasteText = document.getElementById('manual-paste-text');
         const manualPasteInsert = document.getElementById('manual-paste-insert');
         const manualPasteDismiss = document.getElementById('manual-paste-dismiss');
+        const mobileInputRow = document.getElementById('mobile-input-row');
+        const mobileTerminalInput = document.getElementById('mobile-terminal-input');
+        const mobileSendBtn = document.getElementById('mobile-send-btn');
 
         function setStatus(message, type = '', persistent = false) {
+            if (statusTimer) {
+                clearTimeout(statusTimer);
+                statusTimer = null;
+            }
+
             status.textContent = message;
             status.className = type;
             if (message && !persistent) {
-                setTimeout(() => setStatus(''), 5000);
+                statusTimer = setTimeout(() => setStatus(''), 5000);
             }
         }
+
+        function setTerminalModeState(mode, announce = true) {
+            terminalMode = mode === 'raw' ? 'raw' : 'codex';
+            rootElement.dataset.terminalMode = terminalMode;
+
+            terminalModeButtons.forEach((button) => {
+                const active = button.getAttribute('data-terminal-mode') === terminalMode;
+                button.classList.toggle('active', active);
+                button.setAttribute('aria-pressed', active ? 'true' : 'false');
+                button.disabled = false;
+            });
+
+            if (mobileTerminalInput) {
+                mobileTerminalInput.placeholder = terminalMode === 'raw'
+                    ? 'Type shell command'
+                    : 'Type Codex prompt';
+            }
+
+            if (announce) {
+                setStatus(
+                    terminalMode === 'raw'
+                        ? 'Raw shell mode. Broker confirmations must be typed by you.'
+                        : 'Codex mode',
+                    'success',
+                    terminalMode === 'raw'
+                );
+            }
+        }
+
+        async function switchTerminalMode(mode) {
+            if (mode !== 'codex' && mode !== 'raw') {
+                return;
+            }
+
+            terminalModeButtons.forEach((button) => {
+                button.disabled = true;
+            });
+            setStatus(`Switching to ${mode === 'raw' ? 'raw shell' : 'Codex'} mode...`, 'success', false);
+
+            try {
+                const response = await fetch(ingressPath('terminal-mode'), {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ mode })
+                });
+
+                const result = await response.json().catch(() => ({}));
+                if (!response.ok || !result.success) {
+                    throw new Error(result.error || 'Mode switch failed');
+                }
+
+                setTerminalModeState(result.mode || mode);
+                scheduleTerminalViewportSync(true);
+                if (isMobileInputMode()) {
+                    focusMobileTerminalInput();
+                }
+            } catch (err) {
+                console.log('Terminal mode switch failed:', err);
+                setTerminalModeState(terminalMode, false);
+                setStatus('Could not switch terminal mode', 'error', false);
+            }
+        }
+
+        function isMobileInputMode() {
+            return Boolean(mobileTerminalInput && rootElement.classList.contains('touch-ui'));
+        }
+
+        function resizeMobileTerminalInput() {
+            if (!mobileTerminalInput) {
+                return;
+            }
+
+            mobileTerminalInput.style.height = 'auto';
+            mobileTerminalInput.style.height = `${Math.min(mobileTerminalInput.scrollHeight, 120)}px`;
+        }
+
+        function focusMobileTerminalInput() {
+            if (!isMobileInputMode()) {
+                return false;
+            }
+
+            mobileTerminalInput.focus({ preventScroll: true });
+            resizeMobileTerminalInput();
+            return true;
+        }
+
+        function insertTextIntoMobileInput(text) {
+            if (!isMobileInputMode() || !text) {
+                return false;
+            }
+
+            const value = mobileTerminalInput.value;
+            const start = Number.isInteger(mobileTerminalInput.selectionStart)
+                ? mobileTerminalInput.selectionStart
+                : value.length;
+            const end = Number.isInteger(mobileTerminalInput.selectionEnd)
+                ? mobileTerminalInput.selectionEnd
+                : start;
+
+            mobileTerminalInput.value = `${value.slice(0, start)}${text}${value.slice(end)}`;
+            const cursor = start + text.length;
+            mobileTerminalInput.setSelectionRange(cursor, cursor);
+            resizeMobileTerminalInput();
+            focusMobileTerminalInput();
+            return true;
+        }
+
+        async function sendMobileInput() {
+            if (!mobileTerminalInput || !mobileTerminalInput.value.trim()) {
+                setStatus('No command to send', 'error', false);
+                focusMobileTerminalInput();
+                return;
+            }
+
+            const text = mobileTerminalInput.value;
+            mobileSendBtn.disabled = true;
+
+            try {
+                const pasted = await pasteTextIntoTerminal(text);
+                if (!pasted) {
+                    setStatus('Could not send command', 'error', false);
+                    return;
+                }
+
+                if (!text.endsWith('\n')) {
+                    const entered = await sendTerminalControl('enter');
+                    if (!entered) {
+                        setStatus('Command inserted, but Enter failed', 'error', false);
+                        return;
+                    }
+                }
+
+                mobileTerminalInput.value = '';
+                resizeMobileTerminalInput();
+                setStatus('Sent command', 'success', false);
+                scheduleTerminalViewportSync(true);
+                focusMobileTerminalInput();
+            } finally {
+                mobileSendBtn.disabled = false;
+            }
+        }
+
+        mobileTerminalInput?.addEventListener('input', resizeMobileTerminalInput);
+        mobileTerminalInput?.addEventListener('focus', () => {
+            scheduleTerminalViewportSync(true);
+        });
+        mobileTerminalInput?.addEventListener('keydown', (event) => {
+            if (
+                event.key === 'Enter' &&
+                !event.shiftKey &&
+                !event.ctrlKey &&
+                !event.altKey &&
+                !event.metaKey
+            ) {
+                event.preventDefault();
+                sendMobileInput();
+            }
+        });
+        mobileInputRow?.addEventListener('submit', (event) => {
+            event.preventDefault();
+            sendMobileInput();
+        });
+        terminalModeButtons.forEach((button) => {
+            button.addEventListener('click', () => {
+                switchTerminalMode(button.getAttribute('data-terminal-mode'));
+            });
+        });
 
         function installTerminalSelectionCopy() {
             const iframe = document.getElementById('terminal-frame');
@@ -802,6 +1310,8 @@
                         }
                     }, true);
 
+                    installMobileTerminalScroll(iframeWindow, iframeDocument);
+
                     waitForTerminalApi(iframeWindow, () => {
                         try {
                             iframeWindow.term.onSelectionChange(rememberTerminalSelection);
@@ -813,6 +1323,75 @@
                     });
                 }, 500);
             });
+        }
+
+        function installMobileTerminalScroll(iframeWindow, iframeDocument) {
+            if (!iframeWindow || !iframeDocument || iframeWindow.__codexMobileScrollInstalled) {
+                return;
+            }
+
+            iframeWindow.__codexMobileScrollInstalled = true;
+            let touchStartY = null;
+            let scrollRequestPending = false;
+            let lastScrollAt = 0;
+            const scrollThreshold = 54;
+            const scrollThrottleMs = 140;
+
+            const sendTouchScroll = (action) => {
+                const now = Date.now();
+                if (scrollRequestPending || now - lastScrollAt < scrollThrottleMs) {
+                    return;
+                }
+
+                scrollRequestPending = true;
+                lastScrollAt = now;
+                sendTerminalControl(action)
+                    .then((ok) => {
+                        if (!ok) {
+                            setStatus('Could not scroll terminal', 'error', false);
+                        }
+                    })
+                    .catch((err) => {
+                        console.log('Touch terminal scroll failed:', err);
+                        setStatus('Could not scroll terminal', 'error', false);
+                    })
+                    .finally(() => {
+                        scrollRequestPending = false;
+                    });
+            };
+
+            iframeDocument.addEventListener('touchstart', (event) => {
+                if (!rootElement.classList.contains('touch-ui') || touchSelectionMode || event.touches.length !== 1) {
+                    touchStartY = null;
+                    return;
+                }
+
+                touchStartY = event.touches[0].clientY;
+            }, { capture: true, passive: true });
+
+            iframeDocument.addEventListener('touchmove', (event) => {
+                if (!rootElement.classList.contains('touch-ui') || touchSelectionMode || event.touches.length !== 1 || touchStartY === null) {
+                    return;
+                }
+
+                const currentY = event.touches[0].clientY;
+                const deltaY = currentY - touchStartY;
+                if (Math.abs(deltaY) < scrollThreshold) {
+                    return;
+                }
+
+                event.preventDefault();
+                event.stopPropagation();
+                sendTouchScroll(deltaY > 0 ? 'scroll-up' : 'scroll-down');
+                touchStartY = currentY;
+            }, { capture: true, passive: false });
+
+            iframeDocument.addEventListener('touchend', () => {
+                touchStartY = null;
+            }, true);
+            iframeDocument.addEventListener('touchcancel', () => {
+                touchStartY = null;
+            }, true);
         }
 
         function setTouchSelectionMode(enabled) {
@@ -1212,10 +1791,18 @@
                         }
                     };
 
+                    if (insertTextIntoMobileInput(`${filePath} `)) {
+                        await copyToClipboard(filePath);
+                        setStatus(`📎 Added ${filePath} to command line`, 'success', true);
+                        return;
+                    }
+
                     const inserted = await insertTextIntoTerminal(`${filePath} `);
                     if (inserted) {
                         await copyToClipboard(filePath);
                         setStatus(`📎 Inserted ${filePath}`, 'success', true);
+                        focusTerminal(true);
+                        scheduleTerminalViewportSync(true);
                     } else {
                         const copied = await copyToClipboard(filePath);
                         if (copied) {
@@ -1446,8 +2033,17 @@
                 try {
                     const text = await navigator.clipboard.readText();
                     if (text.trim()) {
+                        if (insertTextIntoMobileInput(text)) {
+                            setStatus('Pasted clipboard text into command line', 'success', false);
+                            return;
+                        }
+
                         const inserted = await pasteTextIntoTerminal(text);
                         setStatus(inserted ? 'Pasted clipboard text' : 'Could not paste into terminal', inserted ? 'success' : 'error', false);
+                        if (inserted) {
+                            focusTerminal(true);
+                            scheduleTerminalViewportSync(true);
+                        }
                         return;
                     }
 
@@ -1526,6 +2122,7 @@
         function showManualPaste(text = '') {
             manualPasteText.value = text;
             manualPastePanel.classList.add('active');
+            updateViewportMetrics();
             manualPasteText.focus({ preventScroll: true });
         }
 
@@ -1545,6 +2142,15 @@
             }
 
             manualPasteInsert.disabled = true;
+
+            if (insertTextIntoMobileInput(text)) {
+                manualPastePanel.classList.remove('active');
+                manualPasteText.value = '';
+                manualPasteInsert.disabled = false;
+                setStatus('Inserted pasted text into command line', 'success', false);
+                return;
+            }
+
             const inserted = await pasteTextIntoTerminal(text);
             manualPasteInsert.disabled = false;
 
@@ -1552,6 +2158,8 @@
                 manualPastePanel.classList.remove('active');
                 manualPasteText.value = '';
                 setStatus('Inserted pasted text', 'success', false);
+                focusTerminal(true);
+                scheduleTerminalViewportSync(true);
             } else {
                 setStatus('Could not paste into terminal', 'error', false);
             }
@@ -1560,11 +2168,29 @@
         pasteBtn.addEventListener('click', pasteClipboardIntoTerminal);
 
         document.querySelectorAll('[data-terminal-action]').forEach((button) => {
+            button.addEventListener('pointerdown', () => {
+                if (isMobileInputMode()) {
+                    setTimeout(focusMobileTerminalInput, 0);
+                }
+            });
             button.addEventListener('click', async () => {
                 const action = button.getAttribute('data-terminal-action');
                 const ok = await sendTerminalControl(action);
                 if (!ok) {
-                    setStatus('Could not scroll terminal', 'error', false);
+                    setStatus('Could not send terminal control', 'error', false);
+                    return;
+                }
+
+                if (isMobileInputMode()) {
+                    if (action === 'scroll-up') {
+                        setStatus('Paged up', 'success', false);
+                    } else if (action === 'scroll-down') {
+                        setStatus('Paged down', 'success', false);
+                    } else if (action === 'scroll-bottom') {
+                        setStatus('Returned to prompt', 'success', false);
+                    }
+
+                    focusMobileTerminalInput();
                 }
             });
         });
@@ -1574,6 +2200,11 @@
         // the parent page sees them.
         window.addEventListener('load', () => {
             const iframe = document.getElementById('terminal-frame');
+            iframe.addEventListener('pointerdown', () => {
+                if (isMobileInputMode()) {
+                    mobileTerminalInput.blur();
+                }
+            });
             iframe.addEventListener('dragover', (e) => e.preventDefault());
             iframe.addEventListener('drop', handleImageDrop);
             iframe.addEventListener('paste', handleImagePaste, true);
@@ -1636,6 +2267,7 @@
             voiceModal.classList.add('active');
             voiceTranscript.textContent = '';
             voiceStatus.textContent = '';
+            voiceCopyBtn.textContent = isMobileInputMode() ? 'Insert Text' : 'Copy Text';
             voiceCopyBtn.style.display = 'none';
         });
 
@@ -1757,7 +2389,10 @@
 
             if (voiceTranscript.textContent.trim()) {
                 voiceCopyBtn.style.display = 'inline-block';
-                voiceStatus.textContent = '✓ Transcript ready! Edit if needed, then copy.';
+                voiceCopyBtn.textContent = isMobileInputMode() ? 'Insert Text' : 'Copy Text';
+                voiceStatus.textContent = isMobileInputMode()
+                    ? '✓ Transcript ready! Edit if needed, then insert.'
+                    : '✓ Transcript ready! Edit if needed, then copy.';
             }
 
             console.log('Speech recognition stopped');
@@ -1769,6 +2404,13 @@
 
             if (!text) {
                 voiceStatus.textContent = '❌ No text to copy';
+                return;
+            }
+
+            if (insertTextIntoMobileInput(text)) {
+                voiceModal.classList.remove('active');
+                voiceStatus.textContent = '✓ Inserted into command line.';
+                setStatus('Voice text added to command line', 'success', false);
                 return;
             }
 

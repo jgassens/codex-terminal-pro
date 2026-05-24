@@ -32,13 +32,27 @@ inserted directly into the Codex prompt through the persistent tmux session.
 
 The toolbar **Paste** button reads text or images from the browser clipboard
 when allowed. If the browser blocks clipboard reads, it opens a manual paste box
-so text can still be inserted into the terminal. Touch devices also show
-compact scroll controls for paging up/down in tmux scrollback and returning to
-the live prompt.
+so text can still be inserted into the terminal. Touch devices also show a
+native command bar below the terminal. Type or paste into that browser text
+field, then tap **Send**; the ttyd iframe stays as the live terminal display.
+The shortcut strip sends Ctrl-C, Ctrl-D, Ctrl-Z, Tab, Enter, command history,
+clear, tmux page up/down, and return-to-prompt controls.
+
+Use **Shell** mode for raw terminal commands. It switches the active tmux window
+to a real interactive `/config` login shell while keeping ttyd as the display.
+Use **Codex** mode to return to the Codex TUI. Shell mode deliberately keeps
+the brokered `ha` and `supervisor-api` paths, so restart, stop, update,
+install, uninstall, host, OS, and backup operations still stop for human typed
+confirmation inside the terminal.
 
 The add-on includes read-only Modbus helpers for Home Assistant troubleshooting
 and Schneider Electric discovery work. Run `modbus-toolbox` in the terminal for
 examples, or see `/opt/modbus/MODBUS.md`.
+
+For domestic and small commercial solar work, run `solar-toolbox`. It can print
+a site-intake brief, inspect Home Assistant config/entity registry for
+solar-like surfaces, perform read-only TCP discovery for likely gateways, and
+produce a pre-change restore checklist. See `/opt/solar/SOLAR.md`.
 
 ## Install
 
@@ -173,6 +187,8 @@ confirmation broker.
 - Non-interactive risky operations are refused.
 - Direct Supervisor calls should use `supervisor-api`, which applies the same
   broker policy.
+- Shell mode uses these same brokered commands and never auto-answers the
+  confirmation prompts.
 
 The broker writes decisions to `/data/logs/supervisor-broker.log`. This log is
 for accountability and troubleshooting, not tamper-proof audit. A determined

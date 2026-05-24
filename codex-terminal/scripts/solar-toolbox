@@ -1,0 +1,527 @@
+#!/usr/bin/env python3
+"""Solar commissioning and diagnostics helper for Codex Terminal Pro.
+
+The helper is intentionally read-only. It can inspect local Home Assistant
+configuration files and probe TCP ports, but it does not change inverter,
+battery, meter, gateway, or Home Assistant state.
+"""
+
+from __future__ import annotations
+
+import argparse
+import ipaddress
+import json
+import os
+import re
+import socket
+import sys
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+from typing import Iterable
+
+
+VERSION = "0.1.32"
+
+SOLAR_KEYWORDS = (
+    "solar",
+    "pv",
+    "photovoltaic",
+    "inverter",
+    "microinverter",
+    "battery",
+    "bms",
+    "soc",
+    "grid",
+    "meter",
+    "ct",
+    "current_transformer",
+    "load_shave",
+    "load shave",
+    "export",
+    "import",
+    "consumption",
+    "production",
+    "modbus",
+    "sunspec",
+    "mqtt",
+    "envoy",
+    "enphase",
+    "schneider",
+    "conext",
+    "insight",
+    "xw",
+    "eg4",
+    "solaredge",
+    "fronius",
+    "sma",
+    "victron",
+    "growatt",
+    "goodwe",
+    "solis",
+    "deye",
+    "luxpower",
+    "shelly",
+    "emporia",
+    "wattnode",
+)
+
+EXPECTED_WRAPPERS = (
+    "sensor.energy_solar_power",
+    "sensor.energy_home_consumption_power",
+    "sensor.energy_grid_import_power",
+    "sensor.energy_grid_export_power",
+    "sensor.energy_battery_charging_power",
+    "sensor.energy_battery_discharging_power",
+)
+
+COMMON_PORTS = {
+    80: "vendor web UI / gateway HTTP",
+    443: "vendor web UI / gateway HTTPS",
+    502: "Modbus TCP / SunSpec Modbus",
+    1502: "alternate Modbus TCP",
+    8080: "alternate local gateway UI/API",
+    8123: "Home Assistant",
+    8899: "common inverter/logger local TCP service",
+}
+
+CONFIG_FILES = (
+    "configuration.yaml",
+    "sensors.yaml",
+    "automations.yaml",
+    "scripts.yaml",
+    "modbus.yaml",
+    "packages",
+    "package",
+    ".storage/core.entity_registry",
+    ".storage/core.device_registry",
+    ".storage/lovelace.dashboard_home",
+    ".storage/energy",
+)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Read-only solar commissioning helper for Home Assistant sites.",
+    )
+    parser.add_argument("--version", action="version", version=f"solar-toolbox {VERSION}")
+
+    subparsers = parser.add_subparsers(dest="command")
+
+    subparsers.add_parser("guide", help="Print the solar commissioning quick guide")
+    subparsers.add_parser("brief", help="Print a prompt-ready solar site intake brief")
+    subparsers.add_parser("profiles", help="Print common vendor/protocol recognition notes")
+    subparsers.add_parser("snapshot-plan", help="Print a read-only pre-change capture checklist")
+
+    audit = subparsers.add_parser("audit-ha", help="Inspect local Home Assistant config and entity registry")
+    audit.add_argument("--config", default="/config", help="Home Assistant config directory (default: /config)")
+    audit.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+    audit.add_argument("--max-matches", type=int, default=80, help="Maximum text matches to include")
+
+    discover = subparsers.add_parser("discover", help="Read-only TCP discovery for solar gateways and Modbus devices")
+    discover.add_argument("targets", nargs="+", help="Hosts, comma lists, or CIDR networks")
+    discover.add_argument(
+        "--ports",
+        default="502,80,443,1502,8080,8899",
+        help="Comma-separated TCP ports to probe (default: 502,80,443,1502,8080,8899)",
+    )
+    discover.add_argument("--timeout", type=float, default=0.75, help="Socket timeout in seconds")
+    discover.add_argument("--workers", type=int, default=48, help="Concurrent connection attempts")
+    discover.add_argument("--max-hosts", type=int, default=512, help="Safety cap for expanded CIDR hosts")
+    discover.add_argument("--open-only", action="store_true", help="Only print open ports")
+    discover.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+
+    return parser
+
+
+def print_guide() -> None:
+    print(
+        """Codex Terminal Pro Solar Toolbox
+
+Read-only first moves:
+  solar-toolbox audit-ha --config /config
+  solar-toolbox discover 192.168.50.0/24 --ports 502,80,443,1502 --open-only
+  modbus-toolbox
+  modbus-read --host <gateway-ip> --unit <id> --type holding --address <register> --count <n>
+
+Prepared mental model:
+  1. Identify topology: grid meter, inverter(s), battery/BMS, gateway/logger,
+     CT placement, backup panel vs whole-home loads, and cloud vs local control.
+  2. Preserve state before changes: Home Assistant config, entity registry,
+     dashboard, vendor settings export, and read-only telemetry snapshots.
+  3. Prefer local, read-only evidence: HA states/logs, vendor UI status, Modbus
+     or SunSpec reads, MQTT payloads, and meter/CT sanity checks.
+  4. Do not write inverter, charger, relay, export-control, or battery settings
+     unless the human explicitly requests it and the register/API is verified.
+
+Docs:
+  /opt/solar/SOLAR.md
+  /opt/modbus/MODBUS.md
+"""
+    )
+
+
+def print_brief() -> None:
+    print(
+        """Solar site intake brief
+
+Before diagnosing or configuring a solar installation, establish:
+  - Site type: grid-tied only, hybrid, backup-loads, whole-home, off-grid, or microgrid.
+  - Hardware: inverter brand/model/firmware, gateway/logger, battery/BMS,
+    production meter, consumption meter, CT locations, EV charger/load controls.
+  - Data paths: Home Assistant integration, local API, Modbus TCP/RTU, SunSpec,
+    MQTT, vendor cloud, IEEE 2030.5/OpenADR/utility aggregator involvement.
+  - The desired outcome: monitoring, Energy dashboard repair, commissioning
+    check, backup readiness, tariff/load-shave automation, export limiting, or
+    module installation.
+  - Safety boundary: read-only inspection first; explicit human confirmation
+    and verified vendor documentation before any write/control action.
+
+Useful evidence to collect:
+  solar-toolbox audit-ha --config /config
+  ha core check
+  ha state list | grep -Ei 'solar|pv|battery|bms|grid|meter|inverter|modbus|mqtt|envoy|schneider|enphase'
+  modbus-scan <lan-cidr> --port 502 --open-only
+"""
+    )
+
+
+def print_profiles() -> None:
+    print(
+        """Common solar integration profiles
+
+Open/local protocols:
+  - Modbus TCP/RTU: common for inverters, meters, battery gateways, and PLCs.
+  - SunSpec Modbus: common DER model layer for inverters, batteries, meters,
+    and trackers. Verify model ID, block length, scale factors, and unit ID.
+  - MQTT: common for SolarAssistant, Envoy bridges, custom gateways, and HA add-ons.
+  - Local HTTP/REST: common vendor gateway path; firmware can change payloads.
+
+Grid/utility-facing recognition targets:
+  - IEEE 2030.5: smart energy application protocol used for DER/utility
+    management, demand response, pricing, EVs, and distributed generation.
+  - OpenADR: demand response / DER flexibility signaling. Treat as a program or
+    aggregator interface, not a normal local inverter debug API.
+
+Vendor families to recognize:
+  - Enphase Envoy/IQ Gateway: production/consumption depends on metered hardware
+    and firmware behavior; CT configuration matters.
+  - Schneider/Conext/Insight/XW: verify unit IDs, address base, meter association,
+    export controls, battery type, SOC control, and BMS online state.
+  - SolarEdge, Fronius, SMA, GoodWe, Growatt, Solis, Deye, Victron, EG4, LuxPower:
+    identify whether local API, Modbus/SunSpec, MQTT bridge, or vendor cloud is
+    authoritative for the installed model and firmware.
+"""
+    )
+
+
+def print_snapshot_plan() -> None:
+    print(
+        """Read-only solar restore / commissioning capture
+
+Create before installer-facing changes:
+  - Home Assistant: configuration.yaml, sensors.yaml, automations.yaml,
+    scripts.yaml, packages, .storage/core.entity_registry, relevant Lovelace
+    dashboard storage, and ha core check output.
+  - Entity state: solar, grid, inverter, battery, BMS, meter, tariff, and load
+    control states from ha state list.
+  - Vendor UI/export: official settings export when available, firmware/build,
+    online/offline device list, meter/CT association, export-control state,
+    battery/BMS association, and active faults/warnings.
+  - Read-only telemetry: Modbus/SunSpec snapshots for identity, status, power,
+    energy, SOC, voltage/current, alarms, and meter import/export.
+  - Network: discovered gateway IPs, open local ports, and whether traffic is
+    local-only, cloud-only, or bridge-mediated.
+
+Keep secrets out of the bundle: Home Assistant secrets.yaml, tokens, browser
+cookies, and /data/.codex/auth.json.
+"""
+    )
+
+
+def parse_ports(raw_ports: str) -> list[int]:
+    ports: list[int] = []
+    for raw in raw_ports.split(","):
+        raw = raw.strip()
+        if not raw:
+            continue
+        port = int(raw)
+        if port <= 0 or port > 65535:
+            raise ValueError(f"invalid TCP port: {port}")
+        ports.append(port)
+    return sorted(dict.fromkeys(ports))
+
+
+def expand_targets(raw_targets: Iterable[str], max_hosts: int) -> list[str]:
+    expanded: list[str] = []
+    for raw_target in raw_targets:
+        for item in raw_target.split(","):
+            target = item.strip()
+            if not target:
+                continue
+            if "/" in target:
+                network = ipaddress.ip_network(target, strict=False)
+                hosts = [str(host) for host in network.hosts()]
+                if len(expanded) + len(hosts) > max_hosts:
+                    raise ValueError(f"target expansion exceeds --max-hosts {max_hosts}")
+                expanded.extend(hosts)
+            else:
+                expanded.append(target)
+    return sorted(dict.fromkeys(expanded))
+
+
+def probe(host: str, port: int, timeout: float) -> dict[str, object]:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(timeout)
+        try:
+            sock.connect((host, port))
+            return {
+                "host": host,
+                "port": port,
+                "open": True,
+                "hint": COMMON_PORTS.get(port, "solar/vendor local service candidate"),
+            }
+        except OSError as exc:
+            return {"host": host, "port": port, "open": False, "error": str(exc)}
+
+
+def run_discover(args: argparse.Namespace) -> int:
+    if args.timeout <= 0:
+        raise ValueError("--timeout must be greater than zero")
+    if args.workers <= 0:
+        raise ValueError("--workers must be greater than zero")
+    if args.max_hosts <= 0:
+        raise ValueError("--max-hosts must be greater than zero")
+
+    ports = parse_ports(args.ports)
+    targets = expand_targets(args.targets, args.max_hosts)
+    jobs = [(target, port) for target in targets for port in ports]
+    results: list[dict[str, object]] = []
+
+    with ThreadPoolExecutor(max_workers=min(args.workers, max(len(jobs), 1))) as executor:
+        future_map = {
+            executor.submit(probe, target, port, args.timeout): (target, port)
+            for target, port in jobs
+        }
+        for future in as_completed(future_map):
+            result = future.result()
+            if args.open_only and not result["open"]:
+                continue
+            results.append(result)
+
+    results.sort(key=lambda entry: (str(entry["host"]), int(entry["port"])))
+    payload = {
+        "ok": True,
+        "target_count": len(targets),
+        "ports": ports,
+        "results": results,
+    }
+
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        print(f"Solar discovery checked {len(targets)} host(s) across port(s): {', '.join(map(str, ports))}")
+        for result in results:
+            state = "open" if result["open"] else "closed"
+            hint = f" - {result.get('hint')}" if result.get("hint") else ""
+            print(f"  {result['host']}:{result['port']} {state}{hint}")
+    return 0
+
+
+def text_matches_keywords(value: object) -> bool:
+    haystack = str(value or "").lower()
+    return any(keyword in haystack for keyword in SOLAR_KEYWORDS)
+
+
+def load_json(path: Path) -> dict[str, object] | None:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def iter_config_paths(config_dir: Path) -> Iterable[Path]:
+    for relative in CONFIG_FILES:
+        path = config_dir / relative
+        if path.is_file():
+            yield path
+        elif path.is_dir():
+            for child in sorted(path.rglob("*.yaml")):
+                if child.is_file():
+                    yield child
+            for child in sorted(path.rglob("*.yml")):
+                if child.is_file():
+                    yield child
+
+
+def scan_text_files(config_dir: Path, max_matches: int) -> list[dict[str, object]]:
+    pattern = re.compile("|".join(re.escape(keyword) for keyword in SOLAR_KEYWORDS), re.IGNORECASE)
+    matches: list[dict[str, object]] = []
+
+    for path in iter_config_paths(config_dir):
+        if len(matches) >= max_matches:
+            break
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        for line_number, line in enumerate(lines, start=1):
+            if pattern.search(line):
+                matches.append({
+                    "path": str(path.relative_to(config_dir)),
+                    "line": line_number,
+                    "text": line.strip()[:220],
+                })
+                if len(matches) >= max_matches:
+                    break
+    return matches
+
+
+def entity_registry_summary(config_dir: Path) -> dict[str, object]:
+    path = config_dir / ".storage" / "core.entity_registry"
+    registry = load_json(path)
+    entities = []
+    if isinstance(registry, dict):
+        data = registry.get("data", {})
+        raw_entities = data.get("entities", []) if isinstance(data, dict) else []
+        if isinstance(raw_entities, list):
+            entities = raw_entities
+
+    matched = []
+    for entity in entities:
+        if not isinstance(entity, dict):
+            continue
+        values = [
+            entity.get("entity_id"),
+            entity.get("platform"),
+            entity.get("original_name"),
+            entity.get("name"),
+            entity.get("unique_id"),
+        ]
+        if any(text_matches_keywords(value) for value in values):
+            matched.append({
+                "entity_id": entity.get("entity_id"),
+                "platform": entity.get("platform"),
+                "name": entity.get("name") or entity.get("original_name"),
+                "unique_id_present": bool(entity.get("unique_id")),
+                "disabled_by": entity.get("disabled_by"),
+            })
+
+    platform_counts = Counter(str(entity.get("platform") or "unknown") for entity in matched)
+    domain_counts = Counter(str(entity.get("entity_id") or "").split(".", 1)[0] for entity in matched)
+    entity_ids = {str(entity.get("entity_id")) for entity in matched}
+
+    return {
+        "path": str(path),
+        "exists": path.exists(),
+        "total_entities": len(entities),
+        "matched_entities": matched,
+        "platform_counts": dict(sorted(platform_counts.items())),
+        "domain_counts": dict(sorted(domain_counts.items())),
+        "expected_wrappers": {
+            wrapper: wrapper in entity_ids
+            for wrapper in EXPECTED_WRAPPERS
+        },
+    }
+
+
+def run_audit_ha(args: argparse.Namespace) -> int:
+    config_dir = Path(args.config).expanduser()
+    registry = entity_registry_summary(config_dir)
+    text_matches = scan_text_files(config_dir, args.max_matches)
+    matched_entities = registry["matched_entities"]
+    wrapper_status = registry["expected_wrappers"]
+    missing_wrappers = [name for name, present in wrapper_status.items() if not present]
+
+    payload = {
+        "ok": True,
+        "config_dir": str(config_dir),
+        "registry": registry,
+        "text_matches": text_matches,
+        "recommendations": build_recommendations(registry, missing_wrappers, text_matches),
+    }
+
+    if args.json:
+        print(json.dumps(payload, indent=2))
+        return 0
+
+    print(f"Solar Home Assistant audit: {config_dir}")
+    print(f"  entity registry exists: {registry['exists']}")
+    print(f"  solar-like entities: {len(matched_entities)} / {registry['total_entities']}")
+    if registry["platform_counts"]:
+        print("  platforms: " + ", ".join(f"{key}={value}" for key, value in registry["platform_counts"].items()))
+    if registry["domain_counts"]:
+        print("  domains: " + ", ".join(f"{key}={value}" for key, value in registry["domain_counts"].items()))
+
+    print("\nExpected stable energy wrapper entities:")
+    for wrapper, present in wrapper_status.items():
+        state = "present" if present else "not found"
+        print(f"  {wrapper}: {state}")
+
+    if matched_entities:
+        print("\nSolar-like entity samples:")
+        for entity in matched_entities[:30]:
+            disabled = f", disabled_by={entity['disabled_by']}" if entity.get("disabled_by") else ""
+            unique = "unique_id" if entity.get("unique_id_present") else "no_unique_id"
+            print(f"  {entity['entity_id']} ({entity['platform']}, {unique}{disabled})")
+        if len(matched_entities) > 30:
+            print(f"  ... {len(matched_entities) - 30} more")
+
+    if text_matches:
+        print("\nConfig/dashboard matches:")
+        for match in text_matches[:40]:
+            print(f"  {match['path']}:{match['line']}: {match['text']}")
+        if len(text_matches) > 40:
+            print(f"  ... {len(text_matches) - 40} more")
+
+    print("\nRecommendations:")
+    for item in payload["recommendations"]:
+        print(f"  - {item}")
+    return 0
+
+
+def build_recommendations(registry: dict[str, object], missing_wrappers: list[str], text_matches: list[dict[str, object]]) -> list[str]:
+    recommendations: list[str] = []
+    if not registry["exists"]:
+        recommendations.append("Run inside Home Assistant /config, or pass --config to the active HA config directory.")
+    if registry["exists"] and not registry["matched_entities"]:
+        recommendations.append("No solar-like entities found; start with integration discovery and vendor gateway IPs.")
+    if missing_wrappers:
+        recommendations.append("Consider stable sensor.energy_* wrapper entities so dashboards are insulated from raw MQTT/Modbus churn.")
+    if text_matches:
+        recommendations.append("Review matched YAML/storage lines for stale entity IDs, sign conventions, and device_class/state_class metadata.")
+    recommendations.append("For Modbus/SunSpec devices, verify unit ID, address base, scale factors, and word order before trusting decoded values.")
+    recommendations.append("Before changing installer settings, capture a restore kit and vendor settings export when available.")
+    return recommendations
+
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+
+    try:
+        if args.command in (None, "guide"):
+            print_guide()
+            return 0
+        if args.command == "brief":
+            print_brief()
+            return 0
+        if args.command == "profiles":
+            print_profiles()
+            return 0
+        if args.command == "snapshot-plan":
+            print_snapshot_plan()
+            return 0
+        if args.command == "discover":
+            return run_discover(args)
+        if args.command == "audit-ha":
+            return run_audit_ha(args)
+    except ValueError as exc:
+        parser.error(str(exc))
+
+    parser.error(f"unknown command: {args.command}")
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

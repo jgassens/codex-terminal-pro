@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.1.34
+
+- Add a tmux-backed **Shell** mode that switches the embedded terminal from the
+  Codex TUI window to a real `/config` login shell window.
+- Keep mobile command-bar input, paste, upload paths, and terminal controls
+  pointed at the active tmux window, so Shell mode receives real shell commands.
+- Preserve Supervisor broker safety: restart, stop, update, install, uninstall,
+  reboot, shutdown, backup, and OS operations still require the human to type
+  the broker confirmation inside the terminal.
+
+## 0.1.33
+
+- Add a mobile-native command bar below the ttyd terminal so phones and tablets
+  type into a real browser textarea while ttyd remains the live display.
+- Add mobile shortcut keys for Ctrl-C, Ctrl-D, Ctrl-Z, Tab, Enter, command
+  history, clear, tmux page up/down, and return-to-prompt controls.
+- Route mobile clipboard text, manual paste, uploaded image paths, and voice
+  transcripts into the native command bar instead of refocusing the iframe.
+
+## 0.1.32
+
+- Add a read-only `solar-toolbox` command for solar commissioning intake,
+  Home Assistant energy/entity audits, common gateway TCP discovery, vendor and
+  protocol recognition notes, and pre-change restore capture planning.
+- Add `/opt/solar/SOLAR.md` with a domestic and small-commercial solar
+  diagnostics field guide covering Modbus, SunSpec, MQTT, Home Assistant Energy
+  metadata, battery/BMS readiness, meter/CT placement, and safety boundaries.
+- Teach the in-add-on agent guidance to start solar work from topology,
+  preserve-state, and read-only proof surfaces before any installer-facing
+  configuration changes.
+
+## 0.1.31
+
+- Improve mobile terminal layout when the on-screen keyboard opens by sizing
+  the wrapper to the visible viewport and keeping manual paste/copy panels above
+  the keyboard.
+- Add touch-swipe terminal scrolling that routes through the same tmux
+  scrollback controls as the mobile scroll buttons.
+- Return the tmux pane to the live prompt before browser paste, manual paste,
+  or uploaded-image insertion so pasted text lands on the command line after
+  scrollback or selection use.
+
 ## 0.1.30
 
 - Hide the mobile-only Select Text and Paste controls on desktop layouts while

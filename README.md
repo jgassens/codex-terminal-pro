@@ -6,7 +6,7 @@ Codex Terminal Pro is an unofficial Home Assistant add-on that runs the OpenAI
 Codex CLI in a browser terminal, starting in your Home Assistant `/config`
 directory. It keeps the upstream add-on wrapper, ingress terminal, image paste
 service, persistent package helpers, Home Assistant CLI, GitHub CLI, and
-read-only Modbus helpers, and persistent `/data` state.
+read-only Modbus and solar commissioning helpers, and persistent `/data` state.
 
 This is an MVP fork. It is not an official OpenAI add-on.
 
@@ -16,9 +16,12 @@ This is an MVP fork. It is not an official OpenAI add-on.
 - Sidebar panel entry for admin users via Home Assistant ingress.
 - Polished Codex-focused web wrapper with image upload and voice controls.
 - Persistent `tmux` session so browser reconnects do not kill Codex.
+- Switchable Codex/Shell modes, with Shell mode backed by a real interactive
+  `/config` tmux shell window.
 - Touch-friendly terminal text selection mode for phones and tablets.
 - Paste button with clipboard-text/image support and manual mobile fallback.
-- Mobile scroll controls for tmux scrollback and return-to-prompt.
+- Mobile command bar with native typing, shortcut keys, tmux scrollback, and
+  return-to-prompt controls.
 - Codex CLI installed with `npm install -g @openai/codex`.
 - Starts in `/config` so Codex can inspect Home Assistant YAML and storage.
 - Persistent Codex state under `/data/.codex`.
@@ -29,6 +32,9 @@ This is an MVP fork. It is not an official OpenAI add-on.
   saved in `/data/images` and paths inserted into the prompt.
 - Persistent APK and Python package helpers under `/data/packages`.
 - Home Assistant CLI (`ha`) and GitHub CLI (`gh`) included.
+- Solar commissioning toolbox with `solar-toolbox` for site intake, read-only
+  gateway discovery, Home Assistant energy/entity audits, protocol/vendor
+  recognition, and pre-change restore planning.
 - Read-only Modbus toolbox with `modbus-read`, `modbus-scan`, `ncat`,
   `socat`, `tcpdump`, `libmodbus`, `pymodbus`, `minimalmodbus`, and
   `pyserial`.
@@ -97,8 +103,16 @@ image path directly into the Codex prompt.
 The toolbar includes a **Paste** button. It can paste clipboard text into the
 terminal, upload clipboard images when the browser exposes them, or open a
 manual paste box on mobile browsers that block direct clipboard reads. Touch
-devices also show compact scroll controls for paging through tmux scrollback
-and returning to the live prompt.
+devices also show a native command bar below the terminal for typing, paste,
+control keys, command history, tmux scrollback, and returning to the live
+prompt.
+
+Use the **Shell** mode switch for raw terminal commands. It changes the ttyd
+view to a real interactive tmux shell in `/config`; **Codex** switches back to
+the Codex TUI window. The shell still uses the brokered `ha` and
+`supervisor-api` commands, so restart, stop, update, install, uninstall, host,
+OS, and backup operations require the human to type the confirmation in the
+terminal.
 
 ## Modbus Toolbox
 
@@ -164,6 +178,8 @@ paste it into tickets, or share it in chat.
 - Ask Codex to inspect first, then show diffs before edits.
 - Run `ha core check` before reloads or restarts.
 - Do not restart Home Assistant until config checks pass.
+- Shell mode still uses brokered `ha` and `supervisor-api` commands; do not
+  auto-answer restart, stop, update, host, OS, backup, or add-on confirmations.
 - Do not add broader mounts unless there is a concrete need.
 
 ## Architecture Support

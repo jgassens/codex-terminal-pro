@@ -5,6 +5,7 @@ export PYTHONPATH="/opt/modbus-python:${PYTHONPATH:-}"
 
 if [ "${1:-}" = "--versions" ]; then
     echo "modbus-toolbox 0.1.27"
+    command -v solar-toolbox >/dev/null 2>&1 && solar-toolbox --version || true
     command -v modbus-read >/dev/null 2>&1 && modbus-read --version || true
     command -v modbus-scan >/dev/null 2>&1 && modbus-scan --version || true
     command -v ncat >/dev/null 2>&1 && ncat --version 2>&1 | head -1 || true
@@ -26,6 +27,9 @@ cat <<'EOF'
 Codex Terminal Pro Modbus Toolbox
 
 Read-only helpers:
+  solar-toolbox
+  solar-toolbox audit-ha --config /config
+  solar-toolbox discover 192.168.50.0/24 --ports 502,80,443,1502 --open-only
   modbus-scan 192.168.50.0/24 --port 502 --open-only
   modbus-read --host 192.168.50.25 --unit 1 --type holding --address 40001 --address-base modicon --count 2
   modbus-read --host 192.168.50.25 --unit 1 --type input --address 30001 --address-base modicon --count 2
@@ -40,6 +44,7 @@ Python modules exposed on PYTHONPATH:
   pymodbus[serial], minimalmodbus, pyserial
 
 Docs:
+  /opt/solar/SOLAR.md
   /opt/modbus/MODBUS.md
   /opt/modbus/schneider/README.md
 

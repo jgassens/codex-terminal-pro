@@ -6,7 +6,8 @@ Unofficial OpenAI Codex CLI terminal for Home Assistant.
 
 Codex Terminal Pro provides a Home Assistant ingress web terminal that starts in
 `/config`, with Codex CLI, image paste support, persistent packages, Home
-Assistant CLI, GitHub CLI, and read-only Modbus helpers preinstalled.
+Assistant CLI, GitHub CLI, read-only Modbus helpers, and a solar commissioning
+toolbox preinstalled.
 
 It registers an admin-only Home Assistant sidebar panel titled **Codex Terminal
 Pro** through ingress.
@@ -39,13 +40,28 @@ reliable fallback.
 The toolbar includes a **Paste** button for mobile and desktop browsers. It
 reads text or images from the clipboard when the browser allows it; if mobile
 clipboard access is blocked, it opens a manual paste box that can insert text
-into the persistent terminal session. Touch devices also show compact scroll
-controls for paging through tmux scrollback and returning to the live prompt.
+into the persistent terminal session. Touch devices also show a native command
+bar below the terminal, so typing and paste use a real browser text field while
+ttyd remains the live display. Its shortcut strip sends common control keys,
+history arrows, tmux page up/down, and return-to-prompt controls.
+
+The **Codex/Shell** mode switch keeps the same ttyd display but changes the
+active tmux window. **Codex** shows the Codex TUI; **Shell** opens a real
+interactive `/config` login shell for raw terminal commands. Shell mode does
+not bypass the Supervisor broker: Home Assistant restart, stop, update,
+install, uninstall, host, OS, and backup operations still require the human to
+type the broker confirmation in the terminal.
 
 The add-on also includes a read-only Modbus toolbox for Home Assistant and
 Schneider Electric troubleshooting: `modbus-toolbox`, `modbus-scan`,
 `modbus-read`, `ncat`, `socat`, `tcpdump`, `libmodbus`, and Python modules for
 `pymodbus`, `minimalmodbus`, and `pyserial`.
+
+For solar, battery, inverter, meter, and Home Assistant Energy work, run
+`solar-toolbox`. It provides a site-intake brief, read-only gateway discovery,
+Home Assistant entity/config audits, vendor/protocol recognition notes, and a
+pre-change restore checklist. The detailed field guide is installed at
+`/opt/solar/SOLAR.md`.
 
 Fresh installs add supported Codex TUI defaults in `/data/.codex/config.toml`:
 Catppuccin Mocha theme colors and a compact footer with run state, model,
@@ -156,6 +172,8 @@ commands such as info, logs, stats, and checks run normally. Routine management
 commands such as restart, reload, start, stop, update, rebuild, and options ask
 for a typed confirmation. High-risk host, OS, backup, install, uninstall, and
 delete operations require a fresh nonce and a reason.
+Shell mode uses the same brokered `ha` and `supervisor-api` commands and does
+not auto-answer confirmations.
 
 This prevents many accidental agent-driven operations during normal use. It
 does not prevent a determined root process from bypassing the wrapper, reading

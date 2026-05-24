@@ -1,7 +1,7 @@
 FROM ghcr.io/home-assistant/base:latest
 
 LABEL \
-    io.hass.version="0.1.30" \
+    io.hass.version="0.1.32" \
     io.hass.type="addon" \
     io.hass.arch="aarch64|amd64" \
     org.opencontainers.image.title="Home Assistant Add-on: Codex Terminal Pro" \
@@ -87,9 +87,10 @@ RUN case "${TARGETARCH:-amd64}" in \
 
 WORKDIR /config
 
-RUN mkdir -p /opt/modbus
+RUN mkdir -p /opt/modbus /opt/solar
 COPY MODBUS.md /opt/modbus/MODBUS.md
 COPY modbus/ /opt/modbus/
+COPY SOLAR.md /opt/solar/SOLAR.md
 
 # Copy and install image service.
 COPY image-service/ /opt/image-service/
@@ -109,9 +110,11 @@ RUN mkdir -p /usr/libexec/codex-terminal \
     && chmod +x /opt/scripts/*.sh \
     && chmod +x /opt/scripts/persist-install \
     && chmod +x /opt/scripts/modbus-* \
+    && chmod +x /opt/scripts/solar-* \
     && ln -sf /opt/scripts/modbus-read /usr/local/bin/modbus-read \
     && ln -sf /opt/scripts/modbus-scan /usr/local/bin/modbus-scan \
-    && ln -sf /opt/scripts/modbus-toolbox /usr/local/bin/modbus-toolbox
+    && ln -sf /opt/scripts/modbus-toolbox /usr/local/bin/modbus-toolbox \
+    && ln -sf /opt/scripts/solar-toolbox /usr/local/bin/solar-toolbox
 
 # Use exec form for better signal handling.
 CMD ["/run.sh"]
