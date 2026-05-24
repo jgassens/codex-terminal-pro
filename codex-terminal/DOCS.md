@@ -179,6 +179,23 @@ scrollback.
 4. Reload YAML only if the check passes.
 5. Restart Home Assistant only after explicit confirmation.
 
+## Codex Environment Briefing
+
+The add-on installs `codex-terminal-briefing` and writes its output to
+`/config/CODEX_TERMINAL_PRO.md` on startup. This is the durable briefing for
+Codex Terminal Pro's wrapper behavior, tools, paths, and safety boundaries.
+
+Ask Codex to run this when it seems unaware of the add-on environment:
+
+```bash
+codex-terminal-briefing
+```
+
+The briefing covers `,,` shell dispatch, `codex-shell-dispatch`, `ha`,
+`supervisor-api`, Shell mode, mobile command input, `solar-toolbox`,
+`modbus-toolbox`, `modbus-scan`, `modbus-read`, and the sensitive files it
+should avoid.
+
 ## Supervisor Broker Guardrail
 
 The add-on keeps `hassio_role: manager` so legitimate Home Assistant management

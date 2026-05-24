@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cat <<'BRIEFING'
+# Codex Terminal Pro Environment Briefing
+
+You are running inside Codex Terminal Pro, a Home Assistant add-on for Codex.
+Treat this file as the local map of the room.
+
+## High-Priority Rules
+
+- Work from `/config` unless the human explicitly asks for another path.
+- Do not print, copy, or inspect secrets such as `/data/.codex/auth.json` or
+  `/data/.supervisor/token`.
+- Use read-only inspection before changing Home Assistant configuration.
+- Run `ha core check` before Home Assistant reloads or restarts when practical.
+- Never auto-answer a Supervisor broker challenge from Codex's normal command
+  path. If a broker challenge appears unexpectedly, stop and explain it.
+
+## Shell Dispatch
+
+- `,,` is direct human shell dispatch, not a Codex prompt.
+- If the human prompt starts with `,,`, strip the prefix and run the rest with
+  `codex-shell-dispatch`.
+- Do not ask for a second confirmation before using `codex-shell-dispatch` for
+  a `,,` prompt. The prefix is the human's direct instruction to use the shell.
+- Examples:
+  - `,,ha store reload` -> `codex-shell-dispatch ha store reload`
+  - `,, supervisor-api -X POST /core/api/services/automation/reload` ->
+    `codex-shell-dispatch supervisor-api -X POST /core/api/services/automation/reload`
+
+## Terminal Surfaces
+
+- The web wrapper has Codex mode and Shell mode.
+- Codex mode shows the Codex TUI.
+- Shell mode is a real `/config` shell in a separate tmux window.
+- Commands typed in Shell mode, or dispatched with `,,`, are treated as human
+  shell commands by the broker.
+- Mobile uses a native command bar; the ttyd iframe remains the live display.
+
+## Home Assistant Tools
+
+- `ha`: Home Assistant CLI, routed through the Supervisor broker.
+- `supervisor-api`: direct Supervisor HTTP helper, also brokered.
+- `codex-shell-dispatch`: sends a human `,,` command to the hidden Shell pane
+  and returns completed output to the Codex view.
+- `codex-auth-helper`: login/import helper for Codex credentials.
+- `codex-session-picker`: menu for starting or resuming Codex sessions.
+- `persist-install`: persistent APK/Python package helper.
+
+## Solar, Battery, Inverter, And Modbus Tools
+
+- `solar-toolbox`: solar commissioning and diagnostics guide.
+- `solar-toolbox audit-ha --config /config`: read-only Home Assistant solar
+  surface audit.
+- `solar-toolbox snapshot-plan`: pre-change backup and evidence checklist.
+- `modbus-toolbox`: Modbus helper overview.
+- `modbus-scan`: read-only TCP/RTU discovery helper.
+- `modbus-read`: read-only register read helper.
+- Reference docs:
+  - `/opt/solar/SOLAR.md`
+  - `/opt/modbus/MODBUS.md`
+
+## Operating Style For Power Systems
+
+- Start with topology: grid-tied, hybrid, backup-loads, self-supply, off-grid,
+  or microgrid.
+- Identify inverter, battery/BMS, gateway/logger, production meter, service
+  point import/export meter, CT placement, Home Assistant integration, MQTT,
+  Modbus/SunSpec, vendor cloud, and utility control interfaces.
+- Prefer evidence from Home Assistant states/logs, read-only local telemetry,
+  and vendor UI/export surfaces.
+- Search current official sources when device firmware, standards, vendor
+  behavior, or integration behavior could have changed.
+- Do not write inverter, battery, relay, export-control, grid-support, or
+  transfer settings unless the human explicitly asks and the exact vendor
+  register/API plus rollback path are verified.
+
+## Useful Paths
+
+- Home Assistant config: `/config`
+- Codex home: `/data/.codex`
+- Uploaded images: `/data/images`
+- Terminal transcript: `/data/logs/codex-terminal.log`
+- Broker audit log: `/data/logs/supervisor-broker.log`
+- Full add-on guidance: `/config/AGENTS.codex-terminal-pro.md`
+- This briefing: `/config/CODEX_TERMINAL_PRO.md`
+
+## If You Are Unsure
+
+Run `codex-terminal-briefing`, read `/config/CODEX_TERMINAL_PRO.md`, or inspect
+`/config/AGENTS.md` before guessing what the add-on can do.
+BRIEFING
+
+printf '\n## Detected Commands\n\n'
+for command_name in \
+    codex-shell-dispatch \
+    codex-terminal-briefing \
+    codex-auth-helper \
+    codex-session-picker \
+    persist-install \
+    ha \
+    supervisor-api \
+    solar-toolbox \
+    modbus-toolbox \
+    modbus-scan \
+    modbus-read \
+    gh \
+    rg \
+    jq \
+    yq \
+    tmux \
+    ttyd
+do
+    if command_path="$(command -v "$command_name" 2>/dev/null)"; then
+        printf -- '- `%s`: `%s`\n' "$command_name" "$command_path"
+    else
+        printf -- '- `%s`: not found in PATH\n' "$command_name"
+    fi
+done

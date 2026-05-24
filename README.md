@@ -162,6 +162,16 @@ file already exists, it preserves the user file, writes the full add-on guidance
 to `/config/AGENTS.codex-terminal-pro.md`, and appends or refreshes a small
 managed Codex Terminal Pro capabilities block inside `/config/AGENTS.md`.
 
+The add-on also writes `/config/CODEX_TERMINAL_PRO.md` and installs
+`codex-terminal-briefing`. That briefing is the short environment map for Codex:
+it lists shell dispatch behavior, Home Assistant helpers, broker rules,
+solar/Modbus tools, useful paths, and safety boundaries. If Codex seems unaware
+of the wrapper, ask it to run:
+
+```bash
+codex-terminal-briefing
+```
+
 That guidance tells Codex about `,,`, `codex-shell-dispatch`, `ha`,
 `supervisor-api`, `solar-toolbox`, `modbus-toolbox`, `modbus-scan`, and
 `modbus-read`.

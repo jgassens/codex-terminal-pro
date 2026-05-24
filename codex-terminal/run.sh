@@ -184,7 +184,7 @@ install_tools() {
 
 log_startup_diagnostics() {
     local app_name="${APP_NAME:-${ADDON_NAME:-Codex Terminal Pro}}"
-    local app_version="${BUILD_VERSION:-${APP_VERSION:-0.1.32}}"
+    local app_version="${BUILD_VERSION:-${APP_VERSION:-0.1.41}}"
 
     bashio::log.info "Startup diagnostics:"
     bashio::log.info "  - Date: $(date)"
@@ -330,6 +330,9 @@ write_codex_terminal_agents_block() {
 
 - You are running inside Codex Terminal Pro for Home Assistant.
 - Work from `/config` unless the human explicitly asks otherwise.
+- If you are unsure what tools or behaviors this add-on provides, run
+  `codex-terminal-briefing` or read `/config/CODEX_TERMINAL_PRO.md` before
+  guessing.
 - Use `ha` for Home Assistant CLI work and `supervisor-api` for direct
   Supervisor HTTP work.
 - `,,` is a Codex Terminal Pro shell-dispatch prefix. If the human prompt starts
@@ -366,6 +369,7 @@ setup_supervisor_broker() {
     local broker_comma_dispatch_enabled
     local target_agents="/config/AGENTS.md"
     local fallback_agents="/config/AGENTS.codex-terminal-pro.md"
+    local briefing_file="/config/CODEX_TERMINAL_PRO.md"
 
     broker_enabled=$(bashio::config 'supervisor_broker_enabled' 'true')
     broker_ttl=$(normalize_nonnegative_int "$(bashio::config 'supervisor_broker_t1_ttl_seconds' '120')" "120")
@@ -403,14 +407,22 @@ BROKER_CONF
         chmod 755 "$guard_dir/supervisor-api"
     fi
 
+    if [ -f /opt/scripts/codex-terminal-briefing ]; then
+        cp /opt/scripts/codex-terminal-briefing /usr/local/bin/codex-terminal-briefing
+        chmod 755 /usr/local/bin/codex-terminal-briefing
+        /usr/local/bin/codex-terminal-briefing > "$briefing_file"
+        chmod 644 "$briefing_file"
+        bashio::log.info "Codex Terminal Pro briefing written to $briefing_file"
+    fi
+
     if [ -f /opt/scripts/codex-terminal-agents.md ]; then
+        cp /opt/scripts/codex-terminal-agents.md "$fallback_agents"
+        chmod 644 "$fallback_agents"
         if [ ! -e "$target_agents" ]; then
-            cp /opt/scripts/codex-terminal-agents.md "$target_agents"
+            cp "$fallback_agents" "$target_agents"
             chmod 644 "$target_agents"
-            bashio::log.info "Installed Codex Terminal Pro agent guidance at $target_agents"
+            bashio::log.info "Installed Codex Terminal Pro agent guidance at $target_agents and $fallback_agents"
         else
-            cp /opt/scripts/codex-terminal-agents.md "$fallback_agents"
-            chmod 644 "$fallback_agents"
             write_codex_terminal_agents_block "$target_agents"
             bashio::log.info "Existing /config/AGENTS.md preserved and updated with managed Codex Terminal Pro guidance; full guidance also written to $fallback_agents"
         fi
@@ -426,16 +438,16 @@ get_codex_launch_command() {
 
     if [ "$auto_launch_codex" = "true" ]; then
         if [ -f /usr/local/bin/codex-session-picker ]; then
-            echo "cd /config && clear && echo 'Welcome to Codex Terminal Pro' && echo '' && echo 'Starting Codex in /config...' && sleep 1 && codex; /usr/local/bin/codex-session-picker"
+            echo "cd /config && clear && echo 'Welcome to Codex Terminal Pro' && echo 'Briefing: /config/CODEX_TERMINAL_PRO.md or codex-terminal-briefing' && echo '' && echo 'Starting Codex in /config...' && sleep 1 && codex; /usr/local/bin/codex-session-picker"
         else
-            echo "cd /config && clear && echo 'Welcome to Codex Terminal Pro' && echo '' && echo 'Starting Codex in /config...' && sleep 1 && codex"
+            echo "cd /config && clear && echo 'Welcome to Codex Terminal Pro' && echo 'Briefing: /config/CODEX_TERMINAL_PRO.md or codex-terminal-briefing' && echo '' && echo 'Starting Codex in /config...' && sleep 1 && codex"
         fi
     else
         if [ -f /usr/local/bin/codex-session-picker ]; then
             echo "cd /config && clear && /usr/local/bin/codex-session-picker"
         else
             bashio::log.warning "Session picker not found, falling back to Codex auto-launch"
-            echo "cd /config && clear && echo 'Welcome to Codex Terminal Pro' && echo '' && echo 'Starting Codex in /config...' && sleep 1 && codex"
+            echo "cd /config && clear && echo 'Welcome to Codex Terminal Pro' && echo 'Briefing: /config/CODEX_TERMINAL_PRO.md or codex-terminal-briefing' && echo '' && echo 'Starting Codex in /config...' && sleep 1 && codex"
         fi
     fi
 }

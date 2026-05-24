@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.41
+
+- Add `codex-terminal-briefing`, a local environment briefing command that
+  lists Codex Terminal Pro behaviors, safety rules, Home Assistant helpers,
+  shell dispatch, solar/Modbus tools, and useful paths.
+- Write the same briefing to `/config/CODEX_TERMINAL_PRO.md` on startup so
+  Codex and the human have a stable add-on feature map to inspect.
+- Strengthen installed agent guidance to run the briefing before guessing about
+  available tools or wrapper behavior.
+- Show the briefing path in the terminal startup banner.
+
 ## 0.1.40
 
 - Attach an xterm.js custom key handler so typed `,,` shell-dispatch commands

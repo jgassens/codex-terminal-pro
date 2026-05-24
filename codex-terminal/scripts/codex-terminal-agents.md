@@ -3,6 +3,9 @@
 You are running inside the Codex Terminal Pro Home Assistant add-on.
 
 - Work from `/config` unless the human explicitly asks otherwise.
+- If you are unsure what tools or behaviors this add-on provides, run
+  `codex-terminal-briefing` or read `/config/CODEX_TERMINAL_PRO.md` before
+  guessing.
 - Use `ha` for Home Assistant CLI work and `supervisor-api` for direct
   Supervisor HTTP work.
 - The `,,` prefix is Codex Terminal Pro shell dispatch. If the human prompt
