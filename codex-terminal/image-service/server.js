@@ -31,6 +31,7 @@ const TMUX_SESSION = process.env.TMUX_SESSION || CODEX_TMUX_TARGET.split(':')[0]
 const RAW_TERMINAL_WINDOW = process.env.RAW_TERMINAL_WINDOW || 'raw-shell';
 const RAW_TMUX_TARGET = `${TMUX_SESSION}:${RAW_TERMINAL_WINDOW}.0`;
 const UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
+const RAW_SHELL_COMMAND_MAX_LENGTH = 4096;
 const IMAGE_RETENTION_DAYS = parseNonNegativeInt(process.env.IMAGE_RETENTION_DAYS, 30);
 const IMAGE_RETENTION_MAX_BYTES = parseNonNegativeInt(process.env.IMAGE_RETENTION_MAX_BYTES, 256 * 1024 * 1024);
 const SCROLL_CONTROL_ACTIONS = new Set(['scroll-up', 'scroll-down', 'scroll-bottom']);
@@ -233,6 +234,48 @@ function cancelCopyModeIfNeeded(callback, target = activeTmuxTarget()) {
     }, target);
 }
 
+function pasteTextToTarget(text, target, logContext, callback) {
+    cancelCopyModeIfNeeded((modeErr) => {
+        if (modeErr) {
+            callback(modeErr);
+            return;
+        }
+
+        const bufferName = `codex-terminal-paste-${Date.now()}`;
+        const loader = spawn('tmux', ['load-buffer', '-b', bufferName, '-'], {
+            stdio: ['pipe', 'ignore', 'pipe']
+        });
+        let stderr = '';
+        let responded = false;
+
+        loader.stderr.on('data', (chunk) => {
+            stderr += chunk.toString();
+        });
+
+        loader.on('error', (err) => {
+            console.error(`Failed to load tmux paste buffer for ${logContext}:`, err.message);
+            responded = true;
+            callback(err);
+        });
+
+        loader.on('close', (code) => {
+            if (responded) {
+                return;
+            }
+
+            if (code !== 0) {
+                const err = new Error(stderr.trim() || 'tmux load-buffer failed');
+                callback(err);
+                return;
+            }
+
+            runTmux(['paste-buffer', '-p', '-d', '-b', bufferName, '-t', target], callback);
+        });
+
+        loader.stdin.end(text);
+    }, target);
+}
+
 function ensureRawTerminal(callback) {
     runTmux(['list-windows', '-t', TMUX_SESSION, '-F', '#{window_name}'], (listErr, stdout) => {
         if (listErr) {
@@ -255,7 +298,7 @@ function ensureRawTerminal(callback) {
             RAW_TERMINAL_WINDOW,
             '-c',
             '/config',
-            '/bin/bash -l'
+            'env CODEX_TERMINAL_HUMAN_SHELL=1 /bin/bash -l'
         ], callback);
     });
 }
@@ -301,6 +344,24 @@ function selectTerminalMode(mode, callback) {
     }
 
     selectTargetWindow();
+}
+
+function dispatchRawShellCommand(command, callback) {
+    selectTerminalMode('raw', (selectErr) => {
+        if (selectErr) {
+            callback(selectErr);
+            return;
+        }
+
+        pasteTextToTarget(command, RAW_TMUX_TARGET, RAW_TMUX_TARGET, (pasteErr) => {
+            if (pasteErr) {
+                callback(pasteErr);
+                return;
+            }
+
+            runTmux(['send-keys', '-t', RAW_TMUX_TARGET, 'Enter'], callback);
+        });
+    });
 }
 
 function runTerminalControl(action, callback) {
@@ -658,6 +719,38 @@ app.post('/terminal-paste', (req, res) => {
 
         loader.stdin.end(text);
     }, target);
+});
+
+// Dispatch a human-prefixed command to the raw shell pane. The frontend only
+// calls this after the user types ",," at the Codex prompt or mobile command
+// bar; it is not used by Codex's own command execution path.
+app.post('/terminal-shell-command', (req, res) => {
+    const command = typeof req.body?.command === 'string' ? req.body.command.trim() : '';
+
+    if (!isSameOriginBrowserRequest(req)) {
+        return res.status(403).json({ success: false, error: 'Cross-origin shell command dispatch is not allowed' });
+    }
+
+    if (!command) {
+        return res.status(400).json({ success: false, error: 'No shell command provided' });
+    }
+
+    if (command.length > RAW_SHELL_COMMAND_MAX_LENGTH) {
+        return res.status(400).json({ success: false, error: 'Shell command is too long' });
+    }
+
+    if (hasControlCharacters(command)) {
+        return res.status(400).json({ success: false, error: 'Shell command contains unsupported control characters' });
+    }
+
+    dispatchRawShellCommand(command, (err) => {
+        if (err) {
+            console.error(`Failed to dispatch raw shell command to ${RAW_TMUX_TARGET}:`, err.message);
+            return res.status(502).json({ success: false, error: 'Failed to dispatch shell command' });
+        }
+
+        res.json({ success: true, mode: activeTerminalMode });
+    });
 });
 
 app.post('/terminal-control', (req, res) => {

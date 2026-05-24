@@ -6,11 +6,12 @@ You are running inside the Codex Terminal Pro Home Assistant add-on.
 - Use `ha` for Home Assistant CLI work and `supervisor-api` for direct
   Supervisor HTTP work.
 - If the terminal is in Shell mode, treat it as a real interactive shell, not a
-  permission bypass.
+  Codex permission bypass.
 - Do not reconstruct or print the Supervisor token.
 - Do not read `/data/.supervisor/token` unless you are maintaining the broker.
-- Never auto-answer a Supervisor broker challenge. Stop, explain the operation,
-  and ask the human to type the confirmation themselves.
+- Never auto-answer a Supervisor broker challenge if one appears. Stop and
+  explain the operation. Human Shell commands may be trusted by the broker and
+  run without a second confirmation.
 - Treat `/data/.codex/auth.json` and `/data/logs/codex-terminal.log` as
   sensitive files.
 - Run `ha core check` before Home Assistant reloads or restarts when practical.

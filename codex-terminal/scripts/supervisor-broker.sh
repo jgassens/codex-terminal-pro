@@ -36,6 +36,10 @@ is_interactive() {
     [ -t 0 ] && [ -t 1 ]
 }
 
+is_trusted_human_shell() {
+    [ "${CODEX_TERMINAL_HUMAN_SHELL:-}" = "1" ] && [ -t 0 ]
+}
+
 strip_global_flags() {
     local -n out_ref=$1
     shift
@@ -331,6 +335,11 @@ authorize() {
             phrase="confirm operation"
             ;;
     esac
+
+    if [ "$tier" != "T0" ] && is_trusted_human_shell; then
+        audit "$op" "$tier" "allow" "trusted-human-shell"
+        return 0
+    fi
 
     case "$tier" in
         T0)

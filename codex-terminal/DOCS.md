@@ -40,11 +40,10 @@ clear, tmux page up/down, and return-to-prompt controls.
 
 Use **Shell** mode for raw terminal commands. It switches the active tmux window
 to a real interactive `/config` login shell while keeping ttyd as the display.
-Use **Codex** mode to return to the Codex TUI. Type `,,` by itself on the
-current prompt line to toggle between Codex and Shell without using the switch.
-Shell mode deliberately keeps the brokered `ha` and `supervisor-api` paths, so
-restart, stop, update, install, uninstall, host, OS, and backup operations still
-stop for human typed confirmation inside the terminal.
+Use **Codex** mode to return to the Codex TUI. From Codex mode, prefix a line
+with `,,` to send the rest directly to the Shell pane, for example
+`,, ha store reload` or `,,ha store reload`. The display switches to Shell so
+the command and output are visible.
 
 The add-on includes read-only Modbus helpers for Home Assistant troubleshooting
 and Schneider Electric discovery work. Run `modbus-toolbox` in the terminal for
@@ -188,8 +187,9 @@ confirmation broker.
 - Non-interactive risky operations are refused.
 - Direct Supervisor calls should use `supervisor-api`, which applies the same
   broker policy.
-- Shell mode uses these same brokered commands and never auto-answers the
-  confirmation prompts.
+- Commands typed in the Shell pane or sent from Codex with `,,` are treated as
+  human shell commands and run directly. Codex/non-interactive operations still
+  use the broker guardrail.
 
 The broker writes decisions to `/data/logs/supervisor-broker.log`. This log is
 for accountability and troubleshooting, not tamper-proof audit. A determined

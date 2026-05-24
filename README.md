@@ -109,11 +109,10 @@ prompt.
 
 Use the **Shell** mode switch for raw terminal commands. It changes the ttyd
 view to a real interactive tmux shell in `/config`; **Codex** switches back to
-the Codex TUI window. Type `,,` by itself on the current prompt line to toggle
-between Codex and Shell without using the switch. The shell still uses the
-brokered `ha` and `supervisor-api` commands, so restart, stop, update, install,
-uninstall, host, OS, and backup operations require the human to type the
-confirmation in the terminal.
+the Codex TUI window. From Codex mode, prefix a line with `,,` to send the rest
+directly to the Shell pane, for example `,, ha store reload` or
+`,,ha store reload`. The display switches to Shell so the command and output are
+visible.
 
 ## Modbus Toolbox
 
@@ -179,8 +178,9 @@ paste it into tickets, or share it in chat.
 - Ask Codex to inspect first, then show diffs before edits.
 - Run `ha core check` before reloads or restarts.
 - Do not restart Home Assistant until config checks pass.
-- Shell mode still uses brokered `ha` and `supervisor-api` commands; do not
-  auto-answer restart, stop, update, host, OS, backup, or add-on confirmations.
+- Codex/non-interactive `ha` and `supervisor-api` operations still use the
+  broker guardrail. Commands typed in the Shell pane or sent with `,,` are
+  treated as human shell commands and run directly.
 - Do not add broader mounts unless there is a concrete need.
 
 ## Architecture Support

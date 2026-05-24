@@ -47,12 +47,10 @@ history arrows, tmux page up/down, and return-to-prompt controls.
 
 The **Codex/Shell** mode switch keeps the same ttyd display but changes the
 active tmux window. **Codex** shows the Codex TUI; **Shell** opens a real
-interactive `/config` login shell for raw terminal commands. Type `,,` by
-itself on the current prompt line to toggle between Codex and Shell without
-using the switch. Shell mode does not bypass the Supervisor broker: Home
-Assistant restart, stop, update, install, uninstall, host, OS, and backup
-operations still require the human to type the broker confirmation in the
-terminal.
+interactive `/config` login shell for raw terminal commands. From Codex mode,
+prefix a line with `,,` to send the rest directly to the Shell pane, for
+example `,, ha store reload` or `,,ha store reload`. The display switches to
+Shell so the command and output are visible.
 
 The add-on also includes a read-only Modbus toolbox for Home Assistant and
 Schneider Electric troubleshooting: `modbus-toolbox`, `modbus-scan`,
@@ -130,8 +128,8 @@ persistent_pip_packages: []
   terminal session.
 - `image_retention_days` and `image_retention_max_bytes`: Clean up old uploaded
   images from `/data/images`.
-- `supervisor_broker_enabled`: Require typed confirmation for risky Home
-  Assistant management operations from the default `ha` path.
+- `supervisor_broker_enabled`: Require confirmation for risky Home Assistant
+  management operations outside the trusted human Shell pane.
 - `supervisor_broker_t1_ttl_seconds`: Short reuse window for routine
   management confirmations.
 - `persistent_apk_packages`: APK packages to reinstall into persistent storage.
@@ -174,8 +172,9 @@ commands such as info, logs, stats, and checks run normally. Routine management
 commands such as restart, reload, start, stop, update, rebuild, and options ask
 for a typed confirmation. High-risk host, OS, backup, install, uninstall, and
 delete operations require a fresh nonce and a reason.
-Shell mode uses the same brokered `ha` and `supervisor-api` commands and does
-not auto-answer confirmations.
+Codex/non-interactive operations still use that guardrail. Commands typed in the
+Shell pane or sent from Codex with `,,` are treated as human shell commands and
+run directly, with broker decisions audited as trusted shell activity.
 
 This prevents many accidental agent-driven operations during normal use. It
 does not prevent a determined root process from bypassing the wrapper, reading

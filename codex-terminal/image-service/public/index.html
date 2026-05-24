@@ -948,7 +948,7 @@
         const mobileInputRow = document.getElementById('mobile-input-row');
         const mobileTerminalInput = document.getElementById('mobile-terminal-input');
         const mobileSendBtn = document.getElementById('mobile-send-btn');
-        const TERMINAL_MODE_ESCAPE = ',,';
+        const SHELL_DISPATCH_PREFIX = ',,';
         let terminalLineBuffer = '';
 
         function setStatus(message, type = '', persistent = false) {
@@ -978,14 +978,14 @@
 
             if (mobileTerminalInput) {
                 mobileTerminalInput.placeholder = terminalMode === 'raw'
-                    ? `Type shell command (${TERMINAL_MODE_ESCAPE} for Codex)`
-                    : `Type Codex prompt (${TERMINAL_MODE_ESCAPE} for shell)`;
+                    ? 'Type shell command'
+                    : `Type Codex prompt (${SHELL_DISPATCH_PREFIX} shell command)`;
             }
 
             if (announce) {
                 setStatus(
                     terminalMode === 'raw'
-                        ? 'Raw shell mode. Broker confirmations must be typed by you.'
+                        ? 'Raw shell mode'
                         : 'Codex mode',
                     'success',
                     terminalMode === 'raw'
@@ -1041,36 +1041,80 @@
             terminalLineBuffer = '';
         }
 
-        function terminalModeForEscape(text) {
-            if (text.trim() !== TERMINAL_MODE_ESCAPE) {
-                return '';
+        function shellCommandFromDispatchPrefix(text) {
+            if (terminalMode !== 'codex') {
+                return null;
             }
-            return terminalMode === 'codex' ? 'raw' : 'codex';
+
+            const normalized = text.replace(/^\s+/, '');
+            if (!normalized.startsWith(SHELL_DISPATCH_PREFIX)) {
+                return null;
+            }
+
+            return normalized.slice(SHELL_DISPATCH_PREFIX.length).replace(/^\s+/, '');
         }
 
-        async function switchModeFromPromptEscape(mode) {
+        async function dispatchShellCommand(command) {
+            try {
+                const response = await fetch(ingressPath('terminal-shell-command'), {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ command })
+                });
+
+                const result = await response.json().catch(() => ({}));
+                if (!response.ok || !result.success) {
+                    throw new Error(result.error || 'Shell command dispatch failed');
+                }
+
+                setTerminalModeState(result.mode || 'raw');
+                scheduleTerminalViewportSync(true);
+                if (isMobileInputMode()) {
+                    focusMobileTerminalInput();
+                } else {
+                    focusTerminal(true);
+                }
+                setStatus('Sent to shell', 'success', false);
+                return true;
+            } catch (err) {
+                console.log('Shell command dispatch failed:', err);
+                setStatus('Could not send command to shell', 'error', false);
+                return false;
+            }
+        }
+
+        async function dispatchShellCommandFromPrompt(command) {
             const cleared = await sendTerminalControl('ctrl-u');
             if (!cleared) {
-                console.log('Could not clear terminal prompt before mode switch');
+                console.log('Could not clear Codex prompt before shell dispatch');
             }
-            await switchTerminalMode(mode);
+
+            if (!command) {
+                setStatus(`Type a shell command after ${SHELL_DISPATCH_PREFIX}`, 'error', false);
+                focusTerminal(true);
+                return;
+            }
+
+            await dispatchShellCommand(command);
         }
 
-        function trackTerminalPromptEscape(event) {
+        function trackTerminalPromptDispatch(event) {
             if (event.defaultPrevented || event.isComposing) {
                 return;
             }
 
             if (event.key === 'Enter') {
-                const requestedMode = terminalModeForEscape(terminalLineBuffer);
+                const shellCommand = shellCommandFromDispatchPrefix(terminalLineBuffer);
                 resetTerminalLineBuffer();
-                if (requestedMode) {
+                if (shellCommand !== null) {
                     event.preventDefault();
                     event.stopPropagation();
                     if (typeof event.stopImmediatePropagation === 'function') {
                         event.stopImmediatePropagation();
                     }
-                    switchModeFromPromptEscape(requestedMode);
+                    dispatchShellCommandFromPrompt(shellCommand);
                 }
                 return;
             }
@@ -1153,12 +1197,18 @@
             }
 
             const text = mobileTerminalInput.value;
-            const requestedMode = terminalModeForEscape(text);
-            if (requestedMode) {
+            const shellCommand = shellCommandFromDispatchPrefix(text);
+            if (shellCommand !== null) {
+                if (!shellCommand) {
+                    setStatus(`Type a shell command after ${SHELL_DISPATCH_PREFIX}`, 'error', false);
+                    focusMobileTerminalInput();
+                    return;
+                }
+
                 mobileSendBtn.disabled = true;
                 try {
-                    const switched = await switchTerminalMode(requestedMode);
-                    if (switched) {
+                    const dispatched = await dispatchShellCommand(shellCommand);
+                    if (dispatched) {
                         mobileTerminalInput.value = '';
                         resizeMobileTerminalInput();
                     }
@@ -1387,7 +1437,7 @@
                     };
 
                     iframeDocument.addEventListener('selectionchange', rememberTerminalSelection, true);
-                    iframeDocument.addEventListener('keydown', trackTerminalPromptEscape, { capture: true });
+                    iframeDocument.addEventListener('keydown', trackTerminalPromptDispatch, { capture: true });
                     iframeDocument.addEventListener('mousedown', rememberDragStart, true);
                     iframeDocument.addEventListener('mouseup', copyDraggedTerminalText, true);
                     iframeDocument.addEventListener('touchstart', rememberTouchSelectionStart, { capture: true, passive: false });

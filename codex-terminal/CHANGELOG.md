@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.37
+
+- Change `,,` from a mode toggle into a shell dispatch prefix: `,, ha store
+  reload` and `,,ha store reload` send `ha store reload` directly to the Shell
+  pane and switch the display there.
+- Mark the Shell pane as a trusted human shell so brokered `ha` and
+  `supervisor-api` commands typed there, or dispatched there with `,,`, do not
+  require a second confirmation. Codex/non-interactive operations remain
+  broker guarded.
+
 ## 0.1.36
 
 - Replace the `!` shell escape with an exact `,,` prompt-line escape because
