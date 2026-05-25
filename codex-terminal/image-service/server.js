@@ -939,6 +939,39 @@ app.post('/terminal-control', (req, res) => {
 // This allows ttyd to work through Home Assistant ingress without publishing
 // the ttyd port on the host. Keep a reference so websocket upgrades are routed
 // explicitly by the HTTP server below.
+function shouldRedirectTerminalDocumentRequest(req) {
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+        return false;
+    }
+
+    const terminalPath = `${req.baseUrl || ''}${req.path || ''}`.replace(/\/+$/, '') || '/';
+    if (terminalPath !== '/terminal') {
+        return false;
+    }
+
+    const acceptsHtml = String(req.get('accept') || '').includes('text/html');
+    if (!acceptsHtml) {
+        return false;
+    }
+
+    const fetchDest = String(req.get('sec-fetch-dest') || '').toLowerCase();
+    if (req.query?.embedded === '1' || fetchDest === 'iframe') {
+        return false;
+    }
+
+    return true;
+}
+
+app.use('/terminal', (req, res, next) => {
+    if (!shouldRedirectTerminalDocumentRequest(req)) {
+        next();
+        return;
+    }
+
+    res.setHeader('Cache-Control', 'no-store');
+    res.redirect(302, req.originalUrl.endsWith('/') ? '../' : './');
+});
+
 const terminalProxy = createProxyMiddleware({
     target: `http://localhost:${TTYD_PORT}`,
     changeOrigin: true,

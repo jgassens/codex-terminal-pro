@@ -954,7 +954,7 @@
             iframe.addEventListener('load', () => {
                 scheduleTerminalViewportSync(false);
             });
-            iframe.src = ingressPath('terminal/');
+            iframe.src = ingressPath('terminal/?embedded=1');
             installTerminalSelectionCopy();
         }
 

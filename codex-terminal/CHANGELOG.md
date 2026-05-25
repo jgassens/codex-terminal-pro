@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.43
+
+- Redirect direct top-level `/terminal/` loads back to the Codex Terminal Pro
+  wrapper while keeping the embedded ttyd iframe working.
+- Mark the wrapper iframe's ttyd URL as embedded so Home Assistant or browser
+  history cannot strand users on raw ttyd without upload controls, mobile input,
+  or `,,` shell dispatch interception.
+
 ## 1.42
 
 - Move Codex Terminal Pro to the 1.x release line for the Home Assistant-native
