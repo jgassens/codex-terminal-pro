@@ -986,6 +986,7 @@
         let latestShellOutput = '';
         let lastPrintableKey = null;
         let lastPasteText = null;
+        let lastTerminalEventSignature = null;
         const trackedTerminalEvents = new WeakSet();
 
         function setStatus(message, type = '', persistent = false) {
@@ -1131,6 +1132,26 @@
             }
 
             trackedTerminalEvents.add(event);
+
+            const signature = [
+                event.type || '',
+                event.key || '',
+                event.code || '',
+                event.inputType || '',
+                event.data || '',
+                event.timeStamp || ''
+            ].join(':');
+            const now = Date.now();
+            if (
+                signature &&
+                lastTerminalEventSignature &&
+                lastTerminalEventSignature.signature === signature &&
+                now - lastTerminalEventSignature.at < 100
+            ) {
+                return false;
+            }
+
+            lastTerminalEventSignature = { signature, at: now };
             return true;
         }
 
@@ -1204,6 +1225,11 @@
         }
 
         function dispatchTerminalLineBuffer(event) {
+            if (terminalMode !== 'codex') {
+                resetTerminalLineBuffer();
+                return false;
+            }
+
             const shellCommand = shellCommandFromDispatchPrefix(terminalLineBuffer);
             resetTerminalLineBuffer();
             if (shellCommand === null) {
@@ -1217,6 +1243,11 @@
 
         function handleTerminalPromptKeydown(event) {
             if (event.defaultPrevented || event.isComposing) {
+                return true;
+            }
+
+            if (terminalMode !== 'codex') {
+                resetTerminalLineBuffer();
                 return true;
             }
 
@@ -1275,6 +1306,11 @@
             }
 
             if (event.defaultPrevented || event.isComposing) {
+                return;
+            }
+
+            if (terminalMode !== 'codex') {
+                resetTerminalLineBuffer();
                 return;
             }
 

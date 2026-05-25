@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.44
+
+- Restrict direct terminal `,,` interception to Codex mode and add duplicate
+  event filtering so browser key-event fanout cannot poison the dispatch buffer.
+- Add a trusted raw Shell profile fallback so `,,ha ...` and `,, ha ...` typed
+  into Bash execute as human shell commands instead of returning
+  `command not found`.
+- Recover prefixed raw-shell commands from duplicated-key command names such as
+  `,,hhaa` when the collapsed command exists.
+
 ## 1.43
 
 - Redirect direct top-level `/terminal/` loads back to the Codex Terminal Pro

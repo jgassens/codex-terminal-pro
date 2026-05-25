@@ -192,7 +192,7 @@ install_tools() {
 
 log_startup_diagnostics() {
     local app_name="${APP_NAME:-${ADDON_NAME:-Codex Terminal Pro}}"
-    local app_version="${BUILD_VERSION:-${APP_VERSION:-1.42}}"
+    local app_version="${BUILD_VERSION:-${APP_VERSION:-1.44}}"
 
     bashio::log.info "Startup diagnostics:"
     bashio::log.info "  - Date: $(date)"
@@ -267,6 +267,16 @@ setup_session_picker() {
         fi
         chmod +x /usr/local/bin/codex-auth-helper
         bashio::log.info "Authentication helper installed: codex-auth-helper"
+    fi
+}
+
+setup_shell_dispatch_profile() {
+    if [ -f "/opt/scripts/codex-terminal-shell-dispatch.sh" ]; then
+        cp /opt/scripts/codex-terminal-shell-dispatch.sh /etc/profile.d/codex-terminal-shell-dispatch.sh
+        chmod 644 /etc/profile.d/codex-terminal-shell-dispatch.sh
+        bashio::log.info "Shell dispatch profile installed for raw Shell mode"
+    else
+        bashio::log.warning "Shell dispatch profile missing: /opt/scripts/codex-terminal-shell-dispatch.sh"
     fi
 }
 
@@ -800,6 +810,7 @@ main() {
     setup_ha_tools
     log_startup_diagnostics
     setup_session_picker
+    setup_shell_dispatch_profile
     setup_persistent_packages
     setup_supervisor_broker
     run_health_check_background
