@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.45
+
+- Harden `,,` shell dispatch against duplicate browser event fanout by locking
+  each tracked prompt line to one text source.
+- Repair clearly duplicated dispatch commands such as `,,,,hhaa ccoorer ...`
+  before sending them to the raw Shell pane, but only when the repaired command
+  resolves to an executable.
+- Extend the raw Shell fallback so a prefixed command that reaches Bash with
+  duplicated text can still recover the full command line.
+
 ## 1.44
 
 - Restrict direct terminal `,,` interception to Codex mode and add duplicate

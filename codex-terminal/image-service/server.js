@@ -21,6 +21,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { createProxyMiddleware } = require('http-proxy-middleware');
+const { normalizeShellCommandForDispatch } = require('./shell-command-normalizer');
 
 const app = express();
 const PORT = process.env.IMAGE_SERVICE_PORT || 7680;
@@ -879,7 +880,8 @@ app.post('/terminal-paste', (req, res) => {
 // calls this after the user types ",," at the Codex prompt or mobile command
 // bar; it is not used by Codex's own command execution path.
 app.post('/terminal-shell-command', (req, res) => {
-    const command = typeof req.body?.command === 'string' ? req.body.command.trim() : '';
+    const requestedCommand = typeof req.body?.command === 'string' ? req.body.command.trim() : '';
+    const command = normalizeShellCommandForDispatch(requestedCommand);
 
     if (!isSameOriginBrowserRequest(req)) {
         return res.status(403).json({ success: false, error: 'Cross-origin shell command dispatch is not allowed' });
@@ -905,6 +907,7 @@ app.post('/terminal-shell-command', (req, res) => {
 
         res.json({
             success: true,
+            command,
             mode: result.mode || activeTerminalMode,
             output: result.output || '',
             exitCode: result.exitCode,

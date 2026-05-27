@@ -986,7 +986,9 @@
         let latestShellOutput = '';
         let lastPrintableKey = null;
         let lastPasteText = null;
+        let terminalTextSource = null;
         let lastTerminalEventSignature = null;
+        let shellDispatchBlockInputUntil = 0;
         const trackedTerminalEvents = new WeakSet();
 
         function setStatus(message, type = '', persistent = false) {
@@ -1077,12 +1079,34 @@
 
         function resetTerminalLineBuffer() {
             terminalLineBuffer = '';
+            terminalTextSource = null;
             lastPrintableKey = null;
             lastPasteText = null;
         }
 
+        function shouldAcceptTerminalTextSource(source) {
+            if (!source) {
+                return true;
+            }
+
+            if (!terminalTextSource) {
+                terminalTextSource = source;
+                return true;
+            }
+
+            return terminalTextSource === source;
+        }
+
+        function shouldProcessTerminalEditSource(source) {
+            return !terminalTextSource || terminalTextSource === source;
+        }
+
         function appendTerminalLineText(text, source = '') {
             if (!text) {
+                return;
+            }
+
+            if (!shouldAcceptTerminalTextSource(source)) {
                 return;
             }
 
@@ -1118,6 +1142,48 @@
             return normalized.slice(SHELL_DISPATCH_PREFIX.length).replace(/^\s+/, '');
         }
 
+        function repairDuplicateFanout(text) {
+            const pending = [];
+            let repaired = '';
+
+            for (const char of String(text || '')) {
+                const index = pending.indexOf(char);
+                if (index !== -1 && index < 3) {
+                    pending.splice(index, 1);
+                    continue;
+                }
+
+                repaired += char;
+                pending.push(char);
+                if (pending.length > 3) {
+                    pending.shift();
+                }
+            }
+
+            return repaired.replace(/\s+/g, ' ').trim();
+        }
+
+        function normalizeDispatchCommand(command) {
+            let normalized = String(command || '').trim();
+            let strippedPrefixFragment = false;
+
+            while (normalized.startsWith(SHELL_DISPATCH_PREFIX)) {
+                normalized = normalized.slice(SHELL_DISPATCH_PREFIX.length).replace(/^\s+/, '');
+                strippedPrefixFragment = true;
+            }
+
+            if (!strippedPrefixFragment) {
+                return String(command || '').trim();
+            }
+
+            const repaired = repairDuplicateFanout(normalized);
+            const reduction = normalized.length > 0
+                ? (normalized.length - repaired.length) / normalized.length
+                : 0;
+
+            return reduction >= 0.35 ? repaired : normalized;
+        }
+
         function stopTerminalInputEvent(event) {
             event.preventDefault();
             event.stopPropagation();
@@ -1138,15 +1204,14 @@
                 event.key || '',
                 event.code || '',
                 event.inputType || '',
-                event.data || '',
-                event.timeStamp || ''
+                event.data || ''
             ].join(':');
             const now = Date.now();
             if (
                 signature &&
                 lastTerminalEventSignature &&
                 lastTerminalEventSignature.signature === signature &&
-                now - lastTerminalEventSignature.at < 100
+                now - lastTerminalEventSignature.at < 25
             ) {
                 return false;
             }
@@ -1195,7 +1260,7 @@
                     return true;
                 }
 
-                showShellOutput(command, result);
+                showShellOutput(result.command || command, result);
                 setStatus(
                     result.exitCode === 0 ? 'Shell command completed' : `Shell command exited ${result.exitCode}`,
                     result.exitCode === 0 ? 'success' : 'error',
@@ -1225,6 +1290,11 @@
         }
 
         function dispatchTerminalLineBuffer(event) {
+            if (Date.now() < shellDispatchBlockInputUntil) {
+                stopTerminalInputEvent(event);
+                return true;
+            }
+
             if (terminalMode !== 'codex') {
                 resetTerminalLineBuffer();
                 return false;
@@ -1237,11 +1307,12 @@
             }
 
             stopTerminalInputEvent(event);
-            dispatchShellCommandFromPrompt(shellCommand);
+            shellDispatchBlockInputUntil = Date.now() + 350;
+            dispatchShellCommandFromPrompt(normalizeDispatchCommand(shellCommand));
             return true;
         }
 
-        function handleTerminalPromptKeydown(event) {
+        function handleTerminalPromptKeydown(event, source = 'dom-keydown') {
             if (event.defaultPrevented || event.isComposing) {
                 return true;
             }
@@ -1256,7 +1327,9 @@
             }
 
             if (event.key === 'Backspace') {
-                terminalLineBuffer = terminalLineBuffer.slice(0, -1);
+                if (shouldProcessTerminalEditSource(source)) {
+                    terminalLineBuffer = terminalLineBuffer.slice(0, -1);
+                }
                 return true;
             }
 
@@ -1285,7 +1358,7 @@
             }
 
             if (event.key.length === 1) {
-                appendTerminalLineText(event.key, 'keydown');
+                appendTerminalLineText(event.key, source);
                 lastPrintableKey = { text: event.key, at: Date.now() };
             }
 
@@ -1297,7 +1370,7 @@
                 return;
             }
 
-            handleTerminalPromptKeydown(event);
+            handleTerminalPromptKeydown(event, 'dom-keydown');
         }
 
         function trackTerminalPromptBeforeInput(event) {
@@ -1320,7 +1393,9 @@
             }
 
             if (event.inputType === 'deleteContentBackward') {
-                terminalLineBuffer = terminalLineBuffer.slice(0, -1);
+                if (shouldProcessTerminalEditSource('beforeinput')) {
+                    terminalLineBuffer = terminalLineBuffer.slice(0, -1);
+                }
                 return;
             }
 
@@ -1356,7 +1431,7 @@
             if (command !== null && /[\r\n]$/.test(text)) {
                 stopTerminalInputEvent(event);
                 resetTerminalLineBuffer();
-                dispatchShellCommandFromPrompt(command);
+                dispatchShellCommandFromPrompt(normalizeDispatchCommand(command));
                 return;
             }
 
@@ -1692,7 +1767,7 @@
                                         return true;
                                     }
 
-                                    return handleTerminalPromptKeydown(event);
+                                    return handleTerminalPromptKeydown(event, 'xterm-keydown');
                                 });
                             }
                         } catch (err) {
