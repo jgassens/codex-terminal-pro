@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.46
+
+- Preserve logical command lines when copying mouse- or touch-dragged terminal
+  selections across soft-wrapped xterm rows, so wrapped commands paste back as
+  a single line.
+
 ## 1.45
 
 - Harden `,,` shell dispatch against duplicate browser event fanout by locking
