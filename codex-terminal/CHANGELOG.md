@@ -8,8 +8,10 @@
   but unsupported as `[tui].status_line` item IDs (`auto-review`,
   `permissions`, and `approval-mode`) so startup stays clean without
   clobbering the rest of the user's footer.
-- Use `fast-mode` instead of unsupported status-line token `auto-review` in the
-  fresh-install managed footer default.
+- Remove `auto-review` from the fresh-install managed footer default because
+  the pinned CLI does not accept it as a `[tui].status_line` item.
+- Keep `fast-mode` in the fresh-install managed footer default because it is
+  the separate, supported footer item for showing Fast mode state.
 
 ## 2.0.2
 
