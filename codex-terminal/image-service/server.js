@@ -27,6 +27,7 @@ const app = express();
 const PORT = process.env.IMAGE_SERVICE_PORT || 7680;
 const TTYD_PORT = process.env.TTYD_PORT || 7681;
 const UPLOAD_DIR = process.env.UPLOAD_DIR || '/data/images';
+const CONFIG_ROOT = process.env.HA_CONFIG_DIR || '/config';
 const CODEX_TMUX_TARGET = process.env.CODEX_TMUX_TARGET || process.env.TMUX_TARGET || 'codex-terminal:0.0';
 const TMUX_SESSION = process.env.TMUX_SESSION || CODEX_TMUX_TARGET.split(':')[0] || 'codex-terminal';
 const RAW_TERMINAL_WINDOW = process.env.RAW_TERMINAL_WINDOW || 'raw-shell';
@@ -36,6 +37,11 @@ const RAW_SHELL_COMMAND_MAX_LENGTH = 4096;
 const RAW_SHELL_COMMAND_TIMEOUT_MS = parseNonNegativeInt(process.env.RAW_SHELL_COMMAND_TIMEOUT_MS, 45000);
 const RAW_SHELL_CAPTURE_LINES = parseNonNegativeInt(process.env.RAW_SHELL_CAPTURE_LINES, 4000);
 const RAW_SHELL_OUTPUT_MAX_CHARS = parseNonNegativeInt(process.env.RAW_SHELL_OUTPUT_MAX_CHARS, 20000);
+const CHANGE_DESK_COMMAND_TIMEOUT_MS = parseNonNegativeInt(process.env.CHANGE_DESK_COMMAND_TIMEOUT_MS, 45000);
+const CHANGE_DESK_FAST_COMMAND_TIMEOUT_MS = parseNonNegativeInt(process.env.CHANGE_DESK_FAST_COMMAND_TIMEOUT_MS, 12000);
+const CHANGE_DESK_OUTPUT_MAX_CHARS = parseNonNegativeInt(process.env.CHANGE_DESK_OUTPUT_MAX_CHARS, 12000);
+const CHANGE_DESK_FILE_LIMIT = parseNonNegativeInt(process.env.CHANGE_DESK_FILE_LIMIT, 80);
+const CHANGE_DESK_GIT_PATHSPEC = ['.', ':!.claude'];
 const IMAGE_RETENTION_DAYS = parseNonNegativeInt(process.env.IMAGE_RETENTION_DAYS, 30);
 const IMAGE_RETENTION_MAX_BYTES = parseNonNegativeInt(process.env.IMAGE_RETENTION_MAX_BYTES, 256 * 1024 * 1024);
 const SCROLL_CONTROL_ACTIONS = new Set(['scroll-up', 'scroll-down', 'scroll-bottom']);
@@ -519,6 +525,382 @@ function dispatchRawShellCommand(command, callback) {
     });
 }
 
+function redactSensitiveText(value) {
+    return String(value || '')
+        .replace(/\/data\/\.codex\/auth\.json/g, '/data/.codex/[redacted-auth].json')
+        .replace(/\/data\/\.supervisor\/token/g, '/data/.supervisor/[redacted-token]')
+        .replace(/((?:TOKEN|SECRET|PASSWORD|PASS|KEY)[A-Z0-9_]*=)[^\s"']+/gi, '$1[redacted]')
+        .replace(/(Bearer\s+)[A-Za-z0-9._~+/-]+=*/gi, '$1[redacted]')
+        .replace(/sk-[A-Za-z0-9_-]{20,}/g, '[redacted-openai-key]')
+        .replace(/gh[pousr]_[A-Za-z0-9_]{20,}/g, '[redacted-github-token]');
+}
+
+function truncateChangeDeskText(value, maxChars = CHANGE_DESK_OUTPUT_MAX_CHARS) {
+    const text = redactSensitiveText(value);
+    if (text.length <= maxChars) {
+        return { text, truncated: false };
+    }
+
+    const notice = '\n...[output truncated]\n';
+    const keep = Math.max(0, maxChars - notice.length);
+    return {
+        text: `${text.slice(0, keep)}${notice}`,
+        truncated: true
+    };
+}
+
+function lineList(value) {
+    return String(value || '')
+        .replace(/\r/g, '')
+        .split('\n')
+        .map((line) => line.trimEnd())
+        .filter(Boolean);
+}
+
+function runChangeDeskCommand(command, args, options = {}) {
+    const timeout = options.timeout || CHANGE_DESK_COMMAND_TIMEOUT_MS;
+    const maxChars = options.maxChars || CHANGE_DESK_OUTPUT_MAX_CHARS;
+
+    return new Promise((resolve) => {
+        execFile(command, args, {
+            cwd: CONFIG_ROOT,
+            timeout,
+            maxBuffer: 1024 * 1024
+        }, (err, stdout = '', stderr = '') => {
+            const stdoutResult = truncateChangeDeskText(stdout, maxChars);
+            const stderrResult = truncateChangeDeskText(stderr, maxChars);
+            const combinedResult = truncateChangeDeskText(
+                [stdoutResult.text, stderrResult.text].filter(Boolean).join('\n'),
+                maxChars
+            );
+            const exitCode = err && Number.isInteger(err.code) ? err.code : (err ? null : 0);
+
+            resolve({
+                success: !err,
+                command,
+                args,
+                exitCode,
+                stdout: stdoutResult.text,
+                stderr: stderrResult.text,
+                output: combinedResult.text,
+                truncated: stdoutResult.truncated || stderrResult.truncated || combinedResult.truncated,
+                timedOut: Boolean(err?.killed || err?.signal === 'SIGTERM'),
+                notFound: err?.code === 'ENOENT',
+                error: err ? redactSensitiveText(err.message) : ''
+            });
+        });
+    });
+}
+
+function shortStatusPath(line) {
+    const rawPath = String(line || '').slice(3).trim();
+    if (!rawPath) {
+        return '';
+    }
+
+    const renamedPath = rawPath.includes(' -> ')
+        ? rawPath.split(' -> ').pop()
+        : rawPath;
+    return renamedPath.replace(/^"|"$/g, '');
+}
+
+function uniqueStatusPaths(lines) {
+    const seen = new Set();
+    const paths = [];
+
+    for (const line of lines) {
+        const filePath = shortStatusPath(line);
+        if (!filePath || seen.has(filePath)) {
+            continue;
+        }
+
+        seen.add(filePath);
+        paths.push(filePath);
+    }
+
+    return paths;
+}
+
+async function collectChangeDeskGit() {
+    const probe = await runChangeDeskCommand('git', ['rev-parse', '--show-toplevel'], {
+        timeout: CHANGE_DESK_FAST_COMMAND_TIMEOUT_MS,
+        maxChars: 4096
+    });
+
+    if (!probe.success) {
+        return {
+            available: false,
+            clean: null,
+            message: probe.notFound ? 'git is not available' : (probe.output || probe.error || 'not a git work tree')
+        };
+    }
+
+    const [branch, status, diffStat, stagedStat] = await Promise.all([
+        runChangeDeskCommand('git', ['branch', '--show-current'], {
+            timeout: CHANGE_DESK_FAST_COMMAND_TIMEOUT_MS,
+            maxChars: 4096
+        }),
+        runChangeDeskCommand('git', ['status', '--short', '--', ...CHANGE_DESK_GIT_PATHSPEC], {
+            timeout: CHANGE_DESK_FAST_COMMAND_TIMEOUT_MS,
+            maxChars: CHANGE_DESK_OUTPUT_MAX_CHARS
+        }),
+        runChangeDeskCommand('git', ['diff', '--stat', '--no-renames', '--', ...CHANGE_DESK_GIT_PATHSPEC], {
+            timeout: CHANGE_DESK_FAST_COMMAND_TIMEOUT_MS,
+            maxChars: CHANGE_DESK_OUTPUT_MAX_CHARS
+        }),
+        runChangeDeskCommand('git', ['diff', '--cached', '--stat', '--no-renames', '--', ...CHANGE_DESK_GIT_PATHSPEC], {
+            timeout: CHANGE_DESK_FAST_COMMAND_TIMEOUT_MS,
+            maxChars: CHANGE_DESK_OUTPUT_MAX_CHARS
+        })
+    ]);
+
+    const statusLines = lineList(status.stdout);
+    const changedFiles = uniqueStatusPaths(statusLines);
+
+    return {
+        available: true,
+        root: lineList(probe.stdout)[0] || CONFIG_ROOT,
+        branch: lineList(branch.stdout)[0] || '',
+        clean: statusLines.length === 0,
+        statusLines: statusLines.slice(0, CHANGE_DESK_FILE_LIMIT),
+        changedFiles: changedFiles.slice(0, CHANGE_DESK_FILE_LIMIT),
+        changedFileCount: changedFiles.length,
+        statusTruncated: statusLines.length > CHANGE_DESK_FILE_LIMIT,
+        diffStat: diffStat.stdout.trim(),
+        stagedDiffStat: stagedStat.stdout.trim(),
+        truncated: status.truncated || diffStat.truncated || stagedStat.truncated,
+        errors: [status, diffStat, stagedStat]
+            .filter((result) => !result.success)
+            .map((result) => result.output || result.error)
+            .filter(Boolean)
+    };
+}
+
+async function collectChangeDeskAudit() {
+    const result = await runChangeDeskCommand('ha-toolbox', [
+        'audit-config',
+        '--config',
+        CONFIG_ROOT,
+        '--json',
+        '--max-files',
+        '500'
+    ], {
+        timeout: CHANGE_DESK_COMMAND_TIMEOUT_MS,
+        maxChars: CHANGE_DESK_OUTPUT_MAX_CHARS
+    });
+
+    if (result.notFound) {
+        return {
+            available: false,
+            status: 'unavailable',
+            message: 'ha-toolbox is not available'
+        };
+    }
+
+    let parsed = null;
+    try {
+        parsed = JSON.parse(result.stdout || '{}');
+    } catch {
+        parsed = null;
+    }
+
+    if (!parsed) {
+        return {
+            available: false,
+            status: 'unavailable',
+            exitCode: result.exitCode,
+            output: result.output || result.error || 'ha-toolbox audit did not return JSON'
+        };
+    }
+
+    const yamlErrors = Array.isArray(parsed.yaml?.errors) ? parsed.yaml.errors : [];
+    return {
+        available: true,
+        status: result.success ? 'passed' : 'failed',
+        exitCode: result.exitCode,
+        config: parsed.config || CONFIG_ROOT,
+        exists: Boolean(parsed.exists),
+        yaml: {
+            checked: parsed.yaml?.checked || 0,
+            ok: parsed.yaml?.ok || 0,
+            errors: yamlErrors.slice(0, 20),
+            errorCount: yamlErrors.length
+        },
+        counts: parsed.counts || {},
+        customComponents: Array.isArray(parsed.custom_components)
+            ? parsed.custom_components.slice(0, 80)
+            : [],
+        expectedPaths: parsed.expected_paths || {},
+        rootKeys: parsed.root_keys || {},
+        truncated: result.truncated
+    };
+}
+
+async function collectChangeDeskCoreCheck() {
+    const result = await runChangeDeskCommand('ha', ['core', 'check'], {
+        timeout: CHANGE_DESK_COMMAND_TIMEOUT_MS,
+        maxChars: CHANGE_DESK_OUTPUT_MAX_CHARS
+    });
+
+    if (result.notFound) {
+        return {
+            available: false,
+            status: 'unavailable',
+            command: 'ha core check',
+            message: 'Home Assistant CLI is not available'
+        };
+    }
+
+    return {
+        available: true,
+        status: result.success ? 'passed' : 'failed',
+        command: 'ha core check',
+        exitCode: result.exitCode,
+        output: result.output,
+        timedOut: result.timedOut,
+        truncated: result.truncated
+    };
+}
+
+async function collectChangeDeskLive() {
+    const result = await runChangeDeskCommand('ha-api', ['config'], {
+        timeout: CHANGE_DESK_FAST_COMMAND_TIMEOUT_MS,
+        maxChars: CHANGE_DESK_OUTPUT_MAX_CHARS
+    });
+
+    if (result.notFound) {
+        return {
+            available: false,
+            status: 'unavailable',
+            message: 'ha-api is not available'
+        };
+    }
+
+    let parsed = null;
+    try {
+        parsed = JSON.parse(result.stdout || '{}');
+    } catch {
+        parsed = null;
+    }
+
+    if (!result.success || !parsed) {
+        return {
+            available: false,
+            status: 'unavailable',
+            exitCode: result.exitCode,
+            output: result.output || result.error || 'ha-api config did not return JSON'
+        };
+    }
+
+    return {
+        available: true,
+        status: 'available',
+        config: {
+            locationName: parsed.location_name || '',
+            version: parsed.version || '',
+            timeZone: parsed.time_zone || '',
+            unitSystem: parsed.unit_system?.name || parsed.unit_system || '',
+            components: Array.isArray(parsed.components) ? parsed.components.length : null
+        }
+    };
+}
+
+async function collectChangeDeskMcp() {
+    const result = await runChangeDeskCommand('ha-mcp-status', ['--json'], {
+        timeout: CHANGE_DESK_FAST_COMMAND_TIMEOUT_MS,
+        maxChars: CHANGE_DESK_OUTPUT_MAX_CHARS
+    });
+
+    if (result.notFound) {
+        return {
+            available: false,
+            status: 'unavailable',
+            message: 'ha-mcp-status is not available'
+        };
+    }
+
+    let parsed = null;
+    try {
+        parsed = JSON.parse(result.stdout || '{}');
+    } catch {
+        parsed = null;
+    }
+
+    if (!result.success || !parsed) {
+        return {
+            available: false,
+            status: 'unavailable',
+            exitCode: result.exitCode,
+            output: result.output || result.error || 'ha-mcp-status did not return JSON'
+        };
+    }
+
+    return {
+        available: true,
+        status: parsed.component_loaded ? 'loaded' : 'not_loaded',
+        componentLoaded: Boolean(parsed.component_loaded),
+        internalEndpoint: parsed.internal_endpoint || '',
+        externalPath: parsed.external_path || ''
+    };
+}
+
+function buildChangeDeskRecommendations(snapshot) {
+    const recommendations = [];
+
+    if (snapshot.git?.available && snapshot.git.clean) {
+        recommendations.push('No git working-tree changes detected.');
+    } else if (snapshot.git?.available) {
+        recommendations.push('Review the listed changed files before reload or restart.');
+    }
+
+    if (snapshot.audit?.available && snapshot.audit.status === 'failed') {
+        recommendations.push('Fix YAML audit issues before running a Home Assistant reload.');
+    }
+
+    if (snapshot.coreCheck?.available && snapshot.coreCheck.status === 'failed') {
+        recommendations.push('Treat Home Assistant core check failures as blockers before restart.');
+    }
+
+    if (snapshot.coreCheck?.available && snapshot.coreCheck.timedOut) {
+        recommendations.push('Core check is still running or timed out; rerun it in Shell mode before applying changes.');
+    }
+
+    if (snapshot.live?.available) {
+        recommendations.push('Live Home Assistant API is reachable for entity and service verification.');
+    }
+
+    if (snapshot.mcp?.available && snapshot.mcp.componentLoaded) {
+        recommendations.push('MCP Server integration is loaded; exposed entities can be checked before assistant-facing changes.');
+    }
+
+    return recommendations;
+}
+
+async function collectChangeDeskSnapshot() {
+    const startedAt = Date.now();
+    const [git, audit, coreCheck, live, mcp] = await Promise.all([
+        collectChangeDeskGit(),
+        collectChangeDeskAudit(),
+        collectChangeDeskCoreCheck(),
+        collectChangeDeskLive(),
+        collectChangeDeskMcp()
+    ]);
+    const snapshot = {
+        success: true,
+        generatedAt: new Date().toISOString(),
+        durationMs: Date.now() - startedAt,
+        workspace: CONFIG_ROOT,
+        git,
+        audit,
+        coreCheck,
+        live,
+        mcp
+    };
+
+    snapshot.recommendations = buildChangeDeskRecommendations(snapshot);
+    return snapshot;
+}
+
 function runTerminalControl(action, callback) {
     if (!SUPPORTED_TERMINAL_CONTROL_ACTIONS.has(action)) {
         callback(new Error('Unsupported terminal control action'));
@@ -694,7 +1076,7 @@ app.use(express.json({ limit: '64kb' }));
 
 // Health check endpoint
 app.get('/health', (req, res) => {
-    res.json({ status: 'ok', uploadDir: UPLOAD_DIR });
+    res.json({ status: 'ok', uploadDir: UPLOAD_DIR, workspace: CONFIG_ROOT });
 });
 
 // Provide ttyd port to frontend
@@ -702,8 +1084,26 @@ app.get('/config', (req, res) => {
     res.json({
         ttydPort: TTYD_PORT,
         uploadDir: UPLOAD_DIR,
+        workspace: CONFIG_ROOT,
         terminalMode: activeTerminalMode
     });
+});
+
+app.get('/change-desk/summary', async (req, res) => {
+    if (!isSameOriginBrowserRequest(req)) {
+        return res.status(403).json({ success: false, error: 'Cross-origin Change Desk access is not allowed' });
+    }
+
+    try {
+        const snapshot = await collectChangeDeskSnapshot();
+        res.json(snapshot);
+    } catch (err) {
+        console.error('Change Desk snapshot failed:', err.message);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to collect Change Desk snapshot'
+        });
+    }
 });
 
 app.get('/terminal-mode', (req, res) => {

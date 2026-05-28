@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 
-VERSION = "2.0"
+VERSION = "2.1"
 
 EXPECTED_PATHS = (
     "configuration.yaml",
@@ -221,6 +221,7 @@ def maybe_relative(path: Path, root: Path) -> str:
 def should_skip_path(path: Path) -> bool:
     skip_parts = {
         ".git",
+        ".claude",
         "__pycache__",
         "node_modules",
         ".venv",

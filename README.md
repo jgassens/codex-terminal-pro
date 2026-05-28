@@ -14,7 +14,8 @@ This is an MVP fork. It is not an official OpenAI add-on.
 
 - Home Assistant ingress web terminal powered by ttyd.
 - Sidebar panel entry for admin users via Home Assistant ingress.
-- Polished Codex-focused web wrapper with image upload and voice controls.
+- Polished Codex-focused web wrapper with image upload, voice controls, and a
+  read-only Change Desk review panel.
 - Persistent `tmux` session so browser reconnects do not kill Codex.
 - Switchable Codex/Shell modes, with Shell mode backed by a real interactive
   `/config` tmux shell window.
@@ -26,6 +27,9 @@ This is an MVP fork. It is not an official OpenAI add-on.
   `,,ha store reload` run in the Shell pane instead of being sent to Codex.
 - Hidden Shell dispatch output capture for completed commands, with copy and
   dismiss controls in the Codex view.
+- Change Desk snapshot for git status, Home Assistant YAML audit, `ha core
+  check`, live REST config reachability, and MCP Server status before reloads
+  or restarts.
 - Trusted human Shell lane for commands typed in Shell mode or dispatched with
   `,,`, while Codex/non-interactive Home Assistant operations remain guarded.
 - Codex CLI pinned and installed in the add-on image with

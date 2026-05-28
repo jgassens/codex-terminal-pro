@@ -409,6 +409,189 @@
             display: flex;
         }
 
+        #change-desk-panel {
+            position: fixed;
+            top: 64px;
+            right: 16px;
+            bottom: calc(var(--keyboard-inset, 0px) + 16px + env(safe-area-inset-bottom, 0px));
+            z-index: 2600;
+            display: none;
+            flex-direction: column;
+            width: min(760px, calc(100vw - 32px));
+            border: 1px solid rgba(121, 199, 197, 0.45);
+            border-radius: 8px;
+            background: rgba(23, 27, 29, 0.98);
+            box-shadow: 0 24px 60px var(--shadow);
+            overflow: hidden;
+        }
+
+        #change-desk-panel.active {
+            display: flex;
+        }
+
+        #change-desk-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 12px;
+            border-bottom: 1px solid var(--border-soft);
+        }
+
+        #change-desk-title {
+            font-size: 15px;
+            font-weight: 700;
+            color: var(--text);
+        }
+
+        #change-desk-generated {
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        #change-desk-body {
+            flex: 1 1 auto;
+            overflow: auto;
+            padding: 12px;
+        }
+
+        #change-desk-summary {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+
+        .change-desk-metric,
+        .change-desk-section {
+            border: 1px solid var(--border-soft);
+            border-radius: 8px;
+            background: #0d1112;
+        }
+
+        .change-desk-metric {
+            min-width: 0;
+            padding: 9px;
+        }
+
+        .change-desk-metric-label {
+            color: var(--muted);
+            font-size: 11px;
+            font-weight: 650;
+            margin-bottom: 4px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .change-desk-metric-value {
+            color: var(--text);
+            font-size: 13px;
+            font-weight: 700;
+            overflow-wrap: anywhere;
+        }
+
+        .change-desk-metric-value.ok {
+            color: var(--success);
+        }
+
+        .change-desk-metric-value.warn {
+            color: var(--accent-strong);
+        }
+
+        .change-desk-metric-value.fail {
+            color: var(--danger);
+        }
+
+        .change-desk-section {
+            margin-top: 10px;
+            overflow: hidden;
+        }
+
+        .change-desk-section-title {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 9px 10px;
+            border-bottom: 1px solid var(--border-soft);
+            color: var(--text);
+            font-size: 13px;
+            font-weight: 700;
+        }
+
+        .change-desk-badge {
+            border: 1px solid var(--border-soft);
+            border-radius: 999px;
+            padding: 2px 7px;
+            color: var(--muted);
+            font-size: 11px;
+            font-weight: 700;
+            white-space: nowrap;
+        }
+
+        .change-desk-badge.ok {
+            border-color: rgba(142, 192, 124, 0.45);
+            color: var(--success);
+        }
+
+        .change-desk-badge.warn {
+            border-color: rgba(240, 180, 91, 0.55);
+            color: var(--accent-strong);
+        }
+
+        .change-desk-badge.fail {
+            border-color: rgba(251, 111, 95, 0.5);
+            color: var(--danger);
+        }
+
+        .change-desk-section-body {
+            padding: 10px;
+            color: var(--text);
+            font-size: 12px;
+            line-height: 1.45;
+        }
+
+        .change-desk-output {
+            margin: 8px 0 0;
+            max-height: 170px;
+            overflow: auto;
+            white-space: pre-wrap;
+            word-break: break-word;
+            color: var(--text);
+            border: 1px solid var(--border-soft);
+            border-radius: 6px;
+            background: #090c0d;
+            padding: 9px;
+            font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        }
+
+        .change-desk-list {
+            display: grid;
+            gap: 5px;
+            margin: 0;
+            padding: 0;
+            list-style: none;
+        }
+
+        .change-desk-list li {
+            min-width: 0;
+            overflow-wrap: anywhere;
+            color: var(--text);
+        }
+
+        .change-desk-muted {
+            color: var(--muted);
+        }
+
+        #change-desk-footer {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+            padding: 12px;
+            border-top: 1px solid var(--border-soft);
+        }
+
         #manual-copy-message,
         #manual-paste-message,
         #shell-output-message {
@@ -613,6 +796,17 @@
                 padding: 6px 8px;
             }
 
+            #change-desk-panel {
+                top: 8px;
+                right: 8px;
+                bottom: calc(var(--keyboard-inset, 0px) + 8px + env(safe-area-inset-bottom, 0px));
+                width: calc(100vw - 16px);
+            }
+
+            #change-desk-summary {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
             #touch-select-btn,
             #paste-btn {
                 display: flex;
@@ -698,6 +892,10 @@
                     <button type="button" class="terminal-mode-btn" data-terminal-mode="raw" aria-pressed="false">Shell</button>
                 </div>
                 <span id="status"></span>
+                <button id="change-desk-btn" class="header-btn" title="Review Home Assistant changes and validation status">
+                    <span>▤</span>
+                    <span>Change Desk</span>
+                </button>
                 <button id="voice-btn" class="header-btn">
                     <span>🎤</span>
                     <span>Voice Input</span>
@@ -772,6 +970,25 @@
         <div class="modal-buttons">
             <button id="shell-output-copy" class="modal-btn modal-btn-primary">Copy Output</button>
             <button id="shell-output-dismiss" class="modal-btn modal-btn-secondary">Dismiss</button>
+        </div>
+    </div>
+
+    <div id="change-desk-panel" aria-live="polite" aria-label="Change Desk">
+        <div id="change-desk-header">
+            <div>
+                <div id="change-desk-title">Change Desk</div>
+                <div id="change-desk-generated"></div>
+            </div>
+            <button id="change-desk-close" class="modal-btn modal-btn-secondary">Close</button>
+        </div>
+        <div id="change-desk-body">
+            <div id="change-desk-summary"></div>
+            <div id="change-desk-content"></div>
+        </div>
+        <div id="change-desk-footer">
+            <button id="change-desk-copy" class="modal-btn modal-btn-secondary">Copy Summary</button>
+            <button id="change-desk-prompt" class="modal-btn modal-btn-secondary">Ask Codex</button>
+            <button id="change-desk-refresh" class="modal-btn modal-btn-primary">Refresh</button>
         </div>
     </div>
 
@@ -960,6 +1177,15 @@
 
         const status = document.getElementById('status');
         const terminalModeButtons = Array.from(document.querySelectorAll('[data-terminal-mode]'));
+        const changeDeskBtn = document.getElementById('change-desk-btn');
+        const changeDeskPanel = document.getElementById('change-desk-panel');
+        const changeDeskGenerated = document.getElementById('change-desk-generated');
+        const changeDeskSummary = document.getElementById('change-desk-summary');
+        const changeDeskContent = document.getElementById('change-desk-content');
+        const changeDeskRefresh = document.getElementById('change-desk-refresh');
+        const changeDeskCopy = document.getElementById('change-desk-copy');
+        const changeDeskPrompt = document.getElementById('change-desk-prompt');
+        const changeDeskClose = document.getElementById('change-desk-close');
         const uploadBtn = document.getElementById('upload-btn');
         const touchSelectBtn = document.getElementById('touch-select-btn');
         const pasteBtn = document.getElementById('paste-btn');
@@ -984,6 +1210,7 @@
         const SHELL_DISPATCH_PREFIX = ',,';
         let terminalLineBuffer = '';
         let latestShellOutput = '';
+        let latestChangeDeskSummary = '';
         let lastPrintableKey = null;
         let lastPasteText = null;
         let terminalTextSource = null;
@@ -1001,6 +1228,324 @@
             status.className = type;
             if (message && !persistent) {
                 statusTimer = setTimeout(() => setStatus(''), 5000);
+            }
+        }
+
+        function changeDeskElement(tag, className = '', text = '') {
+            const element = document.createElement(tag);
+            if (className) {
+                element.className = className;
+            }
+            if (text !== '') {
+                element.textContent = text;
+            }
+            return element;
+        }
+
+        function changeDeskBadgeKind(status) {
+            if (['passed', 'clean', 'available', 'loaded', 'ok'].includes(status)) {
+                return 'ok';
+            }
+            if (['failed', 'error'].includes(status)) {
+                return 'fail';
+            }
+            return 'warn';
+        }
+
+        function changeDeskBadge(status, label = status) {
+            const badge = changeDeskElement('span', `change-desk-badge ${changeDeskBadgeKind(status)}`, label || 'unknown');
+            return badge;
+        }
+
+        function changeDeskMetric(label, value, status = '') {
+            const metric = changeDeskElement('div', 'change-desk-metric');
+            metric.appendChild(changeDeskElement('div', 'change-desk-metric-label', label));
+            const valueElement = changeDeskElement('div', 'change-desk-metric-value', value || 'unknown');
+            if (status) {
+                valueElement.classList.add(changeDeskBadgeKind(status));
+            }
+            metric.appendChild(valueElement);
+            return metric;
+        }
+
+        function changeDeskSection(title, status, label = status) {
+            const section = changeDeskElement('section', 'change-desk-section');
+            const header = changeDeskElement('div', 'change-desk-section-title');
+            header.appendChild(changeDeskElement('span', '', title));
+            header.appendChild(changeDeskBadge(status, label));
+            const body = changeDeskElement('div', 'change-desk-section-body');
+            section.appendChild(header);
+            section.appendChild(body);
+            return { section, body };
+        }
+
+        function appendChangeDeskLine(parent, label, value) {
+            const row = changeDeskElement('div', 'change-desk-muted');
+            row.textContent = `${label}: `;
+            const strong = changeDeskElement('strong', '', value || 'unknown');
+            strong.style.color = 'var(--text)';
+            row.appendChild(strong);
+            parent.appendChild(row);
+        }
+
+        function appendChangeDeskList(parent, items, emptyText = 'None') {
+            if (!items || items.length === 0) {
+                parent.appendChild(changeDeskElement('div', 'change-desk-muted', emptyText));
+                return;
+            }
+
+            const list = changeDeskElement('ul', 'change-desk-list');
+            items.forEach((item) => {
+                list.appendChild(changeDeskElement('li', '', String(item)));
+            });
+            parent.appendChild(list);
+        }
+
+        function appendChangeDeskOutput(parent, output) {
+            if (!output) {
+                return;
+            }
+            parent.appendChild(changeDeskElement('pre', 'change-desk-output', output));
+        }
+
+        function setChangeDeskLoading() {
+            changeDeskGenerated.textContent = 'Collecting snapshot...';
+            changeDeskSummary.replaceChildren(
+                changeDeskMetric('Git', 'loading'),
+                changeDeskMetric('YAML audit', 'loading'),
+                changeDeskMetric('Core check', 'loading'),
+                changeDeskMetric('Live API', 'loading')
+            );
+            changeDeskContent.replaceChildren(changeDeskElement('div', 'change-desk-muted', 'Running read-only checks...'));
+        }
+
+        function renderChangeDeskGit(parent, git) {
+            const status = git?.available ? (git.clean ? 'clean' : 'dirty') : 'unavailable';
+            const label = git?.available ? (git.clean ? 'clean' : `${git.changedFileCount || 0} changed`) : 'unavailable';
+            const { section, body } = changeDeskSection('Working Tree', status === 'dirty' ? 'warn' : status, label);
+
+            if (!git?.available) {
+                body.appendChild(changeDeskElement('div', 'change-desk-muted', git?.message || 'Git status unavailable.'));
+                parent.appendChild(section);
+                return;
+            }
+
+            appendChangeDeskLine(body, 'Root', git.root || '');
+            appendChangeDeskLine(body, 'Branch', git.branch || '(detached or unnamed)');
+            appendChangeDeskList(body, git.statusLines, 'No changed files.');
+            appendChangeDeskOutput(body, git.stagedDiffStat ? `Staged:\n${git.stagedDiffStat}` : '');
+            appendChangeDeskOutput(body, git.diffStat ? `Unstaged:\n${git.diffStat}` : '');
+            if (git.statusTruncated) {
+                body.appendChild(changeDeskElement('div', 'change-desk-muted', 'File list truncated.'));
+            }
+            parent.appendChild(section);
+        }
+
+        function renderChangeDeskAudit(parent, audit) {
+            const { section, body } = changeDeskSection('Home Assistant YAML Audit', audit?.status || 'unavailable');
+
+            if (!audit?.available) {
+                body.appendChild(changeDeskElement('div', 'change-desk-muted', audit?.message || audit?.output || 'Audit unavailable.'));
+                parent.appendChild(section);
+                return;
+            }
+
+            appendChangeDeskLine(body, 'Config', audit.config || '');
+            appendChangeDeskLine(body, 'YAML', `${audit.yaml?.ok || 0}/${audit.yaml?.checked || 0} ok`);
+            appendChangeDeskLine(body, 'Storage files', String(audit.counts?.storage_files ?? 'unknown'));
+            appendChangeDeskLine(body, 'Custom components', String(audit.counts?.custom_components ?? audit.customComponents?.length ?? 'unknown'));
+
+            if (audit.yaml?.errorCount) {
+                const errors = audit.yaml.errors.map((item) => `${item.path}: ${item.error}`);
+                appendChangeDeskList(body, errors, 'No YAML errors.');
+            }
+            parent.appendChild(section);
+        }
+
+        function renderChangeDeskCoreCheck(parent, coreCheck) {
+            const { section, body } = changeDeskSection('Core Check', coreCheck?.status || 'unavailable');
+
+            if (!coreCheck?.available) {
+                body.appendChild(changeDeskElement('div', 'change-desk-muted', coreCheck?.message || 'Core check unavailable.'));
+                parent.appendChild(section);
+                return;
+            }
+
+            appendChangeDeskLine(body, 'Command', coreCheck.command || 'ha core check');
+            appendChangeDeskLine(body, 'Exit', Number.isInteger(coreCheck.exitCode) ? String(coreCheck.exitCode) : 'unknown');
+            if (coreCheck.timedOut) {
+                body.appendChild(changeDeskElement('div', 'change-desk-muted', 'Timed out before completion.'));
+            }
+            appendChangeDeskOutput(body, coreCheck.output || '(no output)');
+            parent.appendChild(section);
+        }
+
+        function renderChangeDeskLive(parent, live, mcp) {
+            const liveStatus = live?.available ? 'available' : 'unavailable';
+            const { section, body } = changeDeskSection('Live Home Assistant', liveStatus);
+
+            if (live?.available) {
+                appendChangeDeskLine(body, 'Location', live.config?.locationName || '');
+                appendChangeDeskLine(body, 'Version', live.config?.version || '');
+                appendChangeDeskLine(body, 'Time zone', live.config?.timeZone || '');
+                appendChangeDeskLine(body, 'Components', live.config?.components === null ? 'unknown' : String(live.config?.components));
+            } else {
+                body.appendChild(changeDeskElement('div', 'change-desk-muted', live?.message || live?.output || 'Live API unavailable.'));
+            }
+
+            const mcpText = mcp?.available
+                ? (mcp.componentLoaded ? `MCP loaded at ${mcp.externalPath || '/api/mcp'}` : 'MCP integration not loaded')
+                : (mcp?.message || 'MCP status unavailable');
+            body.appendChild(changeDeskElement('div', 'change-desk-muted', mcpText));
+            parent.appendChild(section);
+        }
+
+        function renderChangeDeskRecommendations(parent, recommendations = []) {
+            const { section, body } = changeDeskSection('Recommendations', recommendations.length ? 'warn' : 'ok', `${recommendations.length}`);
+            appendChangeDeskList(body, recommendations, 'No recommendations.');
+            parent.appendChild(section);
+        }
+
+        function changeDeskPlainText(data) {
+            const lines = [
+                `Change Desk snapshot: ${data.generatedAt || 'unknown'}`,
+                `Workspace: ${data.workspace || '/config'}`,
+                `Duration: ${data.durationMs || 0}ms`,
+                '',
+                `Git: ${data.git?.available ? (data.git.clean ? 'clean' : `${data.git.changedFileCount || 0} changed`) : 'unavailable'}`
+            ];
+
+            if (data.git?.statusLines?.length) {
+                lines.push(...data.git.statusLines.map((line) => `  ${line}`));
+            }
+
+            lines.push(
+                '',
+                `YAML audit: ${data.audit?.status || 'unavailable'} (${data.audit?.yaml?.ok || 0}/${data.audit?.yaml?.checked || 0} ok)`,
+                `Core check: ${data.coreCheck?.status || 'unavailable'}`,
+                `Live API: ${data.live?.status || 'unavailable'}`,
+                `MCP: ${data.mcp?.status || 'unavailable'}`
+            );
+
+            if (data.audit?.yaml?.errors?.length) {
+                lines.push('', 'YAML errors:');
+                data.audit.yaml.errors.forEach((item) => lines.push(`  ${item.path}: ${item.error}`));
+            }
+
+            if (data.coreCheck?.output) {
+                lines.push('', 'Core check output:', data.coreCheck.output);
+            }
+
+            if (data.recommendations?.length) {
+                lines.push('', 'Recommendations:');
+                data.recommendations.forEach((item) => lines.push(`  - ${item}`));
+            }
+
+            return lines.join('\n');
+        }
+
+        function renderChangeDesk(data) {
+            const generatedAt = data.generatedAt ? new Date(data.generatedAt) : null;
+            changeDeskGenerated.textContent = generatedAt
+                ? `${generatedAt.toLocaleString()} · ${data.durationMs || 0}ms`
+                : '';
+
+            const gitLabel = data.git?.available
+                ? (data.git.clean ? 'Clean' : `${data.git.changedFileCount || 0} files`)
+                : 'Unavailable';
+            const auditLabel = data.audit?.available
+                ? `${data.audit.yaml?.ok || 0}/${data.audit.yaml?.checked || 0} YAML`
+                : 'Unavailable';
+            const coreLabel = data.coreCheck?.available ? data.coreCheck.status : 'Unavailable';
+            const liveLabel = data.live?.available ? 'Reachable' : 'Unavailable';
+
+            changeDeskSummary.replaceChildren(
+                changeDeskMetric('Git', gitLabel, data.git?.clean ? 'ok' : (data.git?.available ? 'warn' : 'unavailable')),
+                changeDeskMetric('YAML audit', auditLabel, data.audit?.status || 'unavailable'),
+                changeDeskMetric('Core check', coreLabel, data.coreCheck?.status || 'unavailable'),
+                changeDeskMetric('Live API', liveLabel, data.live?.available ? 'ok' : 'unavailable')
+            );
+
+            const fragment = document.createDocumentFragment();
+            renderChangeDeskGit(fragment, data.git);
+            renderChangeDeskAudit(fragment, data.audit);
+            renderChangeDeskCoreCheck(fragment, data.coreCheck);
+            renderChangeDeskLive(fragment, data.live, data.mcp);
+            renderChangeDeskRecommendations(fragment, data.recommendations || []);
+            changeDeskContent.replaceChildren(fragment);
+            latestChangeDeskSummary = changeDeskPlainText(data);
+        }
+
+        function renderChangeDeskError(message) {
+            changeDeskGenerated.textContent = '';
+            changeDeskSummary.replaceChildren(
+                changeDeskMetric('Status', 'Failed', 'failed')
+            );
+            changeDeskContent.replaceChildren(changeDeskElement('div', 'change-desk-muted', message || 'Change Desk failed.'));
+            latestChangeDeskSummary = '';
+        }
+
+        async function loadChangeDesk() {
+            changeDeskPanel.classList.add('active');
+            changeDeskRefresh.disabled = true;
+            changeDeskBtn.classList.add('active');
+            setChangeDeskLoading();
+            setStatus('Collecting Change Desk snapshot...', 'success', false);
+
+            try {
+                const response = await fetch(ingressPath('change-desk/summary'));
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok || !data.success) {
+                    throw new Error(data.error || 'Change Desk snapshot failed');
+                }
+
+                renderChangeDesk(data);
+                setStatus('Change Desk refreshed', 'success', false);
+            } catch (err) {
+                console.log('Change Desk failed:', err);
+                renderChangeDeskError(err.message);
+                setStatus('Change Desk failed', 'error', false);
+            } finally {
+                changeDeskRefresh.disabled = false;
+            }
+        }
+
+        async function copyChangeDeskSummary() {
+            if (!latestChangeDeskSummary) {
+                setStatus('No Change Desk summary to copy', 'error', false);
+                return;
+            }
+
+            const copied = await copyToClipboard(latestChangeDeskSummary);
+            setStatus(copied ? 'Change Desk summary copied' : 'Copy failed', copied ? 'success' : 'error', false);
+            if (!copied) {
+                showManualCopy(latestChangeDeskSummary, 'Copy failed. Use the selected summary below.');
+            }
+        }
+
+        async function insertChangeDeskPrompt() {
+            if (!latestChangeDeskSummary) {
+                setStatus('Refresh Change Desk first', 'error', false);
+                return;
+            }
+
+            const prompt = [
+                'Review this Home Assistant Change Desk snapshot.',
+                'Focus on validation blockers, changed files, and whether reload or restart is safe.',
+                'Do not apply changes without my confirmation.',
+                '',
+                latestChangeDeskSummary
+            ].join('\n');
+
+            if (insertTextIntoMobileInput(prompt)) {
+                setStatus('Change Desk prompt added to command line', 'success', false);
+                return;
+            }
+
+            const inserted = await pasteTextIntoTerminal(prompt);
+            setStatus(inserted ? 'Change Desk prompt inserted' : 'Could not insert Change Desk prompt', inserted ? 'success' : 'error', false);
+            if (inserted) {
+                focusTerminal(true);
             }
         }
 
@@ -2590,6 +3135,24 @@
             updateViewportMetrics();
             manualPasteText.focus({ preventScroll: true });
         }
+
+        changeDeskBtn.addEventListener('click', () => {
+            loadChangeDesk();
+        });
+
+        changeDeskRefresh.addEventListener('click', () => {
+            loadChangeDesk();
+        });
+
+        changeDeskCopy.addEventListener('click', copyChangeDeskSummary);
+
+        changeDeskPrompt.addEventListener('click', insertChangeDeskPrompt);
+
+        changeDeskClose.addEventListener('click', () => {
+            changeDeskPanel.classList.remove('active');
+            changeDeskBtn.classList.remove('active');
+            focusMobileTerminalInput() || focusTerminal(false);
+        });
 
         manualCopyDismiss.addEventListener('click', () => {
             manualCopyPanel.classList.remove('active');

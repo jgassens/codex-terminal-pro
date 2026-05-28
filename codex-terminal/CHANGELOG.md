@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.1.0
+
+- Add a read-only **Change Desk** panel to the web terminal wrapper. It collects
+  git working-tree status, Home Assistant YAML audit results, `ha core check`,
+  live REST config reachability, and MCP Server status in one review surface.
+- Let the Change Desk copy its summary or insert a Codex review prompt without
+  applying changes, reloading YAML, or restarting Home Assistant.
+- Redact common token patterns from Change Desk command output and cap captured
+  output sizes for safer browser display.
+- Skip `.claude` scratch/worktree directories during `ha-toolbox` config audits
+  so review snapshots stay focused on Home Assistant files.
+
 ## 2.0.3
 
 - Preserve existing Codex TUI `status_line` preferences on startup instead of

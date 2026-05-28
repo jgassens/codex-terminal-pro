@@ -14,7 +14,8 @@ It registers an admin-only Home Assistant sidebar panel titled **Codex Terminal
 Pro** through ingress.
 
 The web terminal wrapper uses a compact Codex-focused interface around ttyd,
-with voice input and image upload controls kept one click away from the prompt.
+with voice input, image upload, and a read-only **Change Desk** review panel
+kept one click away from the prompt.
 
 The terminal runs inside a persistent `tmux` session, so browser reconnects and
 Home Assistant ingress websocket drops should reattach instead of restarting
@@ -53,6 +54,12 @@ live output surface, while the phone keyboard, native paste, uploaded image
 paths, and voice text go through a browser textarea when practical. This avoids
 the iOS/Android iframe focus failure that can hide the command line behind the
 keyboard.
+
+The **Change Desk** button opens a read-only Home Assistant review panel. It
+collects git working-tree status, the `ha-toolbox` YAML audit, `ha core check`,
+live `ha-api config` reachability, and `ha-mcp-status` so you can inspect the
+blast radius before a reload or restart. It can copy the summary or insert a
+Codex review prompt, but it does not apply changes.
 
 ## Shell Mode And `,,` Dispatch
 
