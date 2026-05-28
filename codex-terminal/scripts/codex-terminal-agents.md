@@ -11,6 +11,15 @@ You are running inside the Codex Terminal Pro Home Assistant add-on.
 - Use `ha-toolbox`, `ha-toolbox audit-config --config /config`,
   `ha-toolbox states`, and `ha-toolbox services` for read-only Home Assistant
   orientation before broad changes.
+- Use `ha-api` for exact read-only Home Assistant REST lookups, including
+  `ha-api state <entity_id>`, `ha-api services --domain <domain>`, and
+  `ha-api mcp-status`.
+- Use `ha-ws` for read-only Home Assistant WebSocket discovery and validation:
+  `ha-ws entity-registry --pattern <text>`, `ha-ws target-info --entity <id>
+  --capabilities`, `ha-ws exposed`, and `ha-ws validate --file <yaml>
+  --section action`.
+- Use `ha-mcp-status` before assuming Home Assistant's official MCP Server is
+  installed or reachable.
 - The `,,` prefix is Codex Terminal Pro shell dispatch. If the human prompt
   starts with `,,`, strip the prefix and run the rest through
   `codex-shell-dispatch`. Do not run the stripped command directly through

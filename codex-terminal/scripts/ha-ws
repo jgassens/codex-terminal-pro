@@ -1,0 +1,421 @@
+#!/usr/bin/env python3
+"""Read-only Home Assistant WebSocket helper for Codex Terminal Pro."""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import os
+import sys
+from collections import Counter
+from pathlib import Path
+from typing import Any
+
+
+VERSION = "2.0"
+WS_URL = "ws://supervisor/core/websocket"
+TOKEN_FILE = Path("/data/.supervisor/token")
+
+ALLOWED_RAW_TYPES = {
+    "ping",
+    "get_config",
+    "get_states",
+    "get_services",
+    "get_panels",
+    "validate_config",
+    "extract_from_target",
+    "get_triggers_for_target",
+    "get_conditions_for_target",
+    "get_services_for_target",
+    "config/entity_registry/list_for_display",
+    "homeassistant/expose_entity/list",
+}
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Read-only Home Assistant WebSocket helper for Codex Terminal Pro.",
+    )
+    parser.add_argument("--version", action="version", version=f"ha-ws {VERSION}")
+    subparsers = parser.add_subparsers(dest="command")
+
+    subparsers.add_parser("guide", help="Print helper overview")
+    subparsers.add_parser("ping", help="Check WebSocket connectivity")
+    subparsers.add_parser("config", help="Fetch Home Assistant config")
+
+    states = subparsers.add_parser("states", help="Fetch current states")
+    states.add_argument("--domain", help="Filter by entity domain")
+    states.add_argument("--pattern", help="Case-insensitive JSON text filter")
+    states.add_argument("--limit", type=int, default=80, help="Maximum rows to print")
+    states.add_argument("--json", action="store_true", help="Print JSON")
+
+    services = subparsers.add_parser("services", help="Fetch service action schemas")
+    services.add_argument("--domain", help="Filter by service domain")
+    services.add_argument("--json", action="store_true", help="Print JSON")
+
+    subparsers.add_parser("panels", help="Fetch registered panels")
+
+    registry = subparsers.add_parser("entity-registry", help="Fetch display entity registry")
+    registry.add_argument("--pattern", help="Case-insensitive entity/name/platform filter")
+    registry.add_argument("--limit", type=int, default=120, help="Maximum rows to print")
+    registry.add_argument("--json", action="store_true", help="Print JSON")
+
+    exposed = subparsers.add_parser("exposed", help="List Assist/voice exposed entities")
+    exposed.add_argument("--json", action="store_true", help="Print JSON")
+
+    validate = subparsers.add_parser("validate", help="Validate automation trigger/condition/action YAML")
+    validate.add_argument("--file", required=True, help="YAML file or snippet to validate")
+    validate.add_argument(
+        "--section",
+        choices=("trigger", "condition", "action"),
+        help="Wrap the YAML payload under this validation section",
+    )
+    validate.add_argument("--json", action="store_true", help="Print JSON")
+
+    target = subparsers.add_parser("target-info", help="Resolve a Home Assistant service target")
+    target.add_argument("--entity", action="append", default=[], help="Entity ID target")
+    target.add_argument("--device", action="append", default=[], help="Device ID target")
+    target.add_argument("--area", action="append", default=[], help="Area ID target")
+    target.add_argument("--label", action="append", default=[], help="Label ID target")
+    target.add_argument("--target-json", help="Raw target JSON object")
+    target.add_argument("--no-expand-group", action="store_true", help="Do not expand group members")
+    target.add_argument("--capabilities", action="store_true", help="Also list applicable triggers, conditions, and services")
+    target.add_argument("--json", action="store_true", help="Print JSON")
+
+    raw = subparsers.add_parser("raw", help="Call a whitelisted read-only WebSocket command")
+    raw.add_argument("type", help="WebSocket command type")
+    raw.add_argument("payload", nargs="?", default="{}", help="JSON object payload without id/type")
+    raw.add_argument("--json", action="store_true", help="Print JSON")
+
+    return parser
+
+
+def print_guide() -> None:
+    print(
+        """Codex Terminal Pro Home Assistant WebSocket Helper
+
+Read-only commands:
+  ha-ws ping
+  ha-ws states --pattern battery
+  ha-ws services --domain automation
+  ha-ws entity-registry --pattern kitchen
+  ha-ws exposed
+  ha-ws validate --file /config/action-snippet.yaml --section action
+  ha-ws target-info --entity light.kitchen --capabilities
+
+This helper intentionally omits service-call and entity-exposure write commands.
+Use the existing brokered `ha` or human Shell dispatch path for control actions.
+"""
+    )
+
+
+def read_token() -> str:
+    token = os.environ.get("SUPERVISOR_TOKEN", "").strip()
+    if token:
+        return token
+    if TOKEN_FILE.is_file():
+        return TOKEN_FILE.read_text(encoding="utf-8").strip()
+    raise RuntimeError("Supervisor token is not available")
+
+
+async def receive_json(ws: Any, timeout: float = 10) -> Any:
+    message = await asyncio.wait_for(ws.receive_json(), timeout=timeout)
+    return message
+
+
+async def ws_call(command_type: str, payload: dict[str, Any] | None = None) -> Any:
+    try:
+        import aiohttp
+    except Exception as exc:  # pragma: no cover - runtime dependency check
+        raise RuntimeError(f"aiohttp is not available: {exc}") from exc
+
+    token = read_token()
+    payload = dict(payload or {})
+
+    async with aiohttp.ClientSession() as session:
+        async with session.ws_connect(WS_URL, heartbeat=30) as ws:
+            hello = await receive_json(ws)
+            if hello.get("type") != "auth_required":
+                raise RuntimeError(f"unexpected WebSocket greeting: {hello}")
+            await ws.send_json({"type": "auth", "access_token": token})
+            auth = await receive_json(ws)
+            if auth.get("type") != "auth_ok":
+                raise RuntimeError(f"WebSocket authentication failed: {auth}")
+
+            request = {"id": 1, "type": command_type}
+            request.update(payload)
+            await ws.send_json(request)
+            while True:
+                response = await receive_json(ws)
+                if response.get("id") == 1:
+                    break
+            if command_type == "ping" and response.get("type") == "pong":
+                return {"pong": True}
+            if not response.get("success", False):
+                raise RuntimeError(json.dumps(response, sort_keys=True))
+            return response.get("result")
+
+
+def print_json(payload: Any) -> None:
+    print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def domain_counts(states: list[dict[str, Any]]) -> dict[str, int]:
+    counter: Counter[str] = Counter()
+    for item in states:
+        entity_id = str(item.get("entity_id", ""))
+        counter[entity_id.split(".", 1)[0] if "." in entity_id else ""] += 1
+    return dict(counter.most_common())
+
+
+def command_states(args: argparse.Namespace) -> int:
+    payload = asyncio.run(ws_call("get_states"))
+    if not isinstance(payload, list):
+        raise RuntimeError("unexpected states response")
+    domain_filter = (args.domain or "").lower()
+    pattern = (args.pattern or "").lower()
+    rows = []
+
+    for item in payload:
+        entity_id = str(item.get("entity_id", ""))
+        domain = entity_id.split(".", 1)[0] if "." in entity_id else ""
+        haystack = json.dumps(item, sort_keys=True).lower()
+        if domain_filter and domain != domain_filter:
+            continue
+        if pattern and pattern not in haystack:
+            continue
+        rows.append(
+            {
+                "entity_id": entity_id,
+                "state": item.get("state"),
+                "friendly_name": item.get("attributes", {}).get("friendly_name"),
+                "last_changed": item.get("last_changed"),
+            }
+        )
+
+    result = {"domain_counts": domain_counts(payload), "matches": rows[: args.limit]}
+    if args.json:
+        print_json(result)
+    else:
+        print(f"States: {len(payload)} entities")
+        print("Top domains:")
+        for domain, count in list(result["domain_counts"].items())[:30]:
+            print(f"  - {domain}: {count}")
+        print("Matches:")
+        for row in rows[: args.limit]:
+            friendly = f" ({row['friendly_name']})" if row.get("friendly_name") else ""
+            print(f"  - {row['entity_id']}: {row['state']}{friendly}")
+    return 0
+
+
+def command_services(args: argparse.Namespace) -> int:
+    payload = asyncio.run(ws_call("get_services"))
+    domain_filter = (args.domain or "").lower()
+    if isinstance(payload, dict):
+        rows = {key: value for key, value in payload.items() if not domain_filter or key.lower() == domain_filter}
+    else:
+        raise RuntimeError("unexpected services response")
+
+    if args.json:
+        print_json(rows)
+    else:
+        for domain, services in rows.items():
+            print(f"{domain}: {', '.join(sorted(services))}")
+    return 0
+
+
+def simplify_registry(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    entities = payload.get("entities") or []
+    rows = []
+    for item in entities:
+        rows.append(
+            {
+                "entity_id": item.get("ei"),
+                "platform": item.get("pl"),
+                "area_id": item.get("ai"),
+                "device_id": item.get("di"),
+                "name": item.get("en"),
+                "icon": item.get("ic"),
+                "hidden": bool(item.get("hb", False)),
+            }
+        )
+    return rows
+
+
+def command_entity_registry(args: argparse.Namespace) -> int:
+    payload = asyncio.run(ws_call("config/entity_registry/list_for_display"))
+    if not isinstance(payload, dict):
+        raise RuntimeError("unexpected entity registry response")
+    rows = simplify_registry(payload)
+    pattern = (args.pattern or "").lower()
+    if pattern:
+        rows = [row for row in rows if pattern in json.dumps(row, sort_keys=True).lower()]
+
+    if args.json:
+        print_json({"entities": rows[: args.limit], "total": len(rows)})
+    else:
+        print(f"Entity registry matches: {len(rows)}")
+        for row in rows[: args.limit]:
+            name = f" ({row['name']})" if row.get("name") else ""
+            area = f" area={row['area_id']}" if row.get("area_id") else ""
+            print(f"  - {row['entity_id']}{name} platform={row.get('platform')}{area}")
+    return 0
+
+
+def yaml_loader() -> Any:
+    try:
+        import yaml
+    except Exception as exc:  # pragma: no cover - runtime dependency check
+        raise RuntimeError(f"PyYAML is not available: {exc}") from exc
+
+    class Loader(yaml.SafeLoader):
+        pass
+
+    def construct_unknown(loader: Any, _tag_suffix: str, node: Any) -> Any:
+        if isinstance(node, yaml.ScalarNode):
+            return loader.construct_scalar(node)
+        if isinstance(node, yaml.SequenceNode):
+            return loader.construct_sequence(node)
+        if isinstance(node, yaml.MappingNode):
+            return loader.construct_mapping(node)
+        return None
+
+    Loader.add_multi_constructor("!", construct_unknown)
+    return yaml, Loader
+
+
+def load_yaml(path: str) -> Any:
+    yaml, loader = yaml_loader()
+    with Path(path).expanduser().open("r", encoding="utf-8", errors="replace") as handle:
+        return yaml.load(handle, Loader=loader)
+
+
+def command_validate(args: argparse.Namespace) -> int:
+    payload = load_yaml(args.file)
+    if args.section:
+        request = {args.section: payload}
+    elif isinstance(payload, dict) and any(key in payload for key in ("trigger", "condition", "action")):
+        request = {key: payload[key] for key in ("trigger", "condition", "action") if key in payload}
+    else:
+        raise RuntimeError("pass --section trigger|condition|action unless the file has validation keys")
+
+    result = asyncio.run(ws_call("validate_config", request))
+    if args.json:
+        print_json(result)
+    else:
+        for key, value in (result or {}).items():
+            status = "ok" if value.get("valid") else "invalid"
+            print(f"{key}: {status}")
+            if value.get("error"):
+                print(f"  {value['error']}")
+    return 0
+
+
+def target_payload(args: argparse.Namespace) -> dict[str, Any]:
+    if args.target_json:
+        target = json.loads(args.target_json)
+        if not isinstance(target, dict):
+            raise RuntimeError("--target-json must be a JSON object")
+        return target
+
+    target: dict[str, Any] = {}
+    if args.entity:
+        target["entity_id"] = args.entity
+    if args.device:
+        target["device_id"] = args.device
+    if args.area:
+        target["area_id"] = args.area
+    if args.label:
+        target["label_id"] = args.label
+    if not target:
+        raise RuntimeError("provide at least one --entity, --device, --area, --label, or --target-json")
+    return target
+
+
+def command_target_info(args: argparse.Namespace) -> int:
+    target = target_payload(args)
+    request = {"target": target, "expand_group": not args.no_expand_group}
+    result: dict[str, Any] = {"target": target, "resolved": asyncio.run(ws_call("extract_from_target", request))}
+    if args.capabilities:
+        result["triggers"] = asyncio.run(ws_call("get_triggers_for_target", request))
+        result["conditions"] = asyncio.run(ws_call("get_conditions_for_target", request))
+        result["services"] = asyncio.run(ws_call("get_services_for_target", request))
+
+    if args.json:
+        print_json(result)
+    else:
+        resolved = result["resolved"] or {}
+        for key in ("referenced_entities", "referenced_devices", "referenced_areas", "missing_devices", "missing_areas", "missing_labels"):
+            values = resolved.get(key) or []
+            print(f"{key}: {', '.join(values) if values else '-'}")
+        if args.capabilities:
+            for key in ("triggers", "conditions", "services"):
+                values = result.get(key) or []
+                print(f"{key}: {', '.join(values) if values else '-'}")
+    return 0
+
+
+def command_raw(args: argparse.Namespace) -> int:
+    if args.type not in ALLOWED_RAW_TYPES:
+        allowed = ", ".join(sorted(ALLOWED_RAW_TYPES))
+        raise RuntimeError(f"raw command type is not on the read-only allowlist. Allowed: {allowed}")
+    payload = json.loads(args.payload)
+    if not isinstance(payload, dict):
+        raise RuntimeError("payload must be a JSON object")
+    result = asyncio.run(ws_call(args.type, payload))
+    if args.json:
+        print_json(result)
+    else:
+        print(json.dumps(result, indent=2))
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    try:
+        if args.command in (None, "guide"):
+            print_guide()
+            return 0
+        if args.command == "ping":
+            print_json(asyncio.run(ws_call("ping")))
+            return 0
+        if args.command == "config":
+            print_json(asyncio.run(ws_call("get_config")))
+            return 0
+        if args.command == "states":
+            return command_states(args)
+        if args.command == "services":
+            return command_services(args)
+        if args.command == "panels":
+            print_json(asyncio.run(ws_call("get_panels")))
+            return 0
+        if args.command == "entity-registry":
+            return command_entity_registry(args)
+        if args.command == "exposed":
+            result = asyncio.run(ws_call("homeassistant/expose_entity/list"))
+            if args.json:
+                print_json(result)
+            else:
+                exposed_entities = (result or {}).get("exposed_entities", {})
+                for entity_id, assistants in sorted(exposed_entities.items()):
+                    enabled = ", ".join(sorted(key for key, value in assistants.items() if value))
+                    print(f"{entity_id}: {enabled or 'not exposed'}")
+            return 0
+        if args.command == "validate":
+            return command_validate(args)
+        if args.command == "target-info":
+            return command_target_info(args)
+        if args.command == "raw":
+            return command_raw(args)
+        parser.print_help()
+        return 64
+    except Exception as exc:
+        print(f"ha-ws: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

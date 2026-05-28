@@ -44,6 +44,13 @@ Treat this file as the local map of the room.
 - `supervisor-api`: direct Supervisor HTTP helper, also brokered.
 - `ha-toolbox`: read-only Home Assistant guide, config audit, states summary,
   services summary, and helper-tool inventory.
+- `ha-api`: read-only Home Assistant REST helper for exact state, config,
+  service schema, event, and MCP Server status checks.
+- `ha-ws`: read-only Home Assistant WebSocket helper for live entity registry,
+  target expansion, applicable services/triggers/conditions, exposed entities,
+  panels, and automation snippet validation.
+- `ha-mcp-status`: quick check for Home Assistant's official MCP Server
+  integration and endpoint hints.
 - `codex-shell-dispatch`: sends a human `,,` command to the hidden Shell pane
   and returns completed output to the Codex view.
 - `codex-auth-helper`: login/import helper for Codex credentials.
@@ -59,6 +66,16 @@ Treat this file as the local map of the room.
 - Start with `ha-toolbox audit-config --config /config` for local config shape.
 - Use `ha-toolbox states --pattern <text>` and `ha-toolbox services` before
   guessing entity IDs or reload service names.
+- Use `ha-api state <entity_id>` for an exact entity snapshot.
+- Use `ha-ws entity-registry --pattern <text>` to resolve real entity IDs,
+  platforms, areas, and device links from Home Assistant's live registry.
+- Use `ha-ws target-info --entity <entity_id> --capabilities` before guessing
+  which service, trigger, or condition applies to a target.
+- Use `ha-ws validate --file <yaml> --section action` or the matching
+  `trigger` / `condition` section before trusting generated automation pieces.
+- Use `ha-mcp-status` before assuming the official Home Assistant MCP Server is
+  installed. The MCP endpoint is `/api/mcp` and exposed entities control what
+  clients can see or control.
 - Use `/opt/home-assistant/HA.md` as the local Home Assistant field guide.
 - Know the common layers: YAML/includes/packages, automations, scripts, scenes,
   helpers, templates, dashboards, entity/device registries, integrations,
@@ -120,6 +137,9 @@ for command_name in \
     ha \
     supervisor-api \
     ha-toolbox \
+    ha-api \
+    ha-ws \
+    ha-mcp-status \
     solar-toolbox \
     modbus-toolbox \
     modbus-scan \

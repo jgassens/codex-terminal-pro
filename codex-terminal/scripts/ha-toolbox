@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 
-VERSION = "1.42"
+VERSION = "2.0"
 
 EXPECTED_PATHS = (
     "configuration.yaml",
@@ -117,6 +117,11 @@ Read-only first moves:
   ha-toolbox audit-config --config /config
   ha-toolbox states
   ha-toolbox services
+  ha-api state sensor.example
+  ha-ws entity-registry --pattern kitchen
+  ha-ws target-info --entity light.kitchen --capabilities
+  ha-ws validate --file /config/action-snippet.yaml --section action
+  ha-mcp-status
   ha core check
   supervisor-api /core/api/states | jq 'length'
 
@@ -147,6 +152,9 @@ def print_tools() -> None:
         "ha",
         "supervisor-api",
         "ha-toolbox",
+        "ha-api",
+        "ha-ws",
+        "ha-mcp-status",
         "codex-shell-dispatch",
         "jq",
         "yq",

@@ -37,7 +37,11 @@ This is an MVP fork. It is not an official OpenAI add-on.
 - Image paste, drag-drop, and mobile photo-picker upload support with files
   saved in `/data/images` and paths inserted into the prompt.
 - Persistent APK and Python package helpers under `/data/packages`.
-- Home Assistant CLI (`ha`), `ha-toolbox`, and GitHub CLI (`gh`) included.
+- Home Assistant CLI (`ha`), `ha-toolbox`, `ha-api`, `ha-ws`,
+  `ha-mcp-status`, and GitHub CLI (`gh`) included.
+- Read-only Home Assistant REST/WebSocket helpers for exact live entity
+  snapshots, service schemas, entity registry discovery, target expansion,
+  exposed-entity checks, and automation snippet validation.
 - Home Assistant field guide at `/opt/home-assistant/HA.md` plus common admin
   utilities including `sqlite3`, MQTT clients, DNS/network tools, OpenSSL,
   OpenSSH client, and `rsync`.
@@ -176,10 +180,10 @@ codex-terminal-briefing
 ```
 
 That guidance tells Codex about `,,`, `codex-shell-dispatch`, `ha`,
-`supervisor-api`, `ha-toolbox`, `solar-toolbox`, `modbus-toolbox`,
-`modbus-scan`, and `modbus-read`.
+`supervisor-api`, `ha-toolbox`, `ha-api`, `ha-ws`, `ha-mcp-status`,
+`solar-toolbox`, `modbus-toolbox`, `modbus-scan`, and `modbus-read`.
 
-## Home Assistant Toolbox
+## Home Assistant Toolbox And Live API Helpers
 
 Run `ha-toolbox` inside the terminal for Home Assistant-native orientation.
 It is read-only by default and gives Codex a local map for configuration,
@@ -195,6 +199,21 @@ ha-toolbox states --domain automation
 ha-toolbox services --domain homeassistant
 ha-toolbox tools
 ```
+
+Run `ha-api` when Codex needs an exact Core REST lookup, and `ha-ws` when it
+needs richer live WebSocket discovery before editing YAML:
+
+```bash
+ha-api state sensor.outdoor_temperature
+ha-api services --domain automation
+ha-ws entity-registry --pattern kitchen
+ha-ws target-info --entity light.kitchen --capabilities
+ha-ws validate --file /config/action-snippet.yaml --section action
+ha-mcp-status
+```
+
+These helpers are read-only by design. Use the existing brokered `ha` command
+or human Shell dispatch path for control actions.
 
 The detailed Home Assistant field guide is installed at
 `/opt/home-assistant/HA.md`.

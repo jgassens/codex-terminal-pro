@@ -192,7 +192,7 @@ install_tools() {
 
 log_startup_diagnostics() {
     local app_name="${APP_NAME:-${ADDON_NAME:-Codex Terminal Pro}}"
-    local app_version="${BUILD_VERSION:-${APP_VERSION:-1.46}}"
+    local app_version="${BUILD_VERSION:-${APP_VERSION:-2.0}}"
 
     bashio::log.info "Startup diagnostics:"
     bashio::log.info "  - Date: $(date)"
@@ -215,6 +215,12 @@ log_startup_diagnostics() {
     bashio::log.info "  - modbus-read version: $(modbus-read --version 2>&1 || true)"
     bashio::log.info "  - which ha-toolbox: $(which ha-toolbox 2>/dev/null || true)"
     bashio::log.info "  - ha-toolbox version: $(ha-toolbox --version 2>&1 || true)"
+    bashio::log.info "  - which ha-api: $(which ha-api 2>/dev/null || true)"
+    bashio::log.info "  - ha-api version: $(ha-api --version 2>&1 || true)"
+    bashio::log.info "  - which ha-ws: $(which ha-ws 2>/dev/null || true)"
+    bashio::log.info "  - ha-ws version: $(ha-ws --version 2>&1 || true)"
+    bashio::log.info "  - which ha-mcp-status: $(which ha-mcp-status 2>/dev/null || true)"
+    bashio::log.info "  - ha-mcp-status version: $(ha-mcp-status --version 2>&1 || true)"
     bashio::log.info "  - which sqlite3: $(which sqlite3 2>/dev/null || true)"
     bashio::log.info "  - which mosquitto_sub: $(which mosquitto_sub 2>/dev/null || true)"
     bashio::log.info "  - which dig: $(which dig 2>/dev/null || true)"
@@ -239,13 +245,18 @@ setup_modbus_tools() {
 }
 
 setup_ha_tools() {
-    if [ -f "/opt/scripts/ha-toolbox" ]; then
-        cp "/opt/scripts/ha-toolbox" "/usr/local/bin/ha-toolbox"
-        chmod 755 "/usr/local/bin/ha-toolbox"
-        bashio::log.info "Home Assistant toolbox installed: ha-toolbox"
-    else
-        bashio::log.warning "Home Assistant toolbox missing: /opt/scripts/ha-toolbox"
-    fi
+    local tool
+
+    for tool in ha-toolbox ha-api ha-ws ha-mcp-status; do
+        if [ -f "/opt/scripts/${tool}" ]; then
+            cp "/opt/scripts/${tool}" "/usr/local/bin/${tool}"
+            chmod 755 "/usr/local/bin/${tool}"
+        else
+            bashio::log.warning "Home Assistant helper missing: /opt/scripts/${tool}"
+        fi
+    done
+
+    bashio::log.info "Home Assistant helpers installed: ha-toolbox, ha-api, ha-ws, ha-mcp-status"
 }
 
 setup_session_picker() {
@@ -371,6 +382,13 @@ write_codex_terminal_agents_block() {
 - Use `ha-toolbox`, `ha-toolbox audit-config --config /config`,
   `ha-toolbox states`, and `ha-toolbox services` for read-only Home Assistant
   orientation before broad changes.
+- Use `ha-api` for exact read-only Home Assistant REST lookups such as one
+  entity state, service schemas, events, and MCP status.
+- Use `ha-ws` for read-only Home Assistant WebSocket discovery: entity
+  registry display, target expansion, service capability checks, exposed
+  entities, and automation trigger/condition/action validation.
+- Use `ha-mcp-status` to check whether Home Assistant's official MCP Server
+  integration is loaded before configuring MCP clients.
 - `,,` is a Codex Terminal Pro shell-dispatch prefix. If the human prompt starts
   with `,,`, strip that prefix and run the rest through `codex-shell-dispatch`.
   Do not run the stripped command directly through Codex's normal shell path.

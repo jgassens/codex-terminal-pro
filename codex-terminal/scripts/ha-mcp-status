@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+case "${1:-}" in
+    --version|-V|version)
+        echo "ha-mcp-status 2.0"
+        exit 0
+        ;;
+    --help|-h)
+        cat <<'EOF'
+Usage: ha-mcp-status [--json]
+
+Check whether Home Assistant's official MCP Server integration is loaded.
+EOF
+        exit 0
+        ;;
+esac
+
+exec ha-api mcp-status "$@"

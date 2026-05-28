@@ -51,9 +51,10 @@ also ships `codex-shell-dispatch`. Codex should strip the `,,` prefix and run
 the remaining command through that helper, not through normal Codex shell
 execution.
 
-The add-on includes read-only Modbus helpers for Home Assistant troubleshooting
-and Schneider Electric discovery work. Run `modbus-toolbox` in the terminal for
-examples, or see `/opt/modbus/MODBUS.md`.
+The add-on includes read-only Home Assistant REST/WebSocket helpers, plus
+read-only Modbus helpers for Home Assistant troubleshooting and Schneider
+Electric discovery work. Run `ha-api`, `ha-ws`, `ha-mcp-status`, or
+`modbus-toolbox` in the terminal for examples.
 
 For domestic and small commercial solar work, run `solar-toolbox`. It can print
 a site-intake brief, inspect Home Assistant config/entity registry for
@@ -192,11 +193,11 @@ codex-terminal-briefing
 ```
 
 The briefing covers `,,` shell dispatch, `codex-shell-dispatch`, `ha`,
-`supervisor-api`, `ha-toolbox`, Shell mode, mobile command input,
-`solar-toolbox`, `modbus-toolbox`, `modbus-scan`, `modbus-read`, and the
-sensitive files it should avoid.
+`supervisor-api`, `ha-toolbox`, `ha-api`, `ha-ws`, `ha-mcp-status`, Shell mode,
+mobile command input, `solar-toolbox`, `modbus-toolbox`, `modbus-scan`,
+`modbus-read`, and the sensitive files it should avoid.
 
-## Home Assistant Toolbox
+## Home Assistant Toolbox And Live API Helpers
 
 `ha-toolbox` is the local Home Assistant orientation helper. It is read-only and
 is meant to give Codex a reliable first move before broad Home Assistant work.
@@ -209,6 +210,32 @@ ha-toolbox states --domain automation
 ha-toolbox services --domain homeassistant
 ha-toolbox tools
 ```
+
+Use `ha-api` for exact read-only REST lookups:
+
+```bash
+ha-api config
+ha-api state sensor.outdoor_temperature
+ha-api services --domain automation
+ha-api events
+ha-api mcp-status
+```
+
+Use `ha-ws` for richer read-only WebSocket discovery and validation:
+
+```bash
+ha-ws ping
+ha-ws entity-registry --pattern kitchen
+ha-ws target-info --entity light.kitchen --capabilities
+ha-ws exposed
+ha-ws validate --file /config/action-snippet.yaml --section action
+```
+
+`ha-mcp-status` checks whether Home Assistant's official Model Context Protocol
+Server integration is loaded and reminds Codex that `/api/mcp` access is
+controlled by exposed entities. These helpers intentionally omit service-call
+and entity-exposure write commands; use brokered `ha` or human Shell dispatch
+for control actions.
 
 The bundled field guide at `/opt/home-assistant/HA.md` covers configuration
 layout, automations, scripts, scenes, helpers, templates, dashboards, entity and

@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.0
+
+- Add `ha-api`, a read-only Home Assistant Core REST helper for exact live
+  config, state, service schema, event, and MCP Server status lookups.
+- Add `ha-ws`, a read-only Home Assistant WebSocket helper for live state
+  summaries, entity registry display, exposed-entity checks, target expansion,
+  applicable service/trigger/condition discovery, and automation
+  trigger/condition/action validation.
+- Add `ha-mcp-status` to quickly detect whether Home Assistant's official MCP
+  Server integration is loaded and to show the internal and external MCP
+  endpoint paths.
+- Teach the installed briefing, managed AGENTS guidance, startup diagnostics,
+  Docker image, and toolbox inventory about the new HA API/WebSocket/MCP helper
+  layer.
+
 ## 1.46
 
 - Preserve logical command lines when copying mouse- or touch-dragged terminal

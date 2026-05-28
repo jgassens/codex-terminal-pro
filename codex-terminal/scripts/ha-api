@@ -1,0 +1,275 @@
+#!/usr/bin/env python3
+"""Read-only Home Assistant REST helper for Codex Terminal Pro."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import shutil
+import subprocess
+import sys
+from collections import Counter
+from typing import Any
+
+
+VERSION = "2.0"
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Read-only Home Assistant Core REST helper for Codex Terminal Pro.",
+    )
+    parser.add_argument("--version", action="version", version=f"ha-api {VERSION}")
+    subparsers = parser.add_subparsers(dest="command")
+
+    subparsers.add_parser("guide", help="Print helper overview")
+
+    subparsers.add_parser("config", help="Fetch Home Assistant Core config")
+
+    states = subparsers.add_parser("states", help="Fetch current states")
+    states.add_argument("--domain", help="Filter by entity domain")
+    states.add_argument("--pattern", help="Case-insensitive JSON text filter")
+    states.add_argument("--limit", type=int, default=80, help="Maximum rows to print")
+    states.add_argument("--json", action="store_true", help="Print JSON")
+
+    state = subparsers.add_parser("state", help="Fetch one entity state")
+    state.add_argument("entity_id")
+    state.add_argument("--json", action="store_true", help="Print JSON")
+
+    services = subparsers.add_parser("services", help="Fetch service action schemas")
+    services.add_argument("--domain", help="Filter by service domain")
+    services.add_argument("--json", action="store_true", help="Print JSON")
+
+    events = subparsers.add_parser("events", help="Fetch event names and listener counts")
+    events.add_argument("--json", action="store_true", help="Print JSON")
+
+    mcp_status = subparsers.add_parser("mcp-status", help="Check official HA MCP server status")
+    mcp_status.add_argument("--json", action="store_true", help="Print JSON")
+
+    raw_get = subparsers.add_parser("raw-get", help="GET a Core REST API path")
+    raw_get.add_argument("path", help="Core API path, e.g. /states or /config")
+    raw_get.add_argument("--json", action="store_true", help="Pretty-print JSON")
+
+    return parser
+
+
+def normalize_core_api_path(path: str) -> str:
+    if path.startswith("http://") or path.startswith("https://"):
+        raise ValueError("pass only a local Home Assistant API path, not a full URL")
+
+    path = "/" + path.lstrip("/")
+    if path.startswith("/core/api/"):
+        return path
+    if path == "/api":
+        return "/core/api/"
+    if path.startswith("/api/"):
+        return "/core" + path
+    return "/core/api" + path
+
+
+def supervisor_get(path: str) -> Any:
+    helper = shutil.which("supervisor-api")
+    if not helper:
+        raise RuntimeError("supervisor-api helper is not available")
+
+    completed = subprocess.run(
+        [helper, normalize_core_api_path(path)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=30,
+    )
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or completed.stdout.strip()
+        raise RuntimeError(detail or f"supervisor-api exited {completed.returncode}")
+    return json.loads(completed.stdout or "null")
+
+
+def print_json(payload: Any) -> None:
+    print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def print_guide() -> None:
+    print(
+        """Codex Terminal Pro Home Assistant REST Helper
+
+Read-only commands:
+  ha-api config
+  ha-api states --pattern battery
+  ha-api state sensor.outdoor_temperature
+  ha-api services --domain automation
+  ha-api events
+  ha-api mcp-status
+  ha-api raw-get /states --json
+
+For registry, target expansion, service capability discovery, and automation
+snippet validation, use `ha-ws`.
+"""
+    )
+
+
+def command_config(_args: argparse.Namespace) -> int:
+    print_json(supervisor_get("/config"))
+    return 0
+
+
+def filter_states(payload: list[Any], args: argparse.Namespace) -> tuple[dict[str, int], list[dict[str, Any]]]:
+    domain_filter = (args.domain or "").lower()
+    pattern = (args.pattern or "").lower()
+    domains: Counter[str] = Counter()
+    rows: list[dict[str, Any]] = []
+
+    for item in payload:
+        entity_id = str(item.get("entity_id", ""))
+        domain = entity_id.split(".", 1)[0] if "." in entity_id else ""
+        domains[domain] += 1
+        haystack = json.dumps(item, sort_keys=True).lower()
+        if domain_filter and domain != domain_filter:
+            continue
+        if pattern and pattern not in haystack:
+            continue
+        rows.append(
+            {
+                "entity_id": entity_id,
+                "state": item.get("state"),
+                "friendly_name": item.get("attributes", {}).get("friendly_name"),
+                "last_changed": item.get("last_changed"),
+                "last_updated": item.get("last_updated"),
+            }
+        )
+
+    return dict(domains.most_common()), rows
+
+
+def command_states(args: argparse.Namespace) -> int:
+    payload = supervisor_get("/states")
+    if not isinstance(payload, list):
+        raise RuntimeError("unexpected states response")
+    domain_counts, rows = filter_states(payload, args)
+    result = {"domain_counts": domain_counts, "matches": rows[: args.limit]}
+
+    if args.json:
+        print_json(result)
+    else:
+        print(f"States: {len(payload)} entities")
+        print("Top domains:")
+        for domain, count in list(domain_counts.items())[:30]:
+            print(f"  - {domain}: {count}")
+        print("Matches:")
+        for row in rows[: args.limit]:
+            friendly = f" ({row['friendly_name']})" if row.get("friendly_name") else ""
+            print(f"  - {row['entity_id']}: {row['state']}{friendly}")
+    return 0
+
+
+def command_state(args: argparse.Namespace) -> int:
+    payload = supervisor_get(f"/states/{args.entity_id}")
+    if args.json:
+        print_json(payload)
+    else:
+        attrs = payload.get("attributes") or {}
+        friendly = attrs.get("friendly_name")
+        print(f"{payload.get('entity_id')}: {payload.get('state')}")
+        if friendly:
+            print(f"friendly_name: {friendly}")
+        if attrs:
+            print("attributes:")
+            for key in sorted(attrs):
+                print(f"  {key}: {attrs[key]}")
+    return 0
+
+
+def command_services(args: argparse.Namespace) -> int:
+    payload = supervisor_get("/services")
+    if not isinstance(payload, list):
+        raise RuntimeError("unexpected services response")
+
+    domain_filter = (args.domain or "").lower()
+    rows = [item for item in payload if not domain_filter or str(item.get("domain", "")).lower() == domain_filter]
+
+    if args.json:
+        print_json(rows)
+    else:
+        print(f"Service domains: {len(payload)}")
+        for item in rows:
+            services = item.get("services") or {}
+            print(f"  - {item.get('domain')}: {', '.join(sorted(services))}")
+    return 0
+
+
+def command_events(args: argparse.Namespace) -> int:
+    payload = supervisor_get("/events")
+    if args.json:
+        print_json(payload)
+    else:
+        for item in payload:
+            print(f"{item.get('event')}: {item.get('listener_count')} listeners")
+    return 0
+
+
+def command_mcp_status(args: argparse.Namespace) -> int:
+    config = supervisor_get("/config")
+    components = set(config.get("components") or [])
+    result = {
+        "component_loaded": "mcp_server" in components,
+        "component_name": "mcp_server",
+        "internal_endpoint": "http://supervisor/core/api/mcp",
+        "external_path": "/api/mcp",
+        "note": (
+            "The official Home Assistant MCP Server integration must be configured "
+            "and exposed entities control what an MCP client can see or control."
+        ),
+    }
+
+    if args.json:
+        print_json(result)
+    else:
+        print(f"MCP Server integration loaded: {'yes' if result['component_loaded'] else 'no'}")
+        print(f"Internal add-on endpoint: {result['internal_endpoint']}")
+        print(f"External Home Assistant path: {result['external_path']}")
+        if not result["component_loaded"]:
+            print("Install or enable the 'Model Context Protocol Server' integration in Home Assistant.")
+    return 0 if result["component_loaded"] else 2
+
+
+def command_raw_get(args: argparse.Namespace) -> int:
+    payload = supervisor_get(args.path)
+    if args.json:
+        print_json(payload)
+    else:
+        print(json.dumps(payload, indent=2))
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    try:
+        if args.command in (None, "guide"):
+            print_guide()
+            return 0
+        if args.command == "config":
+            return command_config(args)
+        if args.command == "states":
+            return command_states(args)
+        if args.command == "state":
+            return command_state(args)
+        if args.command == "services":
+            return command_services(args)
+        if args.command == "events":
+            return command_events(args)
+        if args.command == "mcp-status":
+            return command_mcp_status(args)
+        if args.command == "raw-get":
+            return command_raw_get(args)
+        parser.print_help()
+        return 64
+    except Exception as exc:
+        print(f"ha-api: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

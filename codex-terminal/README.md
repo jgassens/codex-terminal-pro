@@ -6,8 +6,9 @@ Unofficial OpenAI Codex CLI terminal for Home Assistant.
 
 Codex Terminal Pro provides a Home Assistant ingress web terminal that starts in
 `/config`, with Codex CLI, image paste support, persistent packages, Home
-Assistant CLI, `ha-toolbox`, GitHub CLI, read-only Modbus helpers, and a solar
-commissioning toolbox preinstalled.
+Assistant CLI, `ha-toolbox`, read-only REST/WebSocket helpers, MCP status
+checks, GitHub CLI, read-only Modbus helpers, and a solar commissioning toolbox
+preinstalled.
 
 It registers an admin-only Home Assistant sidebar panel titled **Codex Terminal
 Pro** through ingress.
@@ -89,8 +90,8 @@ If that file already exists, the full guidance is written to
 capabilities block is appended to `/config/AGENTS.md` or refreshed in place.
 
 This guidance tells Codex about `,,`, `codex-shell-dispatch`, `ha`,
-`supervisor-api`, `ha-toolbox`, `solar-toolbox`, `modbus-toolbox`,
-`modbus-scan`, and `modbus-read`.
+`supervisor-api`, `ha-toolbox`, `ha-api`, `ha-ws`, `ha-mcp-status`,
+`solar-toolbox`, `modbus-toolbox`, `modbus-scan`, and `modbus-read`.
 
 ## Home Assistant Readiness
 
@@ -111,6 +112,24 @@ ha-toolbox states --domain automation
 ha-toolbox services --domain homeassistant
 ha-toolbox tools
 ```
+
+The add-on also includes live read-only API helpers:
+
+```bash
+ha-api state sensor.outdoor_temperature
+ha-api services --domain automation
+ha-api mcp-status
+ha-ws entity-registry --pattern kitchen
+ha-ws target-info --entity light.kitchen --capabilities
+ha-ws validate --file /config/action-snippet.yaml --section action
+ha-mcp-status
+```
+
+`ha-api` talks to Home Assistant Core's REST API through the add-on's internal
+Supervisor proxy. `ha-ws` talks to Home Assistant's WebSocket API for live
+registry, exposed-entity, target, service/trigger/condition, and validation
+queries. `ha-mcp-status` checks whether the official Home Assistant MCP Server
+integration is loaded before Codex assumes `/api/mcp` is available.
 
 The image also bundles practical Home Assistant admin utilities including
 `sqlite3`, `mosquitto_sub`, `mosquitto_pub`, `dig`, `nslookup`, `ping`, `ncat`,
@@ -187,6 +206,7 @@ image_retention_days: 30
 image_retention_max_bytes: 268435456
 supervisor_broker_enabled: true
 supervisor_broker_t1_ttl_seconds: 120
+supervisor_broker_comma_dispatch_enabled: true
 persistent_apk_packages: []
 persistent_pip_packages: []
 ```
@@ -208,6 +228,9 @@ persistent_pip_packages: []
   management operations outside the trusted human Shell pane.
 - `supervisor_broker_t1_ttl_seconds`: Short reuse window for routine
   management confirmations.
+- `supervisor_broker_comma_dispatch_enabled`: Let the broker accept a recent
+  exact `,,ha ...` or `,, supervisor-api ...` prompt as human dispatch intent if
+  browser interception misses it.
 - `persistent_apk_packages`: APK packages to reinstall into persistent storage.
 - `persistent_pip_packages`: Python packages to install into the persistent
   virtual environment.
