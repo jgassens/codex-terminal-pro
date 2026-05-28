@@ -154,6 +154,9 @@ check_for_update_on_startup = false
 ```
 
 Use Home Assistant add-on updates to pick up new bundled Codex CLI versions.
+This release pins the bundled CLI package to `@openai/codex@0.134.0` during
+the Docker build.
+
 Managed Codex Terminal Pro TUI defaults use this footer:
 
 ```toml

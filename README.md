@@ -28,7 +28,8 @@ This is an MVP fork. It is not an official OpenAI add-on.
   dismiss controls in the Codex view.
 - Trusted human Shell lane for commands typed in Shell mode or dispatched with
   `,,`, while Codex/non-interactive Home Assistant operations remain guarded.
-- Codex CLI installed with `npm install -g @openai/codex`.
+- Codex CLI pinned and installed in the add-on image with
+  `npm install -g @openai/codex@0.134.0`.
 - Starts in `/config` so Codex can inspect Home Assistant YAML and storage.
 - Persistent Codex state under `/data/.codex`.
 - Upstream Codex CLI startup update prompts are disabled so add-on updates stay
@@ -80,9 +81,10 @@ folder, if you want Home Assistant to offer updates. The local development app
 slug such as `local_codex_terminal_pro` is useful for testing, but it will not
 track GitHub releases.
 
-For future releases, bump `codex-terminal/config.yaml` `version`, push to
-GitHub, then reload the Home Assistant add-on store. Home Assistant will compare
-the installed version with the version in this repository.
+For future releases, bump `codex-terminal/config.yaml` `version`, update the
+Dockerfile `CODEX_CLI_VERSION` when the bundled Codex CLI should change, push
+to GitHub, then reload the Home Assistant add-on store. Home Assistant will
+compare the installed version with the version in this repository.
 
 ## Sidebar Access
 

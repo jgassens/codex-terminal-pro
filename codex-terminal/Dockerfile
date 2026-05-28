@@ -1,7 +1,7 @@
 FROM ghcr.io/home-assistant/base:latest
 
 LABEL \
-    io.hass.version="2.0.1" \
+    io.hass.version="2.0.2" \
     io.hass.type="addon" \
     io.hass.arch="aarch64|amd64" \
     org.opencontainers.image.title="Home Assistant Add-on: Codex Terminal Pro" \
@@ -47,7 +47,9 @@ RUN apk add --no-cache \
     ttyd
 
 # Install Codex CLI.
-RUN npm install -g @openai/codex \
+ARG CODEX_CLI_VERSION=0.134.0
+RUN npm install -g "@openai/codex@${CODEX_CLI_VERSION}" \
+    && codex --version \
     && npm cache clean --force
 
 # Install read-only Modbus Python tooling into an isolated import path.

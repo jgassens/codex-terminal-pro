@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.0.2
+
+- Pin the bundled Codex CLI to `@openai/codex@0.134.0` in the Docker build so
+  the add-on release, not an in-container self-update prompt, controls the
+  installed CLI version.
+- Print `codex --version` during the Docker build so a bad or unexpected CLI
+  package version fails visibly while building the add-on image.
+
 ## 2.0.1
 
 - Disable the upstream Codex CLI startup update prompt inside the add-on
