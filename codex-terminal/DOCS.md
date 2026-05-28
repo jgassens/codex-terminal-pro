@@ -147,6 +147,20 @@ The add-on forces file credential storage with:
 cli_auth_credentials_store = "file"
 ```
 
+It also disables Codex CLI's own startup update prompt:
+
+```toml
+check_for_update_on_startup = false
+```
+
+Use Home Assistant add-on updates to pick up new bundled Codex CLI versions.
+Managed Codex Terminal Pro TUI defaults use this footer:
+
+```toml
+[tui]
+status_line = ["run-state", "model-with-reasoning", "context-remaining", "auto-review", "five-hour-limit", "weekly-limit"]
+```
+
 ## Configuration
 
 ```yaml

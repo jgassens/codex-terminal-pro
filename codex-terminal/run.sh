@@ -53,6 +53,7 @@ init_environment() {
     fi
 
     ensure_codex_file_credentials
+    ensure_codex_update_prompt_disabled
     ensure_codex_tui_defaults
 
     if [ -f "$CODEX_HOME/auth.json" ]; then
@@ -109,21 +110,66 @@ ensure_codex_file_credentials() {
     touch "$config_file"
     chmod 644 "$config_file"
 
-    if grep -q '^cli_auth_credentials_store[[:space:]]*=' "$config_file"; then
-        sed -i 's/^cli_auth_credentials_store[[:space:]]*=.*/cli_auth_credentials_store = "file"/' "$config_file"
-    else
-        if [ -s "$config_file" ]; then
-            printf '\n' >> "$config_file"
-        fi
-        printf 'cli_auth_credentials_store = "file"\n' >> "$config_file"
-    fi
+    set_codex_top_level_config "$config_file" "cli_auth_credentials_store" '"file"'
+}
+
+ensure_codex_update_prompt_disabled() {
+    local config_file="$CODEX_HOME/config.toml"
+
+    set_codex_top_level_config "$config_file" "check_for_update_on_startup" "false"
+    bashio::log.info "Codex CLI startup update prompt disabled; update Codex through add-on releases"
+}
+
+set_codex_top_level_config() {
+    local config_file="$1"
+    local key="$2"
+    local value="$3"
+    local tmp_file="${config_file}.tmp.$$"
+
+    touch "$config_file"
+    chmod 644 "$config_file"
+
+    awk -v key="$key" -v value="$value" '
+        BEGIN {
+            inserted = 0
+            in_table = 0
+            key_pattern = "^[[:space:]]*" key "[[:space:]]*="
+        }
+        !inserted && !in_table && $0 ~ key_pattern {
+            print key " = " value
+            inserted = 1
+            next
+        }
+        !inserted && $0 ~ /^[[:space:]]*\[/ {
+            print key " = " value
+            print ""
+            inserted = 1
+            in_table = 1
+            print
+            next
+        }
+        {
+            if ($0 ~ /^[[:space:]]*\[/) {
+                in_table = 1
+            }
+            print
+        }
+        END {
+            if (!inserted) {
+                print key " = " value
+            }
+        }
+    ' "$config_file" > "$tmp_file"
+
+    mv "$tmp_file" "$config_file"
+    chmod 644 "$config_file"
 }
 
 ensure_codex_tui_defaults() {
     local config_file="$CODEX_HOME/config.toml"
 
     if grep -q '^# Codex Terminal Pro default footer\.' "$config_file" && \
-       grep -q '^status_line = \["model-with-reasoning", "context-remaining", "current-dir", "git-branch"\]' "$config_file"; then
+       grep -Eq '^status_line = \["model-with-reasoning", "context-remaining", "current-dir", "git-branch"\]' "$config_file"; then
         bashio::log.info "Updating managed Codex Terminal Pro TUI defaults"
         sed -i '/^# Codex Terminal Pro default footer\./,$d' "$config_file"
         write_codex_tui_defaults "$config_file"
@@ -131,7 +177,7 @@ ensure_codex_tui_defaults() {
     fi
 
     if grep -q '^# Codex Terminal Pro default TUI\.' "$config_file" && \
-       grep -Eq '^status_line = .*("context-used"|"permissions"|"approval-mode"|"five-hour-limit"|"weekly-limit"|"branch-changes"|"pull-request-number"|"codex-version")' "$config_file"; then
+       grep -Eq '^status_line = \["run-state", "model-with-reasoning", "context-remaining", "current-dir", "git-branch"\]|^status_line = .*("context-used"|"permissions"|"approval-mode"|"branch-changes"|"pull-request-number"|"codex-version")' "$config_file"; then
         bashio::log.info "Updating managed Codex Terminal Pro TUI defaults"
         sed -i '/^# Codex Terminal Pro default TUI\./,$d' "$config_file"
         write_codex_tui_defaults "$config_file"
@@ -155,7 +201,7 @@ write_codex_tui_defaults() {
 [tui]
 theme = "catppuccin-mocha"
 status_line_use_colors = true
-status_line = ["run-state", "model-with-reasoning", "context-remaining", "current-dir", "git-branch"]
+status_line = ["run-state", "model-with-reasoning", "context-remaining", "auto-review", "five-hour-limit", "weekly-limit"]
 TUI_EOF
 }
 
@@ -192,7 +238,7 @@ install_tools() {
 
 log_startup_diagnostics() {
     local app_name="${APP_NAME:-${ADDON_NAME:-Codex Terminal Pro}}"
-    local app_version="${BUILD_VERSION:-${APP_VERSION:-2.0}}"
+    local app_version="${BUILD_VERSION:-${APP_VERSION:-2.0.1}}"
 
     bashio::log.info "Startup diagnostics:"
     bashio::log.info "  - Date: $(date)"

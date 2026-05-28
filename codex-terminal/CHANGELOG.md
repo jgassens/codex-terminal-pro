@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.0.1
+
+- Disable the upstream Codex CLI startup update prompt inside the add-on
+  container. Codex CLI updates should arrive through Codex Terminal Pro image
+  releases instead of temporary `npm install -g @openai/codex` changes inside a
+  running container.
+- Keep managed Codex config values at the top level of
+  `/data/.codex/config.toml`, even when a user already has TOML tables such as
+  `[tui]`.
+- Restore the managed Codex footer to the operational HUD: run state,
+  model/reasoning/Fast mode, context remaining, auto-review, 5-hour limit, and
+  weekly limit.
+
 ## 2.0
 
 - Add `ha-api`, a read-only Home Assistant Core REST helper for exact live

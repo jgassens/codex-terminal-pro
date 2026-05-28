@@ -158,10 +158,11 @@ solar-toolbox discover 192.168.50.0/24 --ports 502,80,443,1502 --open-only
 solar-toolbox snapshot-plan
 ```
 
-Fresh installs add supported Codex TUI defaults in `/data/.codex/config.toml`:
-Catppuccin Mocha theme colors and a compact footer with run state, model,
-context remaining, current directory, and git branch. Existing user-customized
-Codex TUI config is left untouched.
+Fresh installs add supported Codex defaults in `/data/.codex/config.toml`:
+file credential storage, disabled upstream startup update prompts, Catppuccin
+Mocha theme colors, and a footer with run state, model/reasoning/Fast mode,
+context remaining, auto-review, 5-hour limit, and weekly limit. Existing
+user-customized Codex TUI config is left untouched.
 
 ![Codex Terminal Pro screenshot](screenshot.png)
 
