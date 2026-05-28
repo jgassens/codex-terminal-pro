@@ -14,7 +14,7 @@ This is an MVP fork. It is not an official OpenAI add-on.
 
 - Home Assistant ingress web terminal powered by ttyd.
 - Sidebar panel entry for admin users via Home Assistant ingress.
-- Polished Codex-focused web wrapper with image upload, voice controls, and a
+- Polished Codex-focused web wrapper with paste/drop image upload hints and a
   read-only Change Desk review panel.
 - Persistent `tmux` session so browser reconnects do not kill Codex.
 - Switchable Codex/Shell modes, with Shell mode backed by a real interactive
@@ -27,9 +27,9 @@ This is an MVP fork. It is not an official OpenAI add-on.
   `,,ha store reload` run in the Shell pane instead of being sent to Codex.
 - Hidden Shell dispatch output capture for completed commands, with copy and
   dismiss controls in the Codex view.
-- Change Desk snapshot for git status, Home Assistant YAML audit, `ha core
-  check`, live REST config reachability, and MCP Server status before reloads
-  or restarts.
+- Change Desk snapshot for Home Assistant YAML audit, `ha core check`, recent
+  log issues, live REST config reachability, and MCP Server status before
+  reloads or restarts.
 - Trusted human Shell lane for commands typed in Shell mode or dispatched with
   `,,`, while Codex/non-interactive Home Assistant operations remain guarded.
 - Codex CLI pinned and installed in the add-on image with
@@ -41,8 +41,8 @@ This is an MVP fork. It is not an official OpenAI add-on.
 - Supported Codex TUI defaults for theme colors, model, Fast mode, context, and
   rolling usage limits.
 - Device-code login helper for headless add-on use.
-- Image paste, drag-drop, and mobile photo-picker upload support with files
-  saved in `/data/images` and paths inserted into the prompt.
+- Image paste and drag-drop upload support with files saved in `/data/images`
+  and paths inserted into the prompt.
 - Persistent APK and Python package helpers under `/data/packages`.
 - Home Assistant CLI (`ha`), `ha-toolbox`, `ha-api`, `ha-ws`,
   `ha-mcp-status`, and GitHub CLI (`gh`) included.
@@ -122,9 +122,8 @@ below the terminal so iOS and Android keyboards do not need to focus the iframe.
 
 The mobile command bar includes a real textarea, **Send** button, Ctrl-C,
 Ctrl-D, Ctrl-Z, Tab, Enter, command-history arrows, clear, tmux page up/down,
-and return-to-bottom controls. Header **Paste**, manual paste fallback, image
-upload, voice input, and selected image paths target the native command field on
-mobile when practical.
+and return-to-bottom controls. Header **Paste**, manual paste fallback, and
+uploaded image paths target the native command field on mobile when practical.
 
 Selecting text inside the embedded terminal copies it to the browser clipboard
 when the selection finishes. tmux mouse selections are forwarded to the browser

@@ -182,11 +182,19 @@
             opacity: 0.5;
         }
 
-        #voice-btn.recording {
-            background: #51312f;
-            border-color: rgba(251, 111, 95, 0.7);
-            color: #fff0e8;
-            animation: pulse 1.5s infinite;
+        .header-hint {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            min-height: 32px;
+            padding: 7px 9px;
+            border: 1px solid rgba(121, 199, 197, 0.18);
+            border-radius: 6px;
+            background: #11191b;
+            color: var(--muted);
+            font-size: 12px;
+            font-weight: 600;
+            white-space: nowrap;
         }
 
         #touch-select-btn,
@@ -377,10 +385,6 @@
             border-radius: 8px;
             background: rgba(23, 27, 29, 0.94);
             box-shadow: 0 18px 45px var(--shadow);
-        }
-
-        #file-input {
-            display: none;
         }
 
         #manual-copy-panel,
@@ -644,65 +648,6 @@
             to { transform: rotate(360deg); }
         }
 
-        /* Voice Modal */
-        #voice-modal {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0, 0, 0, 0.78);
-            display: none;
-            align-items: center;
-            justify-content: center;
-            z-index: 2000;
-        }
-
-        #voice-modal.active {
-            display: flex;
-        }
-
-        #voice-modal-content {
-            background: var(--panel);
-            border-radius: 8px;
-            padding: 24px;
-            max-width: 500px;
-            width: 90%;
-            border: 1px solid var(--border);
-            box-shadow: 0 24px 60px var(--shadow);
-        }
-
-        #voice-modal-title {
-            font-size: 18px;
-            font-weight: 650;
-            margin-bottom: 16px;
-            color: var(--text);
-        }
-
-        #voice-transcript {
-            background: #0d1112;
-            border: 1px solid var(--border-soft);
-            border-radius: 6px;
-            padding: 12px;
-            min-height: 100px;
-            max-height: 200px;
-            overflow-y: auto;
-            margin-bottom: 16px;
-            color: var(--text);
-            font-size: 14px;
-            line-height: 1.5;
-        }
-
-        #voice-transcript.listening {
-            border-color: var(--danger);
-        }
-
-        #voice-transcript:empty::before {
-            content: "Click 'Start Recording' and speak...";
-            color: #6f7b7a;
-            font-style: italic;
-        }
-
         .modal-buttons {
             display: flex;
             gap: 8px;
@@ -748,17 +693,6 @@
             background: #2c3336;
         }
 
-        #voice-status {
-            font-size: 12px;
-            color: var(--muted);
-            margin-bottom: 12px;
-            min-height: 18px;
-        }
-
-        #voice-status.listening {
-            color: var(--danger);
-        }
-
         @media (max-width: 760px) {
             #header {
                 align-items: flex-start;
@@ -791,6 +725,12 @@
             }
 
             .header-btn {
+                flex: 1 1 calc(50% - 8px);
+                justify-content: center;
+                padding: 6px 8px;
+            }
+
+            .header-hint {
                 flex: 1 1 calc(50% - 8px);
                 justify-content: center;
                 padding: 6px 8px;
@@ -896,10 +836,6 @@
                     <span>▤</span>
                     <span>Change Desk</span>
                 </button>
-                <button id="voice-btn" class="header-btn">
-                    <span>🎤</span>
-                    <span>Voice Input</span>
-                </button>
                 <button id="touch-select-btn" class="header-btn" title="Touch-drag terminal text to copy">
                     <span>▣</span>
                     <span>Select Text</span>
@@ -908,10 +844,10 @@
                     <span>📋</span>
                     <span>Paste</span>
                 </button>
-                <button id="upload-btn" class="header-btn">
+                <div id="image-hint" class="header-hint" title="Paste or drop images into the terminal">
                     <span>📎</span>
-                    <span>Upload Image</span>
-                </button>
+                    <span>Paste/drop images</span>
+                </div>
             </div>
         </div>
         <div id="terminal-container">
@@ -945,8 +881,6 @@
             </form>
         </div>
     </div>
-    <input type="file" id="file-input" accept="image/*,.heic,.heif" multiple>
-
     <div id="manual-copy-panel" aria-live="polite">
         <div id="manual-copy-message">Copy this text manually.</div>
         <textarea id="manual-copy-text" readonly></textarea>
@@ -989,20 +923,6 @@
             <button id="change-desk-copy" class="modal-btn modal-btn-secondary">Copy Summary</button>
             <button id="change-desk-prompt" class="modal-btn modal-btn-secondary">Ask Codex</button>
             <button id="change-desk-refresh" class="modal-btn modal-btn-primary">Refresh</button>
-        </div>
-    </div>
-
-    <!-- Voice Input Modal -->
-    <div id="voice-modal">
-        <div id="voice-modal-content">
-            <div id="voice-modal-title">🎤 Voice Input</div>
-            <div id="voice-status"></div>
-            <div id="voice-transcript" contenteditable="true"></div>
-            <div class="modal-buttons">
-                <button id="voice-record-btn" class="modal-btn modal-btn-danger">Start Recording</button>
-                <button id="voice-copy-btn" class="modal-btn modal-btn-primary" style="display: none;">Copy Text</button>
-                <button id="voice-close-btn" class="modal-btn modal-btn-secondary">Close</button>
-            </div>
         </div>
     </div>
 
@@ -1186,10 +1106,8 @@
         const changeDeskCopy = document.getElementById('change-desk-copy');
         const changeDeskPrompt = document.getElementById('change-desk-prompt');
         const changeDeskClose = document.getElementById('change-desk-close');
-        const uploadBtn = document.getElementById('upload-btn');
         const touchSelectBtn = document.getElementById('touch-select-btn');
         const pasteBtn = document.getElementById('paste-btn');
-        const fileInput = document.getElementById('file-input');
         const dropZone = document.getElementById('drop-zone');
         const manualCopyPanel = document.getElementById('manual-copy-panel');
         const manualCopyText = document.getElementById('manual-copy-text');
@@ -1311,34 +1229,12 @@
         function setChangeDeskLoading() {
             changeDeskGenerated.textContent = 'Collecting snapshot...';
             changeDeskSummary.replaceChildren(
-                changeDeskMetric('Git', 'loading'),
                 changeDeskMetric('YAML audit', 'loading'),
                 changeDeskMetric('Core check', 'loading'),
+                changeDeskMetric('Logs', 'loading'),
                 changeDeskMetric('Live API', 'loading')
             );
             changeDeskContent.replaceChildren(changeDeskElement('div', 'change-desk-muted', 'Running read-only checks...'));
-        }
-
-        function renderChangeDeskGit(parent, git) {
-            const status = git?.available ? (git.clean ? 'clean' : 'dirty') : 'unavailable';
-            const label = git?.available ? (git.clean ? 'clean' : `${git.changedFileCount || 0} changed`) : 'unavailable';
-            const { section, body } = changeDeskSection('Working Tree', status === 'dirty' ? 'warn' : status, label);
-
-            if (!git?.available) {
-                body.appendChild(changeDeskElement('div', 'change-desk-muted', git?.message || 'Git status unavailable.'));
-                parent.appendChild(section);
-                return;
-            }
-
-            appendChangeDeskLine(body, 'Root', git.root || '');
-            appendChangeDeskLine(body, 'Branch', git.branch || '(detached or unnamed)');
-            appendChangeDeskList(body, git.statusLines, 'No changed files.');
-            appendChangeDeskOutput(body, git.stagedDiffStat ? `Staged:\n${git.stagedDiffStat}` : '');
-            appendChangeDeskOutput(body, git.diffStat ? `Unstaged:\n${git.diffStat}` : '');
-            if (git.statusTruncated) {
-                body.appendChild(changeDeskElement('div', 'change-desk-muted', 'File list truncated.'));
-            }
-            parent.appendChild(section);
         }
 
         function renderChangeDeskAudit(parent, audit) {
@@ -1380,6 +1276,43 @@
             parent.appendChild(section);
         }
 
+        function renderChangeDeskLogs(parent, logs) {
+            const { section, body } = changeDeskSection('Recent Logs', logs?.status || 'unavailable');
+
+            if (!logs?.available) {
+                body.appendChild(changeDeskElement('div', 'change-desk-muted', logs?.message || logs?.output || 'Home Assistant logs unavailable.'));
+                parent.appendChild(section);
+                return;
+            }
+
+            appendChangeDeskLine(body, 'Command', logs.command || 'ha core logs');
+            appendChangeDeskLine(body, 'Scanned lines', String(logs.scannedLines ?? 'unknown'));
+            appendChangeDeskLine(body, 'Errors', String((logs.counts?.critical || 0) + (logs.counts?.error || 0)));
+            appendChangeDeskLine(body, 'Warnings', String(logs.counts?.warning || 0));
+
+            if (logs.repeated?.length) {
+                body.appendChild(changeDeskElement('div', 'change-desk-muted', 'Repeated:'));
+                appendChangeDeskList(
+                    body,
+                    logs.repeated.map((item) => `${item.count}x ${item.severity}: ${item.sample}`),
+                    'No repeated issues.'
+                );
+            }
+
+            if (logs.issues?.length) {
+                body.appendChild(changeDeskElement('div', 'change-desk-muted', 'Apparent issues:'));
+                appendChangeDeskList(
+                    body,
+                    logs.issues.slice(0, 6).map((item) => `${item.severity}: ${item.sample}`),
+                    'No apparent issues.'
+                );
+            } else {
+                body.appendChild(changeDeskElement('div', 'change-desk-muted', 'No recent warnings or errors found.'));
+            }
+
+            parent.appendChild(section);
+        }
+
         function renderChangeDeskLive(parent, live, mcp) {
             const liveStatus = live?.available ? 'available' : 'unavailable';
             const { section, body } = changeDeskSection('Live Home Assistant', liveStatus);
@@ -1410,19 +1343,14 @@
             const lines = [
                 `Change Desk snapshot: ${data.generatedAt || 'unknown'}`,
                 `Workspace: ${data.workspace || '/config'}`,
-                `Duration: ${data.durationMs || 0}ms`,
-                '',
-                `Git: ${data.git?.available ? (data.git.clean ? 'clean' : `${data.git.changedFileCount || 0} changed`) : 'unavailable'}`
+                `Duration: ${data.durationMs || 0}ms`
             ];
-
-            if (data.git?.statusLines?.length) {
-                lines.push(...data.git.statusLines.map((line) => `  ${line}`));
-            }
 
             lines.push(
                 '',
                 `YAML audit: ${data.audit?.status || 'unavailable'} (${data.audit?.yaml?.ok || 0}/${data.audit?.yaml?.checked || 0} ok)`,
                 `Core check: ${data.coreCheck?.status || 'unavailable'}`,
+                `Logs: ${data.logs?.status || 'unavailable'} (${(data.logs?.counts?.critical || 0) + (data.logs?.counts?.error || 0)} errors, ${data.logs?.counts?.warning || 0} warnings)`,
                 `Live API: ${data.live?.status || 'unavailable'}`,
                 `MCP: ${data.mcp?.status || 'unavailable'}`
             );
@@ -1434,6 +1362,16 @@
 
             if (data.coreCheck?.output) {
                 lines.push('', 'Core check output:', data.coreCheck.output);
+            }
+
+            if (data.logs?.repeated?.length) {
+                lines.push('', 'Repeated log issues:');
+                data.logs.repeated.forEach((item) => lines.push(`  - ${item.count}x ${item.severity}: ${item.sample}`));
+            }
+
+            if (data.logs?.issues?.length) {
+                lines.push('', 'Apparent log issues:');
+                data.logs.issues.slice(0, 8).forEach((item) => lines.push(`  - ${item.severity}: ${item.sample}`));
             }
 
             if (data.recommendations?.length) {
@@ -1450,26 +1388,27 @@
                 ? `${generatedAt.toLocaleString()} · ${data.durationMs || 0}ms`
                 : '';
 
-            const gitLabel = data.git?.available
-                ? (data.git.clean ? 'Clean' : `${data.git.changedFileCount || 0} files`)
-                : 'Unavailable';
             const auditLabel = data.audit?.available
                 ? `${data.audit.yaml?.ok || 0}/${data.audit.yaml?.checked || 0} YAML`
                 : 'Unavailable';
             const coreLabel = data.coreCheck?.available ? data.coreCheck.status : 'Unavailable';
+            const logErrorCount = (data.logs?.counts?.critical || 0) + (data.logs?.counts?.error || 0);
+            const logsLabel = data.logs?.available
+                ? `${logErrorCount}/${data.logs.counts?.warning || 0}`
+                : 'Unavailable';
             const liveLabel = data.live?.available ? 'Reachable' : 'Unavailable';
 
             changeDeskSummary.replaceChildren(
-                changeDeskMetric('Git', gitLabel, data.git?.clean ? 'ok' : (data.git?.available ? 'warn' : 'unavailable')),
                 changeDeskMetric('YAML audit', auditLabel, data.audit?.status || 'unavailable'),
                 changeDeskMetric('Core check', coreLabel, data.coreCheck?.status || 'unavailable'),
+                changeDeskMetric('Logs E/W', logsLabel, data.logs?.status || 'unavailable'),
                 changeDeskMetric('Live API', liveLabel, data.live?.available ? 'ok' : 'unavailable')
             );
 
             const fragment = document.createDocumentFragment();
-            renderChangeDeskGit(fragment, data.git);
             renderChangeDeskAudit(fragment, data.audit);
             renderChangeDeskCoreCheck(fragment, data.coreCheck);
+            renderChangeDeskLogs(fragment, data.logs);
             renderChangeDeskLive(fragment, data.live, data.mcp);
             renderChangeDeskRecommendations(fragment, data.recommendations || []);
             changeDeskContent.replaceChildren(fragment);
@@ -1531,7 +1470,7 @@
 
             const prompt = [
                 'Review this Home Assistant Change Desk snapshot.',
-                'Focus on validation blockers, changed files, and whether reload or restart is safe.',
+                'Focus on validation blockers, repeated log issues, live Home Assistant reachability, and whether reload or restart is safe.',
                 'Do not apply changes without my confirmation.',
                 '',
                 latestChangeDeskSummary
@@ -2728,7 +2667,7 @@
             const imageFiles = imageFilesFromFileList(files);
 
             if (imageFiles.length === 0) {
-                setStatus('Please select an image file', 'error');
+                setStatus('Please paste or drop an image file', 'error');
                 return;
             }
 
@@ -2745,15 +2684,13 @@
 
         async function uploadImage(file) {
             if (!isImageFile(file)) {
-                setStatus('Please select an image file', 'error');
+                setStatus('Please paste or drop an image file', 'error');
                 return;
             }
 
             const formData = new FormData();
             formData.append('image', file);
-
-            uploadBtn.innerHTML = '<span class="spinner"></span><span>Uploading...</span>';
-            uploadBtn.disabled = true;
+            setStatus('Uploading image...', 'success', false);
 
             try {
                 // Use relative path for Home Assistant ingress compatibility
@@ -2827,24 +2764,8 @@
             } catch (error) {
                 console.error('Upload error:', error);
                 setStatus('Upload failed: ' + error.message, 'error');
-            } finally {
-                uploadBtn.innerHTML = '<span>📎</span><span>Upload Image</span>';
-                uploadBtn.disabled = false;
             }
         }
-
-        // Upload button click
-        uploadBtn.addEventListener('click', () => {
-            fileInput.click();
-        });
-
-        // File input change
-        fileInput.addEventListener('change', async (e) => {
-            if (e.target.files.length > 0) {
-                await uploadImageFiles(e.target.files, 'selected');
-                e.target.value = '';
-            }
-        });
 
         async function handleImagePaste(e) {
             if (
@@ -3277,222 +3198,6 @@
             });
         });
 
-        // ========================================
-        // Voice Input with Web Speech API
-        // ========================================
-
-        const voiceBtn = document.getElementById('voice-btn');
-        const voiceModal = document.getElementById('voice-modal');
-        const voiceRecordBtn = document.getElementById('voice-record-btn');
-        const voiceCopyBtn = document.getElementById('voice-copy-btn');
-        const voiceCloseBtn = document.getElementById('voice-close-btn');
-        const voiceTranscript = document.getElementById('voice-transcript');
-        const voiceStatus = document.getElementById('voice-status');
-
-        let recognition = null;
-        let isRecording = false;
-
-        // Check if Web Speech API is supported
-        if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
-            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-            recognition = new SpeechRecognition();
-
-            recognition.continuous = true;
-            recognition.interimResults = true;
-            recognition.lang = 'en-US'; // Default to English, can be made configurable
-
-            console.log('Web Speech API is supported!');
-        } else {
-            console.warn('Web Speech API is not supported in this browser');
-            voiceBtn.disabled = true;
-            voiceBtn.title = 'Voice input not supported in this browser';
-        }
-
-        // Open voice modal
-        voiceBtn.addEventListener('click', () => {
-            voiceModal.classList.add('active');
-            voiceTranscript.textContent = '';
-            voiceStatus.textContent = '';
-            voiceCopyBtn.textContent = isMobileInputMode() ? 'Insert Text' : 'Copy Text';
-            voiceCopyBtn.style.display = 'none';
-        });
-
-        // Close voice modal
-        voiceCloseBtn.addEventListener('click', () => {
-            if (isRecording) {
-                stopRecording();
-            }
-            voiceModal.classList.remove('active');
-        });
-
-        // Click outside modal to close
-        voiceModal.addEventListener('click', (e) => {
-            if (e.target === voiceModal) {
-                if (isRecording) {
-                    stopRecording();
-                }
-                voiceModal.classList.remove('active');
-            }
-        });
-
-        // Start/Stop recording
-        voiceRecordBtn.addEventListener('click', () => {
-            if (isRecording) {
-                stopRecording();
-            } else {
-                startRecording();
-            }
-        });
-
-        function startRecording() {
-            if (!recognition) {
-                voiceStatus.textContent = '❌ Speech recognition not available';
-                voiceStatus.className = 'error';
-                return;
-            }
-
-            isRecording = true;
-            voiceRecordBtn.textContent = 'Stop Recording';
-            voiceRecordBtn.className = 'modal-btn modal-btn-danger';
-            voiceStatus.textContent = '🎤 Listening... (speak now)';
-            voiceStatus.classList.add('listening');
-            voiceTranscript.classList.add('listening');
-
-            let finalTranscript = '';
-            let interimTranscript = '';
-
-            recognition.onresult = (event) => {
-                interimTranscript = '';
-
-                for (let i = event.resultIndex; i < event.results.length; i++) {
-                    const transcript = event.results[i][0].transcript;
-
-                    if (event.results[i].isFinal) {
-                        finalTranscript += transcript + ' ';
-                    } else {
-                        interimTranscript += transcript;
-                    }
-                }
-
-                // Display both final and interim results
-                voiceTranscript.textContent = finalTranscript + interimTranscript;
-
-                // Auto-scroll to bottom
-                voiceTranscript.scrollTop = voiceTranscript.scrollHeight;
-            };
-
-            recognition.onerror = (event) => {
-                console.error('Speech recognition error:', event.error);
-                let errorMessage = 'Error: ';
-
-                switch(event.error) {
-                    case 'no-speech':
-                        errorMessage += 'No speech detected. Try speaking again.';
-                        break;
-                    case 'audio-capture':
-                        errorMessage += 'No microphone found. Check your settings.';
-                        break;
-                    case 'not-allowed':
-                        errorMessage += 'Microphone access denied. Please allow access.';
-                        break;
-                    default:
-                        errorMessage += event.error;
-                }
-
-                voiceStatus.textContent = '❌ ' + errorMessage;
-                voiceStatus.classList.remove('listening');
-                stopRecording();
-            };
-
-            recognition.onend = () => {
-                if (isRecording) {
-                    // Restart if it stops but we're still recording
-                    recognition.start();
-                }
-            };
-
-            try {
-                recognition.start();
-                console.log('Speech recognition started');
-            } catch (err) {
-                console.error('Failed to start recognition:', err);
-                voiceStatus.textContent = '❌ Failed to start recording';
-                isRecording = false;
-            }
-        }
-
-        function stopRecording() {
-            if (!recognition) return;
-
-            isRecording = false;
-            recognition.stop();
-
-            voiceRecordBtn.textContent = 'Start Recording';
-            voiceRecordBtn.className = 'modal-btn modal-btn-primary';
-            voiceStatus.textContent = '✓ Recording stopped';
-            voiceStatus.classList.remove('listening');
-            voiceTranscript.classList.remove('listening');
-
-            if (voiceTranscript.textContent.trim()) {
-                voiceCopyBtn.style.display = 'inline-block';
-                voiceCopyBtn.textContent = isMobileInputMode() ? 'Insert Text' : 'Copy Text';
-                voiceStatus.textContent = isMobileInputMode()
-                    ? '✓ Transcript ready! Edit if needed, then insert.'
-                    : '✓ Transcript ready! Edit if needed, then copy.';
-            }
-
-            console.log('Speech recognition stopped');
-        }
-
-        // Copy transcript to clipboard
-        voiceCopyBtn.addEventListener('click', async () => {
-            const text = voiceTranscript.textContent.trim();
-
-            if (!text) {
-                voiceStatus.textContent = '❌ No text to copy';
-                return;
-            }
-
-            if (insertTextIntoMobileInput(text)) {
-                voiceModal.classList.remove('active');
-                voiceStatus.textContent = '✓ Inserted into command line.';
-                setStatus('Voice text added to command line', 'success', false);
-                return;
-            }
-
-            const copied = await copyToClipboard(text);
-            if (copied) {
-                voiceStatus.textContent = '✓ Copied to clipboard! Paste into terminal.';
-                voiceStatus.className = 'success';
-            } else {
-                showManualCopy(text, 'Tap and hold to Copy this transcript, then paste it into the terminal.');
-                voiceStatus.textContent = 'Select the transcript in the copy panel.';
-            }
-        });
-
-        // Keyboard shortcuts in voice modal
-        voiceModal.addEventListener('keydown', (e) => {
-            // Escape to close
-            if (e.key === 'Escape') {
-                if (isRecording) {
-                    stopRecording();
-                }
-                voiceModal.classList.remove('active');
-            }
-
-            // Enter to copy (if text exists and not recording)
-            if (e.key === 'Enter' && !isRecording && voiceTranscript.textContent.trim()) {
-                voiceCopyBtn.click();
-            }
-
-            // Space to start/stop recording (if not editing transcript)
-            if (e.key === ' ' && e.target !== voiceTranscript) {
-                e.preventDefault();
-                voiceRecordBtn.click();
-            }
-        });
-
-        console.log('Voice input module loaded');
     </script>
 </body>
 </html>

@@ -40,8 +40,8 @@ const RAW_SHELL_OUTPUT_MAX_CHARS = parseNonNegativeInt(process.env.RAW_SHELL_OUT
 const CHANGE_DESK_COMMAND_TIMEOUT_MS = parseNonNegativeInt(process.env.CHANGE_DESK_COMMAND_TIMEOUT_MS, 45000);
 const CHANGE_DESK_FAST_COMMAND_TIMEOUT_MS = parseNonNegativeInt(process.env.CHANGE_DESK_FAST_COMMAND_TIMEOUT_MS, 12000);
 const CHANGE_DESK_OUTPUT_MAX_CHARS = parseNonNegativeInt(process.env.CHANGE_DESK_OUTPUT_MAX_CHARS, 12000);
-const CHANGE_DESK_FILE_LIMIT = parseNonNegativeInt(process.env.CHANGE_DESK_FILE_LIMIT, 80);
-const CHANGE_DESK_GIT_PATHSPEC = ['.', ':!.claude'];
+const CHANGE_DESK_LOG_OUTPUT_MAX_CHARS = parseNonNegativeInt(process.env.CHANGE_DESK_LOG_OUTPUT_MAX_CHARS, 60000);
+const CHANGE_DESK_LOG_LINE_LIMIT = parseNonNegativeInt(process.env.CHANGE_DESK_LOG_LINE_LIMIT, 500);
 const IMAGE_RETENTION_DAYS = parseNonNegativeInt(process.env.IMAGE_RETENTION_DAYS, 30);
 const IMAGE_RETENTION_MAX_BYTES = parseNonNegativeInt(process.env.IMAGE_RETENTION_MAX_BYTES, 256 * 1024 * 1024);
 const SCROLL_CONTROL_ACTIONS = new Set(['scroll-up', 'scroll-down', 'scroll-bottom']);
@@ -549,14 +549,6 @@ function truncateChangeDeskText(value, maxChars = CHANGE_DESK_OUTPUT_MAX_CHARS) 
     };
 }
 
-function lineList(value) {
-    return String(value || '')
-        .replace(/\r/g, '')
-        .split('\n')
-        .map((line) => line.trimEnd())
-        .filter(Boolean);
-}
-
 function runChangeDeskCommand(command, args, options = {}) {
     const timeout = options.timeout || CHANGE_DESK_COMMAND_TIMEOUT_MS;
     const maxChars = options.maxChars || CHANGE_DESK_OUTPUT_MAX_CHARS;
@@ -590,90 +582,6 @@ function runChangeDeskCommand(command, args, options = {}) {
             });
         });
     });
-}
-
-function shortStatusPath(line) {
-    const rawPath = String(line || '').slice(3).trim();
-    if (!rawPath) {
-        return '';
-    }
-
-    const renamedPath = rawPath.includes(' -> ')
-        ? rawPath.split(' -> ').pop()
-        : rawPath;
-    return renamedPath.replace(/^"|"$/g, '');
-}
-
-function uniqueStatusPaths(lines) {
-    const seen = new Set();
-    const paths = [];
-
-    for (const line of lines) {
-        const filePath = shortStatusPath(line);
-        if (!filePath || seen.has(filePath)) {
-            continue;
-        }
-
-        seen.add(filePath);
-        paths.push(filePath);
-    }
-
-    return paths;
-}
-
-async function collectChangeDeskGit() {
-    const probe = await runChangeDeskCommand('git', ['rev-parse', '--show-toplevel'], {
-        timeout: CHANGE_DESK_FAST_COMMAND_TIMEOUT_MS,
-        maxChars: 4096
-    });
-
-    if (!probe.success) {
-        return {
-            available: false,
-            clean: null,
-            message: probe.notFound ? 'git is not available' : (probe.output || probe.error || 'not a git work tree')
-        };
-    }
-
-    const [branch, status, diffStat, stagedStat] = await Promise.all([
-        runChangeDeskCommand('git', ['branch', '--show-current'], {
-            timeout: CHANGE_DESK_FAST_COMMAND_TIMEOUT_MS,
-            maxChars: 4096
-        }),
-        runChangeDeskCommand('git', ['status', '--short', '--', ...CHANGE_DESK_GIT_PATHSPEC], {
-            timeout: CHANGE_DESK_FAST_COMMAND_TIMEOUT_MS,
-            maxChars: CHANGE_DESK_OUTPUT_MAX_CHARS
-        }),
-        runChangeDeskCommand('git', ['diff', '--stat', '--no-renames', '--', ...CHANGE_DESK_GIT_PATHSPEC], {
-            timeout: CHANGE_DESK_FAST_COMMAND_TIMEOUT_MS,
-            maxChars: CHANGE_DESK_OUTPUT_MAX_CHARS
-        }),
-        runChangeDeskCommand('git', ['diff', '--cached', '--stat', '--no-renames', '--', ...CHANGE_DESK_GIT_PATHSPEC], {
-            timeout: CHANGE_DESK_FAST_COMMAND_TIMEOUT_MS,
-            maxChars: CHANGE_DESK_OUTPUT_MAX_CHARS
-        })
-    ]);
-
-    const statusLines = lineList(status.stdout);
-    const changedFiles = uniqueStatusPaths(statusLines);
-
-    return {
-        available: true,
-        root: lineList(probe.stdout)[0] || CONFIG_ROOT,
-        branch: lineList(branch.stdout)[0] || '',
-        clean: statusLines.length === 0,
-        statusLines: statusLines.slice(0, CHANGE_DESK_FILE_LIMIT),
-        changedFiles: changedFiles.slice(0, CHANGE_DESK_FILE_LIMIT),
-        changedFileCount: changedFiles.length,
-        statusTruncated: statusLines.length > CHANGE_DESK_FILE_LIMIT,
-        diffStat: diffStat.stdout.trim(),
-        stagedDiffStat: stagedStat.stdout.trim(),
-        truncated: status.truncated || diffStat.truncated || stagedStat.truncated,
-        errors: [status, diffStat, stagedStat]
-            .filter((result) => !result.success)
-            .map((result) => result.output || result.error)
-            .filter(Boolean)
-    };
 }
 
 async function collectChangeDeskAudit() {
@@ -762,6 +670,132 @@ async function collectChangeDeskCoreCheck() {
     };
 }
 
+function severityFromLogLine(line) {
+    const text = String(line || '');
+    if (/\b(CRITICAL|FATAL)\b/i.test(text)) {
+        return 'critical';
+    }
+    if (/\b(ERROR|ERR)\b/i.test(text) || /Traceback|Exception|failed/i.test(text)) {
+        return 'error';
+    }
+    if (/\b(WARNING|WARN)\b/i.test(text)) {
+        return 'warning';
+    }
+    return '';
+}
+
+function normalizeLogSignature(line) {
+    return String(line || '')
+        .replace(/\x1b\[[0-9;]*m/g, '')
+        .replace(/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:[+-]\d{2}:?\d{2}|Z)?\s*/g, '')
+        .replace(/\b[0-9a-f]{8,}\b/gi, '<hex>')
+        .replace(/\b\d+(?:\.\d+)?\b/g, '<n>')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 220);
+}
+
+function summarizeLogIssues(output) {
+    const lines = String(output || '')
+        .replace(/\r/g, '')
+        .split('\n')
+        .map((line) => line.trimEnd())
+        .filter(Boolean)
+        .slice(-CHANGE_DESK_LOG_LINE_LIMIT);
+    const issueMap = new Map();
+    const counts = {
+        critical: 0,
+        error: 0,
+        warning: 0
+    };
+
+    for (const line of lines) {
+        const severity = severityFromLogLine(line);
+        if (!severity) {
+            continue;
+        }
+
+        counts[severity] += 1;
+        const signature = normalizeLogSignature(line);
+        if (!signature) {
+            continue;
+        }
+
+        const existing = issueMap.get(signature) || {
+            signature,
+            severity,
+            count: 0,
+            sample: line
+        };
+        existing.count += 1;
+        if (severity === 'critical' || (severity === 'error' && existing.severity === 'warning')) {
+            existing.severity = severity;
+        }
+        issueMap.set(signature, existing);
+    }
+
+    const issues = Array.from(issueMap.values())
+        .sort((a, b) => {
+            const severityRank = { critical: 3, error: 2, warning: 1 };
+            return (severityRank[b.severity] - severityRank[a.severity]) || (b.count - a.count);
+        })
+        .slice(0, 12);
+    const repeated = issues.filter((issue) => issue.count >= 3).slice(0, 8);
+
+    return {
+        scannedLines: lines.length,
+        counts,
+        issues,
+        repeated
+    };
+}
+
+async function collectChangeDeskLogs() {
+    const result = await runChangeDeskCommand('ha', ['core', 'logs'], {
+        timeout: CHANGE_DESK_FAST_COMMAND_TIMEOUT_MS,
+        maxChars: CHANGE_DESK_LOG_OUTPUT_MAX_CHARS
+    });
+
+    if (result.notFound) {
+        return {
+            available: false,
+            status: 'unavailable',
+            command: 'ha core logs',
+            message: 'Home Assistant CLI is not available'
+        };
+    }
+
+    if (!result.success && !result.stdout) {
+        return {
+            available: false,
+            status: 'unavailable',
+            command: 'ha core logs',
+            exitCode: result.exitCode,
+            output: result.output || result.error || 'Home Assistant logs unavailable',
+            timedOut: result.timedOut,
+            truncated: result.truncated
+        };
+    }
+
+    const summary = summarizeLogIssues(result.stdout || result.output);
+    const status = summary.counts.critical > 0 || summary.counts.error > 0
+        ? 'error'
+        : (summary.counts.warning > 0 ? 'warning' : 'clean');
+
+    return {
+        available: true,
+        status,
+        command: 'ha core logs',
+        exitCode: result.exitCode,
+        timedOut: result.timedOut,
+        truncated: result.truncated,
+        scannedLines: summary.scannedLines,
+        counts: summary.counts,
+        issues: summary.issues,
+        repeated: summary.repeated
+    };
+}
+
 async function collectChangeDeskLive() {
     const result = await runChangeDeskCommand('ha-api', ['config'], {
         timeout: CHANGE_DESK_FAST_COMMAND_TIMEOUT_MS,
@@ -847,12 +881,6 @@ async function collectChangeDeskMcp() {
 function buildChangeDeskRecommendations(snapshot) {
     const recommendations = [];
 
-    if (snapshot.git?.available && snapshot.git.clean) {
-        recommendations.push('No git working-tree changes detected.');
-    } else if (snapshot.git?.available) {
-        recommendations.push('Review the listed changed files before reload or restart.');
-    }
-
     if (snapshot.audit?.available && snapshot.audit.status === 'failed') {
         recommendations.push('Fix YAML audit issues before running a Home Assistant reload.');
     }
@@ -863,6 +891,14 @@ function buildChangeDeskRecommendations(snapshot) {
 
     if (snapshot.coreCheck?.available && snapshot.coreCheck.timedOut) {
         recommendations.push('Core check is still running or timed out; rerun it in Shell mode before applying changes.');
+    }
+
+    if (snapshot.logs?.available && snapshot.logs.repeated?.length > 0) {
+        recommendations.push('Review repeated Home Assistant log issues before reload or restart.');
+    } else if (snapshot.logs?.available && snapshot.logs.status === 'error') {
+        recommendations.push('Recent Home Assistant logs include errors; inspect them before applying changes.');
+    } else if (snapshot.logs?.available && snapshot.logs.status === 'warning') {
+        recommendations.push('Recent Home Assistant logs include warnings worth checking.');
     }
 
     if (snapshot.live?.available) {
@@ -878,10 +914,10 @@ function buildChangeDeskRecommendations(snapshot) {
 
 async function collectChangeDeskSnapshot() {
     const startedAt = Date.now();
-    const [git, audit, coreCheck, live, mcp] = await Promise.all([
-        collectChangeDeskGit(),
+    const [audit, coreCheck, logs, live, mcp] = await Promise.all([
         collectChangeDeskAudit(),
         collectChangeDeskCoreCheck(),
+        collectChangeDeskLogs(),
         collectChangeDeskLive(),
         collectChangeDeskMcp()
     ]);
@@ -890,9 +926,9 @@ async function collectChangeDeskSnapshot() {
         generatedAt: new Date().toISOString(),
         durationMs: Date.now() - startedAt,
         workspace: CONFIG_ROOT,
-        git,
         audit,
         coreCheck,
+        logs,
         live,
         mcp
     };

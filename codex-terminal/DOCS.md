@@ -57,10 +57,10 @@ Electric discovery work. Run `ha-api`, `ha-ws`, `ha-mcp-status`, or
 `modbus-toolbox` in the terminal for examples.
 
 The toolbar **Change Desk** button opens a read-only review panel for the
-current `/config` workspace. It summarizes git changes, `ha-toolbox` YAML audit
-results, `ha core check`, live `ha-api config` reachability, and
-`ha-mcp-status`. It can copy the summary or insert a Codex review prompt, but it
-does not reload, restart, or apply changes.
+current `/config` workspace. It summarizes `ha-toolbox` YAML audit results,
+`ha core check`, recent `ha core logs` issues, live `ha-api config`
+reachability, and `ha-mcp-status`. It can copy the summary or insert a Codex
+review prompt, but it does not reload, restart, or apply changes.
 
 For domestic and small commercial solar work, run `solar-toolbox`. It can print
 a site-intake brief, inspect Home Assistant config/entity registry for

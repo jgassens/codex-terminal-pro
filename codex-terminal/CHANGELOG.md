@@ -1,10 +1,22 @@
 # Changelog
 
+## 2.1.1
+
+- Remove the local git working-tree probe from Change Desk so the panel stays
+  focused on Home Assistant validation instead of reporting `/config` as "not a
+  git repository."
+- Add a Recent Logs section to Change Desk that reads `ha core logs`, counts
+  recent errors and warnings, and highlights repeated log signatures.
+- Remove the Voice Input toolbar and modal because browser speech recognition
+  is not reliable in the target Home Assistant browsers.
+- Replace the Upload Image toolbar button with a compact paste/drop image hint;
+  image upload still works through paste and drag/drop.
+
 ## 2.1.0
 
 - Add a read-only **Change Desk** panel to the web terminal wrapper. It collects
-  git working-tree status, Home Assistant YAML audit results, `ha core check`,
-  live REST config reachability, and MCP Server status in one review surface.
+  Home Assistant YAML audit results, `ha core check`, recent logs, live REST
+  config reachability, and MCP Server status in one review surface.
 - Let the Change Desk copy its summary or insert a Codex review prompt without
   applying changes, reloading YAML, or restarting Home Assistant.
 - Redact common token patterns from Change Desk command output and cap captured

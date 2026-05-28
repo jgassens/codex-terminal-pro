@@ -14,7 +14,7 @@ It registers an admin-only Home Assistant sidebar panel titled **Codex Terminal
 Pro** through ingress.
 
 The web terminal wrapper uses a compact Codex-focused interface around ttyd,
-with voice input, image upload, and a read-only **Change Desk** review panel
+with paste/drop image upload hints and a read-only **Change Desk** review panel
 kept one click away from the prompt.
 
 The terminal runs inside a persistent `tmux` session, so browser reconnects and
@@ -35,11 +35,9 @@ then drag across the terminal text to select it. Mobile browser clipboard APIs
 are best-effort, so the selection remains visible even when the browser blocks
 automatic copy.
 
-Dropped, selected, or pasted images are uploaded to `/data/images`, and the
-saved image path is inserted directly into the Codex prompt. Paste is captured
-inside the embedded terminal iframe when the browser exposes image clipboard
-data; on iOS and Android, the upload button opens the device photo picker as the
-reliable fallback.
+Dropped or pasted images are uploaded to `/data/images`, and the saved image
+path is inserted directly into the Codex prompt. Paste is captured inside the
+embedded terminal iframe when the browser exposes image clipboard data.
 
 The toolbar includes a **Paste** button for mobile and desktop browsers. It
 reads text or images from the clipboard when the browser allows it; if mobile
@@ -51,15 +49,15 @@ history arrows, tmux page up/down, and return-to-prompt controls.
 
 The mobile command bar is a hybrid terminal input layer: ttyd/xterm remains the
 live output surface, while the phone keyboard, native paste, uploaded image
-paths, and voice text go through a browser textarea when practical. This avoids
-the iOS/Android iframe focus failure that can hide the command line behind the
-keyboard.
+paths, and manual paste text go through a browser textarea when practical. This
+avoids the iOS/Android iframe focus failure that can hide the command line
+behind the keyboard.
 
 The **Change Desk** button opens a read-only Home Assistant review panel. It
-collects git working-tree status, the `ha-toolbox` YAML audit, `ha core check`,
-live `ha-api config` reachability, and `ha-mcp-status` so you can inspect the
-blast radius before a reload or restart. It can copy the summary or insert a
-Codex review prompt, but it does not apply changes.
+collects the `ha-toolbox` YAML audit, `ha core check`, recent `ha core logs`
+issues, live `ha-api config` reachability, and `ha-mcp-status` so you can
+inspect the blast radius before a reload or restart. It can copy the summary or
+insert a Codex review prompt, but it does not apply changes.
 
 ## Shell Mode And `,,` Dispatch
 
