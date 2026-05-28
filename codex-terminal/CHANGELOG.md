@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.0.3
+
+- Preserve existing Codex TUI `status_line` preferences on startup instead of
+  replacing them during add-on updates.
+- Sanitize only Codex CLI `0.134.0` strings that are valid permission concepts
+  but unsupported as `[tui].status_line` item IDs (`auto-review`,
+  `permissions`, and `approval-mode`) so startup stays clean without
+  clobbering the rest of the user's footer.
+- Use `fast-mode` instead of unsupported status-line token `auto-review` in the
+  fresh-install managed footer default.
+
 ## 2.0.2
 
 - Pin the bundled Codex CLI to `@openai/codex@0.134.0` in the Docker build so

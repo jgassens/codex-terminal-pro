@@ -161,8 +161,14 @@ Managed Codex Terminal Pro TUI defaults use this footer:
 
 ```toml
 [tui]
-status_line = ["run-state", "model-with-reasoning", "context-remaining", "auto-review", "five-hour-limit", "weekly-limit"]
+status_line = ["run-state", "model-with-reasoning", "fast-mode", "context-remaining", "five-hour-limit", "weekly-limit"]
 ```
+
+When a status line is already present, the add-on preserves it. Startup only
+removes unsupported `[tui].status_line` item IDs that Codex CLI `0.134.0`
+warns about. `auto-review`, `permissions`, and `approval-mode` are valid Codex
+permission concepts, but this pinned CLI does not accept those strings as
+footer item IDs.
 
 ## Configuration
 

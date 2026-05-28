@@ -161,8 +161,8 @@ solar-toolbox snapshot-plan
 Fresh installs add supported Codex defaults in `/data/.codex/config.toml`:
 file credential storage, disabled upstream startup update prompts, Catppuccin
 Mocha theme colors, and a footer with run state, model/reasoning/Fast mode,
-context remaining, auto-review, 5-hour limit, and weekly limit. Existing
-user-customized Codex TUI config is left untouched.
+context remaining, 5-hour limit, and weekly limit. Existing user-customized
+Codex TUI config and status-line preferences are left untouched.
 
 The bundled Codex CLI is pinned in the Docker build. This release installs
 `@openai/codex@0.134.0`; future CLI updates should bump that Dockerfile value

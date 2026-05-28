@@ -168,28 +168,67 @@ set_codex_top_level_config() {
 ensure_codex_tui_defaults() {
     local config_file="$CODEX_HOME/config.toml"
 
-    if grep -q '^# Codex Terminal Pro default footer\.' "$config_file" && \
-       grep -Eq '^status_line = \["model-with-reasoning", "context-remaining", "current-dir", "git-branch"\]' "$config_file"; then
-        bashio::log.info "Updating managed Codex Terminal Pro TUI defaults"
-        sed -i '/^# Codex Terminal Pro default footer\./,$d' "$config_file"
-        write_codex_tui_defaults "$config_file"
+    if grep -Eq '^[[:space:]]*status_line[[:space:]]*=' "$config_file"; then
+        sanitize_codex_status_line "$config_file"
+        bashio::log.info "Codex TUI status line already present; preserving user preference"
         return
     fi
 
-    if grep -q '^# Codex Terminal Pro default TUI\.' "$config_file" && \
-       grep -Eq '^status_line = \["run-state", "model-with-reasoning", "context-remaining", "current-dir", "git-branch"\]|^status_line = .*("context-used"|"permissions"|"approval-mode"|"branch-changes"|"pull-request-number"|"codex-version")' "$config_file"; then
-        bashio::log.info "Updating managed Codex Terminal Pro TUI defaults"
-        sed -i '/^# Codex Terminal Pro default TUI\./,$d' "$config_file"
-        write_codex_tui_defaults "$config_file"
-        return
-    fi
-
-    if grep -Eq '^[[:space:]]*(\[tui\]|tui\.|status_line[[:space:]]*=)' "$config_file"; then
+    if grep -Eq '^[[:space:]]*(\[tui\]|tui\.)' "$config_file"; then
         bashio::log.info "Codex TUI config already present; leaving it unchanged"
         return
     fi
 
     write_codex_tui_defaults "$config_file"
+}
+
+sanitize_codex_status_line() {
+    local config_file="$1"
+
+    python3 - "$config_file" << 'PY'
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+
+# These are valid Codex concepts/settings, but the pinned 0.134.0 CLI does not
+# accept them as [tui].status_line item IDs. Keep every other user-selected
+# footer item intact.
+unsupported_status_line_items = {"auto-review", "permissions", "approval-mode"}
+
+def sanitize(match: re.Match[str]) -> str:
+    prefix = match.group("prefix")
+    body = match.group("body")
+    suffix = match.group("suffix")
+    items = re.findall(r'"([^"]+)"', body)
+    if not items:
+        return match.group(0)
+    kept = [item for item in items if item not in unsupported_status_line_items]
+    if kept == items:
+        return match.group(0)
+    if not kept:
+        kept = [
+            "run-state",
+            "model-with-reasoning",
+            "fast-mode",
+            "context-remaining",
+            "five-hour-limit",
+            "weekly-limit",
+        ]
+    rendered = ", ".join(f'"{item}"' for item in kept)
+    return f"{prefix}[{rendered}]{suffix}"
+
+updated = re.sub(
+    r'(?m)^(?P<prefix>[ \t]*status_line[ \t]*=[ \t]*)\[(?P<body>[^\n\]]*)\](?P<suffix>[ \t]*(?:#.*)?)$',
+    sanitize,
+    text,
+)
+
+if updated != text:
+    path.write_text(updated, encoding="utf-8")
+PY
 }
 
 write_codex_tui_defaults() {
@@ -201,7 +240,7 @@ write_codex_tui_defaults() {
 [tui]
 theme = "catppuccin-mocha"
 status_line_use_colors = true
-status_line = ["run-state", "model-with-reasoning", "context-remaining", "auto-review", "five-hour-limit", "weekly-limit"]
+status_line = ["run-state", "model-with-reasoning", "fast-mode", "context-remaining", "five-hour-limit", "weekly-limit"]
 TUI_EOF
 }
 
@@ -238,7 +277,7 @@ install_tools() {
 
 log_startup_diagnostics() {
     local app_name="${APP_NAME:-${ADDON_NAME:-Codex Terminal Pro}}"
-    local app_version="${BUILD_VERSION:-${APP_VERSION:-2.0.2}}"
+    local app_version="${BUILD_VERSION:-${APP_VERSION:-2.0.3}}"
 
     bashio::log.info "Startup diagnostics:"
     bashio::log.info "  - Date: $(date)"
