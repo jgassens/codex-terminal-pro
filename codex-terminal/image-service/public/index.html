@@ -1522,29 +1522,64 @@
             }
         }
 
+        async function stageChangeDeskReport(report) {
+            try {
+                const response = await fetch(ingressPath('change-desk/report'), {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ report })
+                });
+                const result = await response.json().catch(() => ({}));
+
+                if (!response.ok || !result.success || !result.path) {
+                    throw new Error(result.error || 'Change Desk report staging failed');
+                }
+
+                return result;
+            } catch (err) {
+                console.log('Change Desk report staging failed:', err);
+                return null;
+            }
+        }
+
         async function insertChangeDeskPrompt() {
             if (!latestChangeDeskSummary) {
                 setStatus('Refresh Change Desk first', 'error', false);
                 return;
             }
 
-            const prompt = [
-                'Review this Home Assistant Change Desk snapshot.',
+            setStatus('Staging Change Desk report...', 'success', false);
+            const staged = await stageChangeDeskReport(latestChangeDeskSummary);
+            if (!staged) {
+                setStatus('Could not stage Change Desk report', 'error', false);
+                showManualCopy(latestChangeDeskSummary, 'Could not stage the report. Copy this summary into Codex.');
+                return;
+            }
+
+            const promptLines = [
+                'Review this Home Assistant Change Desk report:',
+                staged.path,
                 'Focus on validation blockers, persistent monitor findings, repeated log issues, live Home Assistant reachability, and whether reload or restart is safe.',
-                'Do not apply changes without my confirmation.',
-                '',
-                latestChangeDeskSummary
-            ].join('\n');
+                'Do not apply changes without my confirmation.'
+            ];
+            if (staged.truncated) {
+                promptLines.push('Note: the staged report was truncated by the add-on size limit.');
+            }
+            const prompt = promptLines.join('\n');
 
             if (insertTextIntoMobileInput(prompt)) {
-                setStatus('Change Desk report added to command line', 'success', false);
+                setStatus('Change Desk report path added to command line', 'success', false);
                 return;
             }
 
             const inserted = await pasteTextIntoTerminal(prompt);
-            setStatus(inserted ? 'Change Desk report inserted' : 'Could not insert Change Desk report', inserted ? 'success' : 'error', false);
+            setStatus(inserted ? 'Change Desk report path inserted' : 'Could not insert Change Desk report path', inserted ? 'success' : 'error', false);
             if (inserted) {
                 focusTerminal(true);
+            } else {
+                showManualCopy(prompt, 'Could not insert the report path. Copy this into Codex.');
             }
         }
 

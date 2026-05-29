@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.2.2
+
+- Stage full Change Desk reports under `/data/monitor/reports` before sending
+  them to Codex, then insert only the report path and review instructions into
+  the terminal so large monitor snapshots do not exceed paste limits.
+- Strip Home Assistant ANSI color codes from Change Desk and HA monitor issue
+  samples before display, copy, and report staging.
+
 ## 2.2.1
 
 - Rename the Change Desk **Ask Codex** action to **Send Report** so it better

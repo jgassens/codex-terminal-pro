@@ -29,6 +29,7 @@ const TTYD_PORT = process.env.TTYD_PORT || 7681;
 const UPLOAD_DIR = process.env.UPLOAD_DIR || '/data/images';
 const CONFIG_ROOT = process.env.HA_CONFIG_DIR || '/config';
 const HA_MONITOR_STATE_FILE = process.env.HA_MONITOR_STATE_FILE || '/data/monitor/ha-monitor.json';
+const CHANGE_DESK_REPORT_DIR = process.env.CHANGE_DESK_REPORT_DIR || '/data/monitor/reports';
 const CODEX_TMUX_TARGET = process.env.CODEX_TMUX_TARGET || process.env.TMUX_TARGET || 'codex-terminal:0.0';
 const TMUX_SESSION = process.env.TMUX_SESSION || CODEX_TMUX_TARGET.split(':')[0] || 'codex-terminal';
 const RAW_TERMINAL_WINDOW = process.env.RAW_TERMINAL_WINDOW || 'raw-shell';
@@ -43,6 +44,7 @@ const CHANGE_DESK_FAST_COMMAND_TIMEOUT_MS = parseNonNegativeInt(process.env.CHAN
 const CHANGE_DESK_OUTPUT_MAX_CHARS = parseNonNegativeInt(process.env.CHANGE_DESK_OUTPUT_MAX_CHARS, 12000);
 const CHANGE_DESK_LOG_OUTPUT_MAX_CHARS = parseNonNegativeInt(process.env.CHANGE_DESK_LOG_OUTPUT_MAX_CHARS, 60000);
 const CHANGE_DESK_LOG_LINE_LIMIT = parseNonNegativeInt(process.env.CHANGE_DESK_LOG_LINE_LIMIT, 500);
+const CHANGE_DESK_REPORT_MAX_CHARS = parseNonNegativeInt(process.env.CHANGE_DESK_REPORT_MAX_CHARS, 200000);
 const IMAGE_RETENTION_DAYS = parseNonNegativeInt(process.env.IMAGE_RETENTION_DAYS, 30);
 const IMAGE_RETENTION_MAX_BYTES = parseNonNegativeInt(process.env.IMAGE_RETENTION_MAX_BYTES, 256 * 1024 * 1024);
 const SCROLL_CONTROL_ACTIONS = new Set(['scroll-up', 'scroll-down', 'scroll-bottom']);
@@ -526,8 +528,15 @@ function dispatchRawShellCommand(command, callback) {
     });
 }
 
-function redactSensitiveText(value) {
+function stripAnsiText(value) {
     return String(value || '')
+        .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+        .replace(/\x9b[0-?]*[ -/]*[@-~]/g, '')
+        .replace(/\ufffd\[[0-?]*[ -/]*[@-~]/g, '');
+}
+
+function redactSensitiveText(value) {
+    return stripAnsiText(value)
         .replace(/\/data\/\.codex\/auth\.json/g, '/data/.codex/[redacted-auth].json')
         .replace(/\/data\/\.supervisor\/token/g, '/data/.supervisor/[redacted-token]')
         .replace(/((?:TOKEN|SECRET|PASSWORD|PASS|KEY)[A-Z0-9_]*=)[^\s"']+/gi, '$1[redacted]')
@@ -547,6 +556,40 @@ function truncateChangeDeskText(value, maxChars = CHANGE_DESK_OUTPUT_MAX_CHARS) 
     return {
         text: `${text.slice(0, keep)}${notice}`,
         truncated: true
+    };
+}
+
+function ensureChangeDeskReportDir() {
+    fs.mkdirSync(CHANGE_DESK_REPORT_DIR, { recursive: true, mode: 0o700 });
+}
+
+function changeDeskReportFilename() {
+    return `change-desk-report-${new Date().toISOString().replace(/[:.]/g, '-')}.md`;
+}
+
+function writeChangeDeskReport(report) {
+    const text = redactSensitiveText(report).trim();
+    const truncated = text.length > CHANGE_DESK_REPORT_MAX_CHARS;
+    const reportText = truncated
+        ? `${text.slice(0, CHANGE_DESK_REPORT_MAX_CHARS)}\n\n...[report truncated]\n`
+        : text;
+    const content = [
+        '# Change Desk Report',
+        '',
+        `Generated: ${new Date().toISOString()}`,
+        `Workspace: ${CONFIG_ROOT}`,
+        '',
+        reportText
+    ].join('\n');
+    const filePath = path.join(CHANGE_DESK_REPORT_DIR, changeDeskReportFilename());
+
+    ensureChangeDeskReportDir();
+    fs.writeFileSync(filePath, content, { encoding: 'utf8', mode: 0o600 });
+
+    return {
+        path: filePath,
+        bytes: Buffer.byteLength(content, 'utf8'),
+        truncated
     };
 }
 
@@ -1185,7 +1228,7 @@ const upload = multer({
 
 // API routes MUST come before static files middleware
 // Otherwise static middleware will intercept API requests
-app.use(express.json({ limit: '64kb' }));
+app.use(express.json({ limit: '512kb' }));
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -1215,6 +1258,29 @@ app.get('/change-desk/summary', async (req, res) => {
         res.status(500).json({
             success: false,
             error: 'Failed to collect Change Desk snapshot'
+        });
+    }
+});
+
+app.post('/change-desk/report', (req, res) => {
+    if (!isSameOriginBrowserRequest(req)) {
+        return res.status(403).json({ success: false, error: 'Cross-origin Change Desk report access is not allowed' });
+    }
+
+    const report = typeof req.body?.report === 'string' ? req.body.report : '';
+
+    if (!report.trim()) {
+        return res.status(400).json({ success: false, error: 'No Change Desk report provided' });
+    }
+
+    try {
+        const written = writeChangeDeskReport(report);
+        res.json({ success: true, ...written });
+    } catch (err) {
+        console.error('Failed to stage Change Desk report:', err.message);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to stage Change Desk report'
         });
     }
 });

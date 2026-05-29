@@ -27,6 +27,7 @@ DEFAULT_TIMEOUT_SECONDS = 20
 DEFAULT_ISSUE_TTL_SECONDS = 7 * 24 * 60 * 60
 DEFAULT_HISTORY_LIMIT = 200
 MAX_COMMAND_OUTPUT_CHARS = 300_000
+ANSI_ESCAPE_RE = re.compile(r"(?:\x1b\[[0-?]*[ -/]*[@-~]|\x9b[0-?]*[ -/]*[@-~]|\ufffd\[[0-?]*[ -/]*[@-~])")
 
 SEVERITY_RANK = {
     "critical": 3,
@@ -52,8 +53,12 @@ def parse_iso(value: str | None) -> datetime | None:
         return None
 
 
+def strip_ansi_text(value: str) -> str:
+    return ANSI_ESCAPE_RE.sub("", str(value or ""))
+
+
 def redact_sensitive_text(value: str) -> str:
-    text = str(value or "")
+    text = strip_ansi_text(value)
     text = text.replace("/data/.codex/auth.json", "/data/.codex/[redacted-auth].json")
     text = text.replace("/data/.supervisor/token", "/data/.supervisor/[redacted-token]")
     text = re.sub(r"((?:TOKEN|SECRET|PASSWORD|PASS|KEY)[A-Z0-9_]*=)[^\s\"']+", r"\1[redacted]", text, flags=re.I)
@@ -148,7 +153,6 @@ def severity_from_log_line(line: str) -> str:
 
 def normalize_signature(value: str) -> str:
     text = redact_sensitive_text(value)
-    text = re.sub(r"\x1b\[[0-9;]*m", "", text)
     text = re.sub(r"^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:[+-]\d{2}:?\d{2}|Z)?\s*", "", text)
     text = re.sub(r"\b[0-9a-f]{8,}\b", "<hex>", text, flags=re.I)
     text = re.sub(r"\b\d+(?:\.\d+)?\b", "<n>", text)
