@@ -51,6 +51,8 @@ Treat this file as the local map of the room.
   panels, and automation snippet validation.
 - `ha-mcp-status`: quick check for Home Assistant's official MCP Server
   integration and endpoint hints.
+- `ha-monitor`: bounded read-only observer for HA logs, unavailable state
+  samples, MCP status, and persistent issue fingerprints under `/data/monitor`.
 - `codex-shell-dispatch`: sends a human `,,` command to the hidden Shell pane
   and returns completed output to the Codex view.
 - `codex-auth-helper`: login/import helper for Codex credentials.
@@ -76,6 +78,10 @@ Treat this file as the local map of the room.
 - Use `ha-mcp-status` before assuming the official Home Assistant MCP Server is
   installed. The MCP endpoint is `/api/mcp` and exposed entities control what
   clients can see or control.
+- Use `ha-monitor status` to read persistent observer findings before broad
+  triage. This release ignores `/data/monitor/tasks.d` task manifests; future
+  task execution must stay explicit, bounded, and read-only until the human
+  expands the capability.
 - Use `/opt/home-assistant/HA.md` as the local Home Assistant field guide.
 - Know the common layers: YAML/includes/packages, automations, scripts, scenes,
   helpers, templates, dashboards, entity/device registries, integrations,

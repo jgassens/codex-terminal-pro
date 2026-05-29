@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.2.0
+
+- Add `ha-monitor`, a bounded read-only Home Assistant observer that runs in the
+  background, fingerprints recent `ha core logs` warnings/errors, samples
+  unavailable or unknown states through `ha-api`, records MCP status, and writes
+  `/data/monitor/ha-monitor.json`.
+- Surface persistent HA monitor findings in Change Desk alongside YAML audit,
+  core check, recent logs, live API, and MCP status.
+- Add add-on options for monitor enablement, sample interval, log-line cap,
+  state/MCP scans, and retained issue count.
+- Reserve `/data/monitor/tasks.d` for a future bespoke persistent-task design,
+  but intentionally ignore task manifests in this safe observer release.
+
 ## 2.1.1
 
 - Remove the local git working-tree probe from Change Desk so the panel stays

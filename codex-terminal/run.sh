@@ -23,6 +23,7 @@ init_environment() {
     local persist_python="$persist_root/python"
     local image_dir="/data/images"
     local log_dir="/data/logs"
+    local monitor_dir="/data/monitor"
     local supervisor_dir="/data/.supervisor"
 
     bashio::log.info "Initializing Codex environment in /data..."
@@ -30,14 +31,14 @@ init_environment() {
     if ! mkdir -p "$data_home" "$config_dir" "$cache_dir" "$local_dir" "$state_dir" "$data_dir" \
                   "$codex_home" "$gh_config_dir" "$persist_bin" "$persist_lib" \
                   "$persist_python" "$guard_bin" "$guard_libexec" "$image_dir" "$log_dir" \
-                  "$supervisor_dir/confirm"; then
+                  "$monitor_dir/tasks.d" "$supervisor_dir/confirm"; then
         bashio::log.error "Failed to create directories in /data"
         exit 1
     fi
 
     chmod 700 "$data_home" "$config_dir" "$cache_dir" "$local_dir" "$state_dir" \
               "$data_dir" "$codex_home" "$gh_config_dir" "$guard_root" "$guard_bin" \
-              "$guard_libexec" "$supervisor_dir" "$supervisor_dir/confirm"
+              "$guard_libexec" "$monitor_dir" "$monitor_dir/tasks.d" "$supervisor_dir" "$supervisor_dir/confirm"
     chmod 755 "$persist_root" "$persist_bin" "$persist_lib" "$persist_python" "$image_dir"
     chmod 700 "$log_dir"
 
@@ -277,7 +278,7 @@ install_tools() {
 
 log_startup_diagnostics() {
     local app_name="${APP_NAME:-${ADDON_NAME:-Codex Terminal Pro}}"
-    local app_version="${BUILD_VERSION:-${APP_VERSION:-2.1.1}}"
+    local app_version="${BUILD_VERSION:-${APP_VERSION:-2.2.0}}"
 
     bashio::log.info "Startup diagnostics:"
     bashio::log.info "  - Date: $(date)"
@@ -306,6 +307,8 @@ log_startup_diagnostics() {
     bashio::log.info "  - ha-ws version: $(ha-ws --version 2>&1 || true)"
     bashio::log.info "  - which ha-mcp-status: $(which ha-mcp-status 2>/dev/null || true)"
     bashio::log.info "  - ha-mcp-status version: $(ha-mcp-status --version 2>&1 || true)"
+    bashio::log.info "  - which ha-monitor: $(which ha-monitor 2>/dev/null || true)"
+    bashio::log.info "  - ha-monitor version: $(ha-monitor --version 2>&1 || true)"
     bashio::log.info "  - which sqlite3: $(which sqlite3 2>/dev/null || true)"
     bashio::log.info "  - which mosquitto_sub: $(which mosquitto_sub 2>/dev/null || true)"
     bashio::log.info "  - which dig: $(which dig 2>/dev/null || true)"
@@ -332,7 +335,7 @@ setup_modbus_tools() {
 setup_ha_tools() {
     local tool
 
-    for tool in ha-toolbox ha-api ha-ws ha-mcp-status; do
+    for tool in ha-toolbox ha-api ha-ws ha-mcp-status ha-monitor; do
         if [ -f "/opt/scripts/${tool}" ]; then
             cp "/opt/scripts/${tool}" "/usr/local/bin/${tool}"
             chmod 755 "/usr/local/bin/${tool}"
@@ -341,7 +344,7 @@ setup_ha_tools() {
         fi
     done
 
-    bashio::log.info "Home Assistant helpers installed: ha-toolbox, ha-api, ha-ws, ha-mcp-status"
+    bashio::log.info "Home Assistant helpers installed: ha-toolbox, ha-api, ha-ws, ha-mcp-status, ha-monitor"
 }
 
 setup_session_picker() {
@@ -474,6 +477,10 @@ write_codex_terminal_agents_block() {
   entities, and automation trigger/condition/action validation.
 - Use `ha-mcp-status` to check whether Home Assistant's official MCP Server
   integration is loaded before configuring MCP clients.
+- Use `ha-monitor status` to read the add-on's bounded observer summary before
+  broad Home Assistant triage. It records logs, unavailable state samples, and
+  MCP status under `/data/monitor`, but it does not reload, restart, edit files,
+  or run bespoke task manifests in this release.
 - `,,` is a Codex Terminal Pro shell-dispatch prefix. If the human prompt starts
   with `,,`, strip that prefix and run the rest through `codex-shell-dispatch`.
   Do not run the stripped command directly through Codex's normal shell path.
@@ -904,6 +911,62 @@ run_health_check_background() {
     fi
 }
 
+start_ha_monitor() {
+    local monitor_enabled
+    local monitor_bin="/opt/scripts/ha-monitor"
+    local monitor_interval
+    local monitor_log_lines
+    local monitor_max_issues
+    local state_scan_enabled
+    local mcp_status_enabled
+    local monitor_args=()
+
+    monitor_enabled=$(bashio::config 'ha_monitor_enabled' 'true')
+    if [ "${monitor_enabled}" != "true" ]; then
+        bashio::log.info "HA monitor disabled"
+        return 0
+    fi
+
+    if [ ! -x "${monitor_bin}" ]; then
+        bashio::log.warning "HA monitor helper is not available at ${monitor_bin}"
+        return 0
+    fi
+
+    mkdir -p /data/monitor/tasks.d /data/logs
+    chmod 700 /data/monitor /data/monitor/tasks.d /data/logs
+
+    monitor_interval=$(normalize_nonnegative_int "$(bashio::config 'ha_monitor_interval_seconds' '300')" "300")
+    monitor_log_lines=$(normalize_nonnegative_int "$(bashio::config 'ha_monitor_log_lines' '500')" "500")
+    monitor_max_issues=$(normalize_nonnegative_int "$(bashio::config 'ha_monitor_max_issues' '20')" "20")
+    state_scan_enabled=$(bashio::config 'ha_monitor_state_scan_enabled' 'true')
+    mcp_status_enabled=$(bashio::config 'ha_monitor_mcp_status_enabled' 'true')
+
+    monitor_args=(
+        "--interval" "${monitor_interval}"
+        "--log-lines" "${monitor_log_lines}"
+        "--max-issues" "${monitor_max_issues}"
+        "--state-file" "/data/monitor/ha-monitor.json"
+        "--history-file" "/data/monitor/ha-monitor-history.jsonl"
+        "--task-dir" "/data/monitor/tasks.d"
+    )
+
+    if [ "${state_scan_enabled}" != "true" ]; then
+        monitor_args+=("--no-state-scan")
+    fi
+
+    if [ "${mcp_status_enabled}" != "true" ]; then
+        monitor_args+=("--no-mcp-status")
+    fi
+
+    bashio::log.info "Starting HA monitor: interval=${monitor_interval}s, log_lines=${monitor_log_lines}, max_issues=${monitor_max_issues}"
+    (
+        "${monitor_bin}" "${monitor_args[@]}" daemon 2>&1 | while IFS= read -r line; do
+            bashio::log.info "[HA Monitor] ${line}"
+        done
+    ) &
+    bashio::log.info "HA monitor background PID: $!"
+}
+
 main() {
     bashio::log.info "Initializing Codex Terminal Pro add-on..."
 
@@ -916,6 +979,7 @@ main() {
     setup_shell_dispatch_profile
     setup_persistent_packages
     setup_supervisor_broker
+    start_ha_monitor
     run_health_check_background
     start_web_terminal
 }

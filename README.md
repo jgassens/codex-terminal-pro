@@ -28,8 +28,11 @@ This is an MVP fork. It is not an official OpenAI add-on.
 - Hidden Shell dispatch output capture for completed commands, with copy and
   dismiss controls in the Codex view.
 - Change Desk snapshot for Home Assistant YAML audit, `ha core check`, recent
-  log issues, live REST config reachability, and MCP Server status before
-  reloads or restarts.
+  log issues, persistent HA monitor findings, live REST config reachability, and
+  MCP Server status before reloads or restarts.
+- Bounded `ha-monitor` observer that fingerprints recent HA log issues, samples
+  unavailable/unknown states, records MCP status, and stores safe summaries under
+  `/data/monitor`.
 - Trusted human Shell lane for commands typed in Shell mode or dispatched with
   `,,`, while Codex/non-interactive Home Assistant operations remain guarded.
 - Codex CLI pinned and installed in the add-on image with
@@ -45,7 +48,7 @@ This is an MVP fork. It is not an official OpenAI add-on.
   and paths inserted into the prompt.
 - Persistent APK and Python package helpers under `/data/packages`.
 - Home Assistant CLI (`ha`), `ha-toolbox`, `ha-api`, `ha-ws`,
-  `ha-mcp-status`, and GitHub CLI (`gh`) included.
+  `ha-mcp-status`, `ha-monitor`, and GitHub CLI (`gh`) included.
 - Read-only Home Assistant REST/WebSocket helpers for exact live entity
   snapshots, service schemas, entity registry discovery, target expansion,
   exposed-entity checks, and automation snippet validation.
@@ -188,7 +191,8 @@ codex-terminal-briefing
 
 That guidance tells Codex about `,,`, `codex-shell-dispatch`, `ha`,
 `supervisor-api`, `ha-toolbox`, `ha-api`, `ha-ws`, `ha-mcp-status`,
-`solar-toolbox`, `modbus-toolbox`, `modbus-scan`, and `modbus-read`.
+`ha-monitor`, `solar-toolbox`, `modbus-toolbox`, `modbus-scan`, and
+`modbus-read`.
 
 ## Home Assistant Toolbox And Live API Helpers
 
@@ -217,10 +221,19 @@ ha-ws entity-registry --pattern kitchen
 ha-ws target-info --entity light.kitchen --capabilities
 ha-ws validate --file /config/action-snippet.yaml --section action
 ha-mcp-status
+ha-monitor status
 ```
 
 These helpers are read-only by design. Use the existing brokered `ha` command
 or human Shell dispatch path for control actions.
+
+`ha-monitor` is the safe first slice of persistent agent behavior. When enabled,
+it runs in the background every few minutes, reads recent Home Assistant logs,
+collects bounded unavailable/unknown state samples, checks MCP status, and writes
+summaries to `/data/monitor/ha-monitor.json`. It does not call services, reload,
+restart, edit `/config`, or execute bespoke task files. The reserved
+`/data/monitor/tasks.d` directory is present for a future opt-in task-manifest
+design.
 
 The detailed Home Assistant field guide is installed at
 `/opt/home-assistant/HA.md`.

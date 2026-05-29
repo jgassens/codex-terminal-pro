@@ -7,8 +7,8 @@ Unofficial OpenAI Codex CLI terminal for Home Assistant.
 Codex Terminal Pro provides a Home Assistant ingress web terminal that starts in
 `/config`, with Codex CLI, image paste support, persistent packages, Home
 Assistant CLI, `ha-toolbox`, read-only REST/WebSocket helpers, MCP status
-checks, GitHub CLI, read-only Modbus helpers, and a solar commissioning toolbox
-preinstalled.
+checks, the bounded `ha-monitor` observer, GitHub CLI, read-only Modbus helpers,
+and a solar commissioning toolbox preinstalled.
 
 It registers an admin-only Home Assistant sidebar panel titled **Codex Terminal
 Pro** through ingress.
@@ -55,9 +55,10 @@ behind the keyboard.
 
 The **Change Desk** button opens a read-only Home Assistant review panel. It
 collects the `ha-toolbox` YAML audit, `ha core check`, recent `ha core logs`
-issues, live `ha-api config` reachability, and `ha-mcp-status` so you can
-inspect the blast radius before a reload or restart. It can copy the summary or
-insert a Codex review prompt, but it does not apply changes.
+issues, persistent `ha-monitor` findings, live `ha-api config` reachability, and
+`ha-mcp-status` so you can inspect the blast radius before a reload or restart.
+It can copy the summary or insert a Codex review prompt, but it does not apply
+changes.
 
 ## Shell Mode And `,,` Dispatch
 
@@ -128,6 +129,7 @@ ha-ws entity-registry --pattern kitchen
 ha-ws target-info --entity light.kitchen --capabilities
 ha-ws validate --file /config/action-snippet.yaml --section action
 ha-mcp-status
+ha-monitor status
 ```
 
 `ha-api` talks to Home Assistant Core's REST API through the add-on's internal
@@ -135,6 +137,14 @@ Supervisor proxy. `ha-ws` talks to Home Assistant's WebSocket API for live
 registry, exposed-entity, target, service/trigger/condition, and validation
 queries. `ha-mcp-status` checks whether the official Home Assistant MCP Server
 integration is loaded before Codex assumes `/api/mcp` is available.
+
+`ha-monitor` is a lightweight persistent observer. When enabled, it runs every
+few minutes, fingerprints recent `ha core logs` warnings/errors, collects bounded
+unavailable/unknown entity samples through `ha-api`, records MCP status, and
+writes `/data/monitor/ha-monitor.json`. It does not call services, reload,
+restart, edit `/config`, or execute arbitrary task files. The reserved
+`/data/monitor/tasks.d` directory is intentionally ignored in this release so a
+future bespoke persistent-task design can be added behind explicit guardrails.
 
 The image also bundles practical Home Assistant admin utilities including
 `sqlite3`, `mosquitto_sub`, `mosquitto_pub`, `dig`, `nslookup`, `ping`, `ncat`,
@@ -215,6 +225,12 @@ terminal_transcript_backups: 2
 terminal_history_limit: 50000
 image_retention_days: 30
 image_retention_max_bytes: 268435456
+ha_monitor_enabled: true
+ha_monitor_interval_seconds: 300
+ha_monitor_log_lines: 500
+ha_monitor_state_scan_enabled: true
+ha_monitor_mcp_status_enabled: true
+ha_monitor_max_issues: 20
 supervisor_broker_enabled: true
 supervisor_broker_t1_ttl_seconds: 120
 supervisor_broker_comma_dispatch_enabled: true
@@ -235,6 +251,15 @@ persistent_pip_packages: []
   terminal session.
 - `image_retention_days` and `image_retention_max_bytes`: Clean up old uploaded
   images from `/data/images`.
+- `ha_monitor_enabled`: Start the read-only HA monitor background observer.
+- `ha_monitor_interval_seconds`: Seconds between monitor samples. Values below
+  60 are raised to 60 by the helper.
+- `ha_monitor_log_lines`: Recent `ha core logs` lines to scan per sample.
+- `ha_monitor_state_scan_enabled`: Include bounded unavailable/unknown entity
+  samples from `ha-api`.
+- `ha_monitor_mcp_status_enabled`: Include MCP Server integration status.
+- `ha_monitor_max_issues`: Maximum current/persistent issue samples retained in
+  monitor summaries.
 - `supervisor_broker_enabled`: Require confirmation for risky Home Assistant
   management operations outside the trusted human Shell pane.
 - `supervisor_broker_t1_ttl_seconds`: Short reuse window for routine

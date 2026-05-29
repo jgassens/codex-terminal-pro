@@ -1226,11 +1226,27 @@
             parent.appendChild(changeDeskElement('pre', 'change-desk-output', output));
         }
 
+        function formatChangeDeskAge(seconds) {
+            if (!Number.isFinite(seconds)) {
+                return 'unknown';
+            }
+            if (seconds < 60) {
+                return `${seconds}s ago`;
+            }
+            const minutes = Math.round(seconds / 60);
+            if (minutes < 60) {
+                return `${minutes}m ago`;
+            }
+            const hours = Math.round(minutes / 60);
+            return `${hours}h ago`;
+        }
+
         function setChangeDeskLoading() {
             changeDeskGenerated.textContent = 'Collecting snapshot...';
             changeDeskSummary.replaceChildren(
                 changeDeskMetric('YAML audit', 'loading'),
                 changeDeskMetric('Core check', 'loading'),
+                changeDeskMetric('Monitor', 'loading'),
                 changeDeskMetric('Logs', 'loading'),
                 changeDeskMetric('Live API', 'loading')
             );
@@ -1313,6 +1329,59 @@
             parent.appendChild(section);
         }
 
+        function renderChangeDeskMonitor(parent, monitor) {
+            const { section, body } = changeDeskSection('HA Monitor', monitor?.status || 'unavailable');
+
+            if (!monitor?.available) {
+                body.appendChild(changeDeskElement('div', 'change-desk-muted', monitor?.message || 'HA monitor state unavailable.'));
+                parent.appendChild(section);
+                return;
+            }
+
+            appendChangeDeskLine(body, 'Mode', monitor.mode || 'observer');
+            appendChangeDeskLine(body, 'Last run', `${monitor.generatedAt || 'unknown'} (${formatChangeDeskAge(monitor.ageSeconds)})`);
+            appendChangeDeskLine(body, 'Persistent/current', `${monitor.persistentIssues?.length || 0}/${monitor.currentIssues?.length || 0}`);
+            appendChangeDeskLine(body, 'Interval', monitor.intervalSeconds ? `${monitor.intervalSeconds}s` : 'unknown');
+
+            if (monitor.persistentIssues?.length) {
+                body.appendChild(changeDeskElement('div', 'change-desk-muted', 'Persistent issues:'));
+                appendChangeDeskList(
+                    body,
+                    monitor.persistentIssues.map((item) => `${item.runsSeen || 0} runs ${item.severity}: ${item.sample}`),
+                    'No persistent issues.'
+                );
+            }
+
+            if (monitor.currentIssues?.length) {
+                body.appendChild(changeDeskElement('div', 'change-desk-muted', 'Current issues:'));
+                appendChangeDeskList(
+                    body,
+                    monitor.currentIssues.slice(0, 6).map((item) => `${item.severity}: ${item.sample}`),
+                    'No current issues.'
+                );
+            } else {
+                body.appendChild(changeDeskElement('div', 'change-desk-muted', 'No current monitor issues.'));
+            }
+
+            const unavailable = monitor.states?.unavailableSamples || [];
+            const unknown = monitor.states?.unknownSamples || [];
+            if (unavailable.length || unknown.length) {
+                const samples = unavailable.concat(unknown).slice(0, 6).map((item) => {
+                    const friendly = item.friendly_name ? ` (${item.friendly_name})` : '';
+                    return `${item.entity_id}: ${item.state}${friendly}`;
+                });
+                body.appendChild(changeDeskElement('div', 'change-desk-muted', 'State samples:'));
+                appendChangeDeskList(body, samples, 'No unavailable or unknown samples.');
+            }
+
+            const taskDir = monitor.taskSlots?.directory;
+            if (taskDir) {
+                body.appendChild(changeDeskElement('div', 'change-desk-muted', `Task slots reserved at ${taskDir}; execution disabled.`));
+            }
+
+            parent.appendChild(section);
+        }
+
         function renderChangeDeskLive(parent, live, mcp) {
             const liveStatus = live?.available ? 'available' : 'unavailable';
             const { section, body } = changeDeskSection('Live Home Assistant', liveStatus);
@@ -1350,6 +1419,7 @@
                 '',
                 `YAML audit: ${data.audit?.status || 'unavailable'} (${data.audit?.yaml?.ok || 0}/${data.audit?.yaml?.checked || 0} ok)`,
                 `Core check: ${data.coreCheck?.status || 'unavailable'}`,
+                `Monitor: ${data.monitor?.status || 'unavailable'} (${data.monitor?.persistentIssues?.length || 0} persistent, ${data.monitor?.currentIssues?.length || 0} current)`,
                 `Logs: ${data.logs?.status || 'unavailable'} (${(data.logs?.counts?.critical || 0) + (data.logs?.counts?.error || 0)} errors, ${data.logs?.counts?.warning || 0} warnings)`,
                 `Live API: ${data.live?.status || 'unavailable'}`,
                 `MCP: ${data.mcp?.status || 'unavailable'}`
@@ -1374,6 +1444,16 @@
                 data.logs.issues.slice(0, 8).forEach((item) => lines.push(`  - ${item.severity}: ${item.sample}`));
             }
 
+            if (data.monitor?.persistentIssues?.length) {
+                lines.push('', 'Persistent monitor issues:');
+                data.monitor.persistentIssues.forEach((item) => lines.push(`  - ${item.runsSeen || 0} runs ${item.severity}: ${item.sample}`));
+            }
+
+            if (data.monitor?.currentIssues?.length) {
+                lines.push('', 'Current monitor issues:');
+                data.monitor.currentIssues.slice(0, 8).forEach((item) => lines.push(`  - ${item.severity}: ${item.sample}`));
+            }
+
             if (data.recommendations?.length) {
                 lines.push('', 'Recommendations:');
                 data.recommendations.forEach((item) => lines.push(`  - ${item}`));
@@ -1392,6 +1472,9 @@
                 ? `${data.audit.yaml?.ok || 0}/${data.audit.yaml?.checked || 0} YAML`
                 : 'Unavailable';
             const coreLabel = data.coreCheck?.available ? data.coreCheck.status : 'Unavailable';
+            const monitorLabel = data.monitor?.available
+                ? `${data.monitor.persistentIssues?.length || 0}/${data.monitor.currentIssues?.length || 0}`
+                : 'Unavailable';
             const logErrorCount = (data.logs?.counts?.critical || 0) + (data.logs?.counts?.error || 0);
             const logsLabel = data.logs?.available
                 ? `${logErrorCount}/${data.logs.counts?.warning || 0}`
@@ -1401,6 +1484,7 @@
             changeDeskSummary.replaceChildren(
                 changeDeskMetric('YAML audit', auditLabel, data.audit?.status || 'unavailable'),
                 changeDeskMetric('Core check', coreLabel, data.coreCheck?.status || 'unavailable'),
+                changeDeskMetric('Monitor P/C', monitorLabel, data.monitor?.status || 'unavailable'),
                 changeDeskMetric('Logs E/W', logsLabel, data.logs?.status || 'unavailable'),
                 changeDeskMetric('Live API', liveLabel, data.live?.available ? 'ok' : 'unavailable')
             );
@@ -1408,6 +1492,7 @@
             const fragment = document.createDocumentFragment();
             renderChangeDeskAudit(fragment, data.audit);
             renderChangeDeskCoreCheck(fragment, data.coreCheck);
+            renderChangeDeskMonitor(fragment, data.monitor);
             renderChangeDeskLogs(fragment, data.logs);
             renderChangeDeskLive(fragment, data.live, data.mcp);
             renderChangeDeskRecommendations(fragment, data.recommendations || []);
@@ -1470,7 +1555,7 @@
 
             const prompt = [
                 'Review this Home Assistant Change Desk snapshot.',
-                'Focus on validation blockers, repeated log issues, live Home Assistant reachability, and whether reload or restart is safe.',
+                'Focus on validation blockers, persistent monitor findings, repeated log issues, live Home Assistant reachability, and whether reload or restart is safe.',
                 'Do not apply changes without my confirmation.',
                 '',
                 latestChangeDeskSummary

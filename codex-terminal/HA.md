@@ -15,6 +15,7 @@ local operating map for Codex when it works inside `/config`.
    - `ha-toolbox services`
    - `supervisor-api /core/api/states`
    - `ha apps logs <addon>` or `ha core logs`
+   - `ha-monitor status`
 4. Show diffs before editing Home Assistant configuration when practical.
 5. Reload the smallest target that matches the change.
 6. Restart Core or add-ons only when reloads are not enough or the human asks.
@@ -69,6 +70,7 @@ ha-toolbox states --pattern battery
 ha-toolbox services --domain homeassistant
 ha core check
 ha core logs
+ha-monitor status
 supervisor-api /core/api/states | jq 'length'
 supervisor-api /core/api/services | jq '.[].domain'
 sqlite3 /config/home-assistant_v2.db '.tables'

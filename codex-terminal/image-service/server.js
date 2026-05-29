@@ -28,6 +28,7 @@ const PORT = process.env.IMAGE_SERVICE_PORT || 7680;
 const TTYD_PORT = process.env.TTYD_PORT || 7681;
 const UPLOAD_DIR = process.env.UPLOAD_DIR || '/data/images';
 const CONFIG_ROOT = process.env.HA_CONFIG_DIR || '/config';
+const HA_MONITOR_STATE_FILE = process.env.HA_MONITOR_STATE_FILE || '/data/monitor/ha-monitor.json';
 const CODEX_TMUX_TARGET = process.env.CODEX_TMUX_TARGET || process.env.TMUX_TARGET || 'codex-terminal:0.0';
 const TMUX_SESSION = process.env.TMUX_SESSION || CODEX_TMUX_TARGET.split(':')[0] || 'codex-terminal';
 const RAW_TERMINAL_WINDOW = process.env.RAW_TERMINAL_WINDOW || 'raw-shell';
@@ -878,6 +879,72 @@ async function collectChangeDeskMcp() {
     };
 }
 
+function normalizeMonitorIssue(issue) {
+    const sample = redactSensitiveText(issue?.sample || issue?.signature || '');
+    return {
+        source: issue?.source || 'unknown',
+        severity: issue?.severity || 'warning',
+        sample: sample.slice(0, 500),
+        runsSeen: Number.isInteger(issue?.runs_seen) ? issue.runs_seen : 0,
+        occurrences: Number.isInteger(issue?.occurrences) ? issue.occurrences : (Number.isInteger(issue?.count) ? issue.count : 0),
+        firstSeen: issue?.first_seen || '',
+        lastSeen: issue?.last_seen || ''
+    };
+}
+
+function collectChangeDeskMonitor() {
+    let parsed;
+    let stat;
+
+    try {
+        stat = fs.statSync(HA_MONITOR_STATE_FILE);
+        parsed = JSON.parse(fs.readFileSync(HA_MONITOR_STATE_FILE, 'utf8'));
+    } catch (err) {
+        return {
+            available: false,
+            status: 'unavailable',
+            path: HA_MONITOR_STATE_FILE,
+            message: err?.code === 'ENOENT' ? 'HA monitor has not written a state file yet' : redactSensitiveText(err.message)
+        };
+    }
+
+    const generatedAtMs = Date.parse(parsed.generated_at || '');
+    const ageSeconds = Number.isFinite(generatedAtMs) ? Math.max(0, Math.round((Date.now() - generatedAtMs) / 1000)) : null;
+    const intervalSeconds = Number.isFinite(parsed.interval_seconds) ? parsed.interval_seconds : 300;
+    const staleAfterSeconds = Math.max(900, intervalSeconds * 3);
+    const stale = ageSeconds !== null && ageSeconds > staleAfterSeconds;
+    const monitorStatus = stale ? 'stale' : (parsed.status || 'unknown');
+    const checks = parsed.checks || {};
+
+    return {
+        available: true,
+        status: monitorStatus,
+        rawStatus: parsed.status || 'unknown',
+        mode: parsed.mode || 'observer',
+        path: HA_MONITOR_STATE_FILE,
+        generatedAt: parsed.generated_at || '',
+        ageSeconds,
+        stale,
+        intervalSeconds,
+        logLines: parsed.log_lines || null,
+        currentIssues: (parsed.current_issues || []).slice(0, 8).map(normalizeMonitorIssue),
+        persistentIssues: (parsed.persistent_issues || []).slice(0, 8).map(normalizeMonitorIssue),
+        logCounts: checks.logs?.counts || {},
+        states: {
+            status: checks.states?.status || 'unknown',
+            entityCount: checks.states?.entity_count ?? null,
+            unavailableSamples: (checks.states?.unavailable_samples || []).slice(0, 6),
+            unknownSamples: (checks.states?.unknown_samples || []).slice(0, 6)
+        },
+        mcp: {
+            status: checks.mcp?.status || 'unknown',
+            componentLoaded: Boolean(checks.mcp?.component_loaded)
+        },
+        taskSlots: parsed.task_slots || {},
+        mtimeMs: stat.mtimeMs
+    };
+}
+
 function buildChangeDeskRecommendations(snapshot) {
     const recommendations = [];
 
@@ -901,6 +968,14 @@ function buildChangeDeskRecommendations(snapshot) {
         recommendations.push('Recent Home Assistant logs include warnings worth checking.');
     }
 
+    if (snapshot.monitor?.available && snapshot.monitor.persistentIssues?.length > 0) {
+        recommendations.push('HA monitor has persistent issues; review them before changing Home Assistant.');
+    } else if (snapshot.monitor?.available && snapshot.monitor.status === 'stale') {
+        recommendations.push('HA monitor state is stale; check the add-on log or run `ha-monitor once`.');
+    } else if (!snapshot.monitor?.available) {
+        recommendations.push('HA monitor has not reported yet; wait for the first interval or run `ha-monitor once`.');
+    }
+
     if (snapshot.live?.available) {
         recommendations.push('Live Home Assistant API is reachable for entity and service verification.');
     }
@@ -921,6 +996,7 @@ async function collectChangeDeskSnapshot() {
         collectChangeDeskLive(),
         collectChangeDeskMcp()
     ]);
+    const monitor = collectChangeDeskMonitor();
     const snapshot = {
         success: true,
         generatedAt: new Date().toISOString(),
@@ -930,7 +1006,8 @@ async function collectChangeDeskSnapshot() {
         coreCheck,
         logs,
         live,
-        mcp
+        mcp,
+        monitor
     };
 
     snapshot.recommendations = buildChangeDeskRecommendations(snapshot);

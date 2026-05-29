@@ -20,6 +20,10 @@ You are running inside the Codex Terminal Pro Home Assistant add-on.
   --section action`.
 - Use `ha-mcp-status` before assuming Home Assistant's official MCP Server is
   installed or reachable.
+- Use `ha-monitor status` to read the add-on's bounded observer summary before
+  broad Home Assistant triage. It is read-only: it records logs, unavailable
+  state samples, and MCP status under `/data/monitor` but does not reload,
+  restart, edit files, or run bespoke tasks in this release.
 - The `,,` prefix is Codex Terminal Pro shell dispatch. If the human prompt
   starts with `,,`, strip the prefix and run the rest through
   `codex-shell-dispatch`. Do not run the stripped command directly through

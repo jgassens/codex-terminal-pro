@@ -51,16 +51,18 @@ also ships `codex-shell-dispatch`. Codex should strip the `,,` prefix and run
 the remaining command through that helper, not through normal Codex shell
 execution.
 
-The add-on includes read-only Home Assistant REST/WebSocket helpers, plus
-read-only Modbus helpers for Home Assistant troubleshooting and Schneider
-Electric discovery work. Run `ha-api`, `ha-ws`, `ha-mcp-status`, or
-`modbus-toolbox` in the terminal for examples.
+The add-on includes read-only Home Assistant REST/WebSocket helpers, the bounded
+`ha-monitor` observer, plus read-only Modbus helpers for Home Assistant
+troubleshooting and Schneider Electric discovery work. Run `ha-api`, `ha-ws`,
+`ha-mcp-status`, `ha-monitor status`, or `modbus-toolbox` in the terminal for
+examples.
 
 The toolbar **Change Desk** button opens a read-only review panel for the
 current `/config` workspace. It summarizes `ha-toolbox` YAML audit results,
-`ha core check`, recent `ha core logs` issues, live `ha-api config`
-reachability, and `ha-mcp-status`. It can copy the summary or insert a Codex
-review prompt, but it does not reload, restart, or apply changes.
+`ha core check`, recent `ha core logs` issues, persistent `ha-monitor`
+findings, live `ha-api config` reachability, and `ha-mcp-status`. It can copy
+the summary or insert a Codex review prompt, but it does not reload, restart, or
+apply changes.
 
 For domestic and small commercial solar work, run `solar-toolbox`. It can print
 a site-intake brief, inspect Home Assistant config/entity registry for
@@ -186,6 +188,12 @@ terminal_transcript_backups: 2
 terminal_history_limit: 50000
 image_retention_days: 30
 image_retention_max_bytes: 268435456
+ha_monitor_enabled: true
+ha_monitor_interval_seconds: 300
+ha_monitor_log_lines: 500
+ha_monitor_state_scan_enabled: true
+ha_monitor_mcp_status_enabled: true
+ha_monitor_max_issues: 20
 supervisor_broker_enabled: true
 supervisor_broker_t1_ttl_seconds: 120
 supervisor_broker_comma_dispatch_enabled: true
@@ -200,6 +208,13 @@ for normal Codex workflows and are cleaned up by age and total size.
 `terminal_history_limit` controls tmux scrollback lines. The default is lower
 than older releases to reduce memory and redraw pressure while keeping practical
 scrollback.
+
+`ha-monitor` is enabled by default as a safe observer. It scans recent
+`ha core logs`, collects bounded unavailable/unknown state samples through
+`ha-api`, checks MCP status, and writes `/data/monitor/ha-monitor.json` plus a
+small JSONL history. It does not call services, reload, restart, edit `/config`,
+or execute arbitrary user task files. `/data/monitor/tasks.d` is reserved for a
+future explicit task-manifest design and is ignored by this release.
 
 ## Safe Home Assistant Workflow
 
@@ -222,9 +237,10 @@ codex-terminal-briefing
 ```
 
 The briefing covers `,,` shell dispatch, `codex-shell-dispatch`, `ha`,
-`supervisor-api`, `ha-toolbox`, `ha-api`, `ha-ws`, `ha-mcp-status`, Shell mode,
-mobile command input, `solar-toolbox`, `modbus-toolbox`, `modbus-scan`,
-`modbus-read`, and the sensitive files it should avoid.
+`supervisor-api`, `ha-toolbox`, `ha-api`, `ha-ws`, `ha-mcp-status`,
+`ha-monitor`, Shell mode, mobile command input, `solar-toolbox`,
+`modbus-toolbox`, `modbus-scan`, `modbus-read`, and the sensitive files it
+should avoid.
 
 ## Home Assistant Toolbox And Live API Helpers
 
