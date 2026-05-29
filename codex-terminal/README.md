@@ -14,7 +14,7 @@ It registers an admin-only Home Assistant sidebar panel titled **Codex Terminal
 Pro** through ingress.
 
 The web terminal wrapper uses a compact Codex-focused interface around ttyd,
-with paste/drop image upload hints and a read-only **Change Desk** review panel
+with image paste/drop support and a read-only **Change Desk** review panel
 kept one click away from the prompt.
 
 The terminal runs inside a persistent `tmux` session, so browser reconnects and

@@ -14,7 +14,7 @@ This is an MVP fork. It is not an official OpenAI add-on.
 
 - Home Assistant ingress web terminal powered by ttyd.
 - Sidebar panel entry for admin users via Home Assistant ingress.
-- Polished Codex-focused web wrapper with paste/drop image upload hints and a
+- Polished Codex-focused web wrapper with image paste/drop support and a
   read-only Change Desk review panel.
 - Persistent `tmux` session so browser reconnects do not kill Codex.
 - Switchable Codex/Shell modes, with Shell mode backed by a real interactive

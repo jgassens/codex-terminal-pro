@@ -182,21 +182,6 @@
             opacity: 0.5;
         }
 
-        .header-hint {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            min-height: 32px;
-            padding: 7px 9px;
-            border: 1px solid rgba(121, 199, 197, 0.18);
-            border-radius: 6px;
-            background: #11191b;
-            color: var(--muted);
-            font-size: 12px;
-            font-weight: 600;
-            white-space: nowrap;
-        }
-
         #touch-select-btn,
         #paste-btn {
             display: none;
@@ -730,12 +715,6 @@
                 padding: 6px 8px;
             }
 
-            .header-hint {
-                flex: 1 1 calc(50% - 8px);
-                justify-content: center;
-                padding: 6px 8px;
-            }
-
             #change-desk-panel {
                 top: 8px;
                 right: 8px;
@@ -844,10 +823,6 @@
                     <span>📋</span>
                     <span>Paste</span>
                 </button>
-                <div id="image-hint" class="header-hint" title="Paste or drop images into the terminal">
-                    <span>📎</span>
-                    <span>Paste/drop images</span>
-                </div>
             </div>
         </div>
         <div id="terminal-container">
@@ -921,7 +896,7 @@
         </div>
         <div id="change-desk-footer">
             <button id="change-desk-copy" class="modal-btn modal-btn-secondary">Copy Summary</button>
-            <button id="change-desk-prompt" class="modal-btn modal-btn-secondary">Ask Codex</button>
+            <button id="change-desk-prompt" class="modal-btn modal-btn-secondary">Send Report</button>
             <button id="change-desk-refresh" class="modal-btn modal-btn-primary">Refresh</button>
         </div>
     </div>
@@ -1562,12 +1537,12 @@
             ].join('\n');
 
             if (insertTextIntoMobileInput(prompt)) {
-                setStatus('Change Desk prompt added to command line', 'success', false);
+                setStatus('Change Desk report added to command line', 'success', false);
                 return;
             }
 
             const inserted = await pasteTextIntoTerminal(prompt);
-            setStatus(inserted ? 'Change Desk prompt inserted' : 'Could not insert Change Desk prompt', inserted ? 'success' : 'error', false);
+            setStatus(inserted ? 'Change Desk report inserted' : 'Could not insert Change Desk report', inserted ? 'success' : 'error', false);
             if (inserted) {
                 focusTerminal(true);
             }

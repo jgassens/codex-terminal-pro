@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.2.1
+
+- Rename the Change Desk **Ask Codex** action to **Send Report** so it better
+  describes inserting the report into the Codex prompt.
+- Remove the visible paste/drop image hint from the header; image paste and
+  drag/drop support remain available without a button-like affordance.
+
 ## 2.2.0
 
 - Add `ha-monitor`, a bounded read-only Home Assistant observer that runs in the
