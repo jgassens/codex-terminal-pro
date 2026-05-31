@@ -32,6 +32,26 @@
             --keyboard-inset: 0px;
         }
 
+        html[data-terminal-mode="raw"] {
+            color-scheme: light;
+            --bg: #efeceb;
+            --panel: #e8e4e2;
+            --panel-strong: #dfdad8;
+            --border: #cbbfbb;
+            --border-soft: #d9cfcc;
+            --text: #0c101d;
+            --muted: #584f53;
+            --accent: #0f4ba4;
+            --accent-strong: #003794;
+            --accent-cool: #86383a;
+            --success: #713f83;
+            --danger: #0490a0;
+            --button: #d9c3bd;
+            --button-hover: #ceafa8;
+            --button-active: #dfcbc7;
+            --shadow: rgba(52, 64, 68, 0.16);
+        }
+
         html {
             height: 100%;
             overflow: hidden;
@@ -70,6 +90,11 @@
             box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03), 0 10px 30px var(--shadow);
         }
 
+        html[data-terminal-mode="raw"] #header {
+            border-bottom-color: rgba(52, 64, 68, 0.22);
+            box-shadow: 0 1px 0 rgba(255, 255, 255, 0.88), 0 10px 28px rgba(52, 64, 68, 0.12);
+        }
+
         #header-title {
             display: flex;
             align-items: center;
@@ -95,6 +120,13 @@
             letter-spacing: 0;
         }
 
+        html[data-terminal-mode="raw"] .brand-mark {
+            border-color: rgba(134, 56, 58, 0.35);
+            background: #f8f5f3;
+            color: var(--accent-cool);
+            box-shadow: inset 0 -1px 0 rgba(12, 16, 29, 0.08);
+        }
+
         .status-pill {
             color: var(--accent);
             background: rgba(240, 180, 91, 0.1);
@@ -104,6 +136,12 @@
             font-size: 11px;
             font-weight: 600;
             padding: 3px 8px;
+        }
+
+        html[data-terminal-mode="raw"] .status-pill {
+            color: var(--accent);
+            background: rgba(15, 75, 164, 0.08);
+            border-color: rgba(15, 75, 164, 0.24);
         }
 
         #header-actions {
@@ -123,6 +161,12 @@
             background: #11191b;
         }
 
+        html[data-terminal-mode="raw"] #terminal-mode-switch {
+            background: #f8f5f3;
+            border-color: rgba(52, 64, 68, 0.22);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+        }
+
         .terminal-mode-btn {
             border: 0;
             border-radius: 5px;
@@ -138,6 +182,12 @@
         .terminal-mode-btn.active {
             background: rgba(240, 180, 91, 0.2);
             color: var(--accent-strong);
+        }
+
+        html[data-terminal-mode="raw"] .terminal-mode-btn.active {
+            background: rgba(15, 75, 164, 0.12);
+            color: var(--accent-strong);
+            box-shadow: inset 0 -1px 0 rgba(15, 75, 164, 0.12);
         }
 
         .terminal-mode-btn:disabled {
@@ -161,9 +211,18 @@
             box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
         }
 
+        html[data-terminal-mode="raw"] .header-btn {
+            border-color: rgba(134, 56, 58, 0.2);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55);
+        }
+
         .header-btn:hover {
             background: var(--button-hover);
             border-color: rgba(121, 199, 197, 0.5);
+        }
+
+        html[data-terminal-mode="raw"] .header-btn:hover {
+            border-color: rgba(134, 56, 58, 0.32);
         }
 
         .header-btn:active {
@@ -176,10 +235,20 @@
             color: var(--accent-strong);
         }
 
+        html[data-terminal-mode="raw"] .header-btn.active {
+            background: rgba(15, 75, 164, 0.1);
+            border-color: rgba(15, 75, 164, 0.32);
+            color: var(--accent-strong);
+        }
+
         .header-btn:disabled {
             background: #2d3436;
             cursor: not-allowed;
             opacity: 0.5;
+        }
+
+        html[data-terminal-mode="raw"] .header-btn:disabled {
+            background: #d7d1cf;
         }
 
         #touch-select-btn,
@@ -256,12 +325,26 @@
             border-top: 1px solid rgba(255, 255, 255, 0.03);
         }
 
+        html[data-terminal-mode="raw"] #terminal-container {
+            background:
+                linear-gradient(rgba(12, 16, 29, 0.035) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(12, 16, 29, 0.025) 1px, transparent 1px),
+                #efeceb;
+            background-size: 100% 22px, 22px 100%, auto;
+            border-top-color: rgba(52, 64, 68, 0.18);
+        }
+
         #terminal-frame {
             width: 100%;
             height: 100%;
             border: none;
             display: block;
             background: #050708;
+        }
+
+        html[data-terminal-mode="raw"] #terminal-frame {
+            background: #efeceb;
+            filter: invert(1) hue-rotate(180deg) saturate(1.08) contrast(0.96);
         }
 
         #mobile-input-bar {
@@ -273,6 +356,12 @@
             border-top: 1px solid rgba(121, 199, 197, 0.2);
             background: rgba(23, 27, 29, 0.98);
             box-shadow: 0 -10px 28px rgba(0, 0, 0, 0.28);
+        }
+
+        html[data-terminal-mode="raw"] #mobile-input-bar {
+            background: rgba(232, 228, 226, 0.98);
+            border-top-color: rgba(52, 64, 68, 0.18);
+            box-shadow: 0 -10px 28px rgba(52, 64, 68, 0.12);
         }
 
         #mobile-key-strip {
@@ -300,6 +389,12 @@
             font: 650 12px/1 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
             cursor: pointer;
             box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+        }
+
+        html[data-terminal-mode="raw"] .mobile-key-btn,
+        html[data-terminal-mode="raw"] #mobile-send-btn {
+            border-color: rgba(134, 56, 58, 0.22);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55);
         }
 
         .mobile-key-btn:active,
@@ -331,9 +426,20 @@
             outline: none;
         }
 
+        html[data-terminal-mode="raw"] #mobile-terminal-input {
+            background: #f8f5f3;
+            border-color: rgba(52, 64, 68, 0.22);
+            box-shadow: inset 0 1px 2px rgba(52, 64, 68, 0.08);
+        }
+
         #mobile-terminal-input:focus {
             border-color: rgba(240, 180, 91, 0.65);
             box-shadow: 0 0 0 2px rgba(240, 180, 91, 0.12);
+        }
+
+        html[data-terminal-mode="raw"] #mobile-terminal-input:focus {
+            border-color: rgba(15, 75, 164, 0.45);
+            box-shadow: 0 0 0 2px rgba(15, 75, 164, 0.1);
         }
 
         #mobile-send-btn {

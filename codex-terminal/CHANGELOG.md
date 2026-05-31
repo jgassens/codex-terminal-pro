@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.2.4
+
+- Give Shell mode its own light, inverted terminal aesthetic instead of reusing
+  the dark Codex wrapper colors.
+- Invert the embedded ttyd/xterm frame in Shell mode so the terminal surface
+  visibly matches the selected light shell theme.
+
 ## 2.2.3
 
 - Keep prompt paste inert: pasted `,,` shell-dispatch text no longer executes
