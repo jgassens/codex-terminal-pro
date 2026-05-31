@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.2.3
+
+- Keep prompt paste inert: pasted `,,` shell-dispatch text no longer executes
+  just because the clipboard carried a trailing newline.
+- Strip trailing line breaks from toolbar/manual prompt paste before inserting
+  text into the terminal; the user must press Enter to run it.
+
 ## 2.2.2
 
 - Stage full Change Desk reports under `/data/monitor/reports` before sending

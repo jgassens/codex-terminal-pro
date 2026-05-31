@@ -1763,6 +1763,10 @@
             return reduction >= 0.35 ? repaired : normalized;
         }
 
+        function promptPasteText(text) {
+            return String(text || '').replace(/(?:\r\n|\r|\n)+$/g, '');
+        }
+
         function stopTerminalInputEvent(event) {
             event.preventDefault();
             event.stopPropagation();
@@ -1988,7 +1992,27 @@
             }
 
             if (event.inputType === 'insertFromPaste') {
-                appendTerminalLineText(event.data || '', 'beforeinput');
+                const pastedText = event.data || '';
+                const safeText = promptPasteText(pastedText);
+                if (safeText !== pastedText) {
+                    stopTerminalInputEvent(event);
+                    if (!safeText) {
+                        return;
+                    }
+
+                    appendTerminalLineText(safeText, 'beforeinput');
+                    lastPasteText = { text: safeText, at: Date.now() };
+                    pasteTextIntoTerminal(safeText).then((inserted) => {
+                        setStatus(inserted ? 'Pasted text into command line' : 'Could not paste into terminal', inserted ? 'success' : 'error', false);
+                        if (inserted) {
+                            focusTerminal(true);
+                            scheduleTerminalViewportSync(true);
+                        }
+                    });
+                    return;
+                }
+
+                appendTerminalLineText(safeText, 'beforeinput');
             }
         }
 
@@ -2006,16 +2030,27 @@
                 return;
             }
 
-            const command = shellCommandFromDispatchPrefix(text);
-            if (command !== null && /[\r\n]$/.test(text)) {
+            const safeText = promptPasteText(text);
+            if (safeText !== text) {
                 stopTerminalInputEvent(event);
-                resetTerminalLineBuffer();
-                dispatchShellCommandFromPrompt(normalizeDispatchCommand(command));
+                if (!safeText) {
+                    return;
+                }
+
+                appendTerminalLineText(safeText, 'paste');
+                lastPasteText = { text: safeText, at: Date.now() };
+                pasteTextIntoTerminal(safeText).then((inserted) => {
+                    setStatus(inserted ? 'Pasted text into command line' : 'Could not paste into terminal', inserted ? 'success' : 'error', false);
+                    if (inserted) {
+                        focusTerminal(true);
+                        scheduleTerminalViewportSync(true);
+                    }
+                });
                 return;
             }
 
-            appendTerminalLineText(text, 'paste');
-            lastPasteText = { text, at: Date.now() };
+            appendTerminalLineText(safeText, 'paste');
+            lastPasteText = { text: safeText, at: Date.now() };
         }
 
         function resizeMobileTerminalInput() {
@@ -3059,12 +3094,18 @@
                 try {
                     const text = await navigator.clipboard.readText();
                     if (text.trim()) {
-                        if (insertTextIntoMobileInput(text)) {
+                        const safeText = promptPasteText(text);
+                        if (!safeText.trim()) {
+                            setStatus('Clipboard did not contain text or an image', 'error', false);
+                            return;
+                        }
+
+                        if (insertTextIntoMobileInput(safeText)) {
                             setStatus('Pasted clipboard text into command line', 'success', false);
                             return;
                         }
 
-                        const inserted = await pasteTextIntoTerminal(text);
+                        const inserted = await pasteTextIntoTerminal(safeText);
                         setStatus(inserted ? 'Pasted clipboard text' : 'Could not paste into terminal', inserted ? 'success' : 'error', false);
                         if (inserted) {
                             focusTerminal(true);
@@ -3197,7 +3238,7 @@
         });
 
         manualPasteInsert.addEventListener('click', async () => {
-            const text = manualPasteText.value;
+            const text = promptPasteText(manualPasteText.value);
             if (!text.trim()) {
                 setStatus('No text to paste', 'error', false);
                 return;
