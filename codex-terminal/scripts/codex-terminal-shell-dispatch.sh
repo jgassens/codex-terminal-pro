@@ -6,6 +6,9 @@ if [ "${CODEX_TERMINAL_HUMAN_SHELL:-}" != "1" ] || [[ "$-" != *i* ]]; then
     return 0 2>/dev/null || exit 0
 fi
 
+# Raw Shell mode gets its own prompt so commands do not disappear into output.
+export PS1='\[\033[1;35m\]ctp-shell\[\033[0m\] \[\033[1;34m\]\w\[\033[0m\] \[\033[1;31m\]\$\[\033[0m\] '
+
 __codex_terminal_run_prefixed_command() {
     local command_name="$1"
     local deduped=""

@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.2.5
+
+- Add a colored raw Shell prompt so command entry is visually distinct from
+  command output.
+- Punch up the Shell-mode light palette and terminal inversion filter for
+  stronger contrast and less washed-out output.
+
 ## 2.2.4
 
 - Give Shell mode its own light, inverted terminal aesthetic instead of reusing
