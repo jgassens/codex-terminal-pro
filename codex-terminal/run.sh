@@ -278,7 +278,7 @@ install_tools() {
 
 log_startup_diagnostics() {
     local app_name="${APP_NAME:-${ADDON_NAME:-Codex Terminal Pro}}"
-    local app_version="${BUILD_VERSION:-${APP_VERSION:-2.2.5}}"
+    local app_version="${BUILD_VERSION:-${APP_VERSION:-2.3.0}}"
 
     bashio::log.info "Startup diagnostics:"
     bashio::log.info "  - Date: $(date)"
@@ -309,6 +309,8 @@ log_startup_diagnostics() {
     bashio::log.info "  - ha-mcp-status version: $(ha-mcp-status --version 2>&1 || true)"
     bashio::log.info "  - which ha-monitor: $(which ha-monitor 2>/dev/null || true)"
     bashio::log.info "  - ha-monitor version: $(ha-monitor --version 2>&1 || true)"
+    bashio::log.info "  - which ha-site-memory: $(which ha-site-memory 2>/dev/null || true)"
+    bashio::log.info "  - ha-site-memory version: $(ha-site-memory --version 2>&1 || true)"
     bashio::log.info "  - which sqlite3: $(which sqlite3 2>/dev/null || true)"
     bashio::log.info "  - which mosquitto_sub: $(which mosquitto_sub 2>/dev/null || true)"
     bashio::log.info "  - which dig: $(which dig 2>/dev/null || true)"
@@ -335,7 +337,7 @@ setup_modbus_tools() {
 setup_ha_tools() {
     local tool
 
-    for tool in ha-toolbox ha-api ha-ws ha-mcp-status ha-monitor; do
+    for tool in ha-toolbox ha-api ha-ws ha-mcp-status ha-monitor ha-site-memory; do
         if [ -f "/opt/scripts/${tool}" ]; then
             cp "/opt/scripts/${tool}" "/usr/local/bin/${tool}"
             chmod 755 "/usr/local/bin/${tool}"
@@ -344,7 +346,26 @@ setup_ha_tools() {
         fi
     done
 
-    bashio::log.info "Home Assistant helpers installed: ha-toolbox, ha-api, ha-ws, ha-mcp-status, ha-monitor"
+    bashio::log.info "Home Assistant helpers installed: ha-toolbox, ha-api, ha-ws, ha-mcp-status, ha-monitor, ha-site-memory"
+}
+
+refresh_ha_site_memory_once() {
+    local memory_bin="/usr/local/bin/ha-site-memory"
+
+    if [ ! -x "${memory_bin}" ]; then
+        bashio::log.warning "HA site memory helper is not available at ${memory_bin}"
+        return 0
+    fi
+
+    mkdir -p /data/monitor
+    chmod 700 /data/monitor
+
+    bashio::log.info "Refreshing Home Assistant site memory..."
+    if "${memory_bin}" refresh --quiet; then
+        bashio::log.info "HA site memory written to /data/monitor/ha-site-memory.md"
+    else
+        bashio::log.warning "HA site memory refresh failed; keeping any previous memory file"
+    fi
 }
 
 setup_session_picker() {
@@ -481,6 +502,11 @@ write_codex_terminal_agents_block() {
   broad Home Assistant triage. It records logs, unavailable state samples, and
   MCP status under `/data/monitor`, but it does not reload, restart, edit files,
   or run bespoke task manifests in this release.
+- Use `ha-site-memory status` or read `/data/monitor/ha-site-memory.md` before
+  troubleshooting named rooms, integrations, or house-specific devices such as
+  "Ring lights". Treat it as a map of likely entities, then refresh and verify
+  exact live state with `ha-api` or `ha-ws` before changing anything. Optional
+  human-maintained aliases or recurring fixes may live in `/config/HA_SITE_NOTES.md`.
 - `,,` is a Codex Terminal Pro shell-dispatch prefix. If the human prompt starts
   with `,,`, strip that prefix and run the rest through `codex-shell-dispatch`.
   Do not run the stripped command directly through Codex's normal shell path.
@@ -556,6 +582,8 @@ BROKER_CONF
         cp /opt/scripts/supervisor-api.sh "$guard_dir/supervisor-api"
         chmod 755 "$guard_dir/supervisor-api"
     fi
+
+    refresh_ha_site_memory_once
 
     if [ -f /opt/scripts/codex-terminal-briefing ]; then
         cp /opt/scripts/codex-terminal-briefing /usr/local/bin/codex-terminal-briefing

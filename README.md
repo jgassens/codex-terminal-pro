@@ -33,6 +33,9 @@ This is an MVP fork. It is not an official OpenAI add-on.
 - Bounded `ha-monitor` observer that fingerprints recent HA log issues, samples
   unavailable/unknown states, records MCP status, and stores safe summaries under
   `/data/monitor`.
+- Read-only `ha-site-memory` helper that builds a compact house dictionary under
+  `/data/monitor/ha-site-memory.md` so phrases like "Ring lights" resolve to
+  likely integrations, areas, and entity IDs before Codex starts troubleshooting.
 - Trusted human Shell lane for commands typed in Shell mode or dispatched with
   `,,`, while Codex/non-interactive Home Assistant operations remain guarded.
 - Codex CLI pinned and installed in the add-on image with
@@ -48,7 +51,8 @@ This is an MVP fork. It is not an official OpenAI add-on.
   and paths inserted into the prompt.
 - Persistent APK and Python package helpers under `/data/packages`.
 - Home Assistant CLI (`ha`), `ha-toolbox`, `ha-api`, `ha-ws`,
-  `ha-mcp-status`, `ha-monitor`, and GitHub CLI (`gh`) included.
+  `ha-mcp-status`, `ha-monitor`, `ha-site-memory`, and GitHub CLI (`gh`)
+  included.
 - Read-only Home Assistant REST/WebSocket helpers for exact live entity
   snapshots, service schemas, entity registry discovery, target expansion,
   exposed-entity checks, and automation snippet validation.
@@ -191,8 +195,8 @@ codex-terminal-briefing
 
 That guidance tells Codex about `,,`, `codex-shell-dispatch`, `ha`,
 `supervisor-api`, `ha-toolbox`, `ha-api`, `ha-ws`, `ha-mcp-status`,
-`ha-monitor`, `solar-toolbox`, `modbus-toolbox`, `modbus-scan`, and
-`modbus-read`.
+`ha-monitor`, `ha-site-memory`, `solar-toolbox`, `modbus-toolbox`,
+`modbus-scan`, and `modbus-read`.
 
 ## Home Assistant Toolbox And Live API Helpers
 
@@ -222,6 +226,7 @@ ha-ws target-info --entity light.kitchen --capabilities
 ha-ws validate --file /config/action-snippet.yaml --section action
 ha-mcp-status
 ha-monitor status
+ha-site-memory status
 ```
 
 These helpers are read-only by design. Use the existing brokered `ha` command
@@ -234,6 +239,13 @@ summaries to `/data/monitor/ha-monitor.json`. It does not call services, reload,
 restart, edit `/config`, or execute bespoke task files. The reserved
 `/data/monitor/tasks.d` directory is present for a future opt-in task-manifest
 design.
+
+`ha-site-memory` builds a read-only site map from Home Assistant's local
+registries and live states. Startup refreshes `/data/monitor/ha-site-memory.md`
+when Home Assistant is reachable, and `codex-terminal-briefing` includes a capped
+copy so new Codex sessions can resolve house-specific phrases before broad
+triage. Optional human notes from `/config/HA_SITE_NOTES.md` are included when
+present. Run `ha-site-memory refresh` after renaming devices or integrations.
 
 The detailed Home Assistant field guide is installed at
 `/opt/home-assistant/HA.md`.

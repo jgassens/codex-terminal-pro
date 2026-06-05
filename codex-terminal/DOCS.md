@@ -52,10 +52,10 @@ the remaining command through that helper, not through normal Codex shell
 execution.
 
 The add-on includes read-only Home Assistant REST/WebSocket helpers, the bounded
-`ha-monitor` observer, plus read-only Modbus helpers for Home Assistant
-troubleshooting and Schneider Electric discovery work. Run `ha-api`, `ha-ws`,
-`ha-mcp-status`, `ha-monitor status`, or `modbus-toolbox` in the terminal for
-examples.
+`ha-monitor` observer, the `ha-site-memory` house dictionary, plus read-only
+Modbus helpers for Home Assistant troubleshooting and Schneider Electric
+discovery work. Run `ha-api`, `ha-ws`, `ha-mcp-status`, `ha-monitor status`,
+`ha-site-memory status`, or `modbus-toolbox` in the terminal for examples.
 
 The toolbar **Change Desk** button opens a read-only review panel for the
 current `/config` workspace. It summarizes `ha-toolbox` YAML audit results,
@@ -238,9 +238,9 @@ codex-terminal-briefing
 
 The briefing covers `,,` shell dispatch, `codex-shell-dispatch`, `ha`,
 `supervisor-api`, `ha-toolbox`, `ha-api`, `ha-ws`, `ha-mcp-status`,
-`ha-monitor`, Shell mode, mobile command input, `solar-toolbox`,
-`modbus-toolbox`, `modbus-scan`, `modbus-read`, and the sensitive files it
-should avoid.
+`ha-monitor`, `ha-site-memory`, Shell mode, mobile command input,
+`solar-toolbox`, `modbus-toolbox`, `modbus-scan`, `modbus-read`, and the
+sensitive files it should avoid.
 
 ## Home Assistant Toolbox And Live API Helpers
 
@@ -274,6 +274,7 @@ ha-ws entity-registry --pattern kitchen
 ha-ws target-info --entity light.kitchen --capabilities
 ha-ws exposed
 ha-ws validate --file /config/action-snippet.yaml --section action
+ha-site-memory status
 ```
 
 `ha-mcp-status` checks whether Home Assistant's official Model Context Protocol
@@ -281,6 +282,14 @@ Server integration is loaded and reminds Codex that `/api/mcp` access is
 controlled by exposed entities. These helpers intentionally omit service-call
 and entity-exposure write commands; use brokered `ha` or human Shell dispatch
 for control actions.
+
+`ha-site-memory` writes `/data/monitor/ha-site-memory.md` from local Home
+Assistant registries and live states. It is refreshed during add-on startup when
+Home Assistant is reachable and included in `codex-terminal-briefing` so fresh
+Codex sessions can resolve house-specific phrases such as "Ring lights" before
+starting broad triage. Optional human notes from `/config/HA_SITE_NOTES.md` are
+included when present. It is read-only and should be treated as a map; verify
+live state with `ha-api` or `ha-ws` before changing anything.
 
 The bundled field guide at `/opt/home-assistant/HA.md` covers configuration
 layout, automations, scripts, scenes, helpers, templates, dashboards, entity and

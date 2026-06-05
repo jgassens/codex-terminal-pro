@@ -53,6 +53,9 @@ Treat this file as the local map of the room.
   integration and endpoint hints.
 - `ha-monitor`: bounded read-only observer for HA logs, unavailable state
   samples, MCP status, and persistent issue fingerprints under `/data/monitor`.
+- `ha-site-memory`: read-only Home Assistant site memory generator that maps
+  house-specific phrases, integrations, areas, and likely entity IDs under
+  `/data/monitor/ha-site-memory.md`.
 - `codex-shell-dispatch`: sends a human `,,` command to the hidden Shell pane
   and returns completed output to the Codex view.
 - `codex-auth-helper`: login/import helper for Codex credentials.
@@ -82,6 +85,12 @@ Treat this file as the local map of the room.
   triage. This release ignores `/data/monitor/tasks.d` task manifests; future
   task execution must stay explicit, bounded, and read-only until the human
   expands the capability.
+- Use `ha-site-memory status` or read `/data/monitor/ha-site-memory.md` before
+  troubleshooting named rooms, integrations, or house-specific devices such as
+  "Ring lights". It is a map of likely entities, not proof; refresh it with
+  `ha-site-memory refresh`, then verify exact live state with `ha-api` or
+  `ha-ws` before changing anything. Optional human-maintained aliases or recurring
+  fixes may live in `/config/HA_SITE_NOTES.md`.
 - Use `/opt/home-assistant/HA.md` as the local Home Assistant field guide.
 - Know the common layers: YAML/includes/packages, automations, scripts, scenes,
   helpers, templates, dashboards, entity/device registries, integrations,
@@ -124,6 +133,8 @@ Treat this file as the local map of the room.
 - Uploaded images: `/data/images`
 - Terminal transcript: `/data/logs/codex-terminal.log`
 - Broker audit log: `/data/logs/supervisor-broker.log`
+- Home Assistant site memory: `/data/monitor/ha-site-memory.md`
+- Home Assistant site notes: `/config/HA_SITE_NOTES.md` if present
 - Full add-on guidance: `/config/AGENTS.codex-terminal-pro.md`
 - This briefing: `/config/CODEX_TERMINAL_PRO.md`
 
@@ -147,6 +158,7 @@ for command_name in \
     ha-ws \
     ha-mcp-status \
     solar-toolbox \
+    ha-site-memory \
     modbus-toolbox \
     modbus-scan \
     modbus-read \
@@ -175,3 +187,16 @@ do
         printf -- '- `%s`: not found in PATH\n' "$command_name"
     fi
 done
+
+printf '\n## Home Assistant Site Memory\n\n'
+site_memory_file="/data/monitor/ha-site-memory.md"
+site_memory_max_lines=220
+if [ -s "$site_memory_file" ]; then
+    sed -n "1,${site_memory_max_lines}p" "$site_memory_file"
+    site_memory_line_count="$(wc -l < "$site_memory_file" 2>/dev/null || printf '0')"
+    if [ "${site_memory_line_count:-0}" -gt "$site_memory_max_lines" ] 2>/dev/null; then
+        printf '\n... site memory truncated in briefing; read `%s` for the full file.\n' "$site_memory_file"
+    fi
+else
+    printf 'No generated site memory found yet. Run `ha-site-memory refresh` after Home Assistant is reachable.\n'
+fi

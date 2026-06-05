@@ -1,0 +1,601 @@
+#!/usr/bin/env python3
+"""Read-only Home Assistant site memory for Codex Terminal Pro."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+from collections import Counter, defaultdict
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+
+VERSION = "0.1"
+DEFAULT_CONFIG_DIR = Path("/config")
+DEFAULT_MARKDOWN_FILE = Path("/data/monitor/ha-site-memory.md")
+DEFAULT_JSON_FILE = Path("/data/monitor/ha-site-memory.json")
+DEFAULT_NOTES_FILE = Path("/config/HA_SITE_NOTES.md")
+TOKEN_FILE = Path("/data/.supervisor/token")
+SUPERVISOR_STATES_URL = "http://supervisor/core/api/states"
+
+PRIMARY_DOMAINS = {
+    "alarm_control_panel",
+    "binary_sensor",
+    "button",
+    "camera",
+    "climate",
+    "cover",
+    "device_tracker",
+    "fan",
+    "humidifier",
+    "light",
+    "lock",
+    "number",
+    "remote",
+    "scene",
+    "script",
+    "select",
+    "sensor",
+    "siren",
+    "switch",
+    "vacuum",
+}
+
+DOMAIN_PLURALS = {
+    "alarm_control_panel": "alarms",
+    "binary_sensor": "binary sensors",
+    "button": "buttons",
+    "camera": "cameras",
+    "climate": "climates",
+    "cover": "covers",
+    "device_tracker": "trackers",
+    "fan": "fans",
+    "humidifier": "humidifiers",
+    "light": "lights",
+    "lock": "locks",
+    "number": "numbers",
+    "remote": "remotes",
+    "scene": "scenes",
+    "script": "scripts",
+    "select": "selects",
+    "sensor": "sensors",
+    "siren": "sirens",
+    "switch": "switches",
+    "vacuum": "vacuums",
+}
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def load_storage(config_dir: Path, name: str) -> tuple[list[dict[str, Any]], str]:
+    path = config_dir / ".storage" / name
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except FileNotFoundError:
+        return [], f"missing:{path}"
+    except Exception as exc:
+        return [], f"error:{path}:{exc}"
+
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, dict):
+        return [], f"unexpected:{path}"
+
+    key_map = {
+        "core.area_registry": "areas",
+        "core.device_registry": "devices",
+        "core.entity_registry": "entities",
+        "core.config_entries": "entries",
+    }
+    key = key_map.get(name)
+    rows = data.get(key) if key else None
+    if not isinstance(rows, list):
+        return [], f"unexpected:{path}:{key}"
+    return [row for row in rows if isinstance(row, dict)], f"ok:{path}:{len(rows)}"
+
+
+def read_token() -> str | None:
+    token = os.environ.get("SUPERVISOR_TOKEN", "").strip()
+    if token:
+        return token
+    try:
+        return TOKEN_FILE.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return None
+    except Exception:
+        return None
+
+
+def fetch_states(timeout: int) -> tuple[dict[str, dict[str, Any]], str]:
+    token = read_token()
+    if not token:
+        return {}, "missing-supervisor-token"
+
+    request = urllib.request.Request(
+        SUPERVISOR_STATES_URL,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        return {}, f"http-error:{exc.code}"
+    except Exception as exc:
+        return {}, f"error:{exc}"
+
+    if not isinstance(payload, list):
+        return {}, "unexpected-states-payload"
+
+    states: dict[str, dict[str, Any]] = {}
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        entity_id = str(item.get("entity_id") or "")
+        if entity_id:
+            states[entity_id] = item
+    return states, f"ok:{len(states)}"
+
+
+def read_notes(path: Path, max_chars: int) -> tuple[str, str]:
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace").strip()
+    except FileNotFoundError:
+        return "", f"missing:{path}"
+    except Exception as exc:
+        return "", f"error:{path}:{exc}"
+    if len(text) > max_chars:
+        return text[:max_chars].rstrip() + "\n\n...[notes truncated]", f"ok-truncated:{path}:{len(text)}"
+    return text, f"ok:{path}:{len(text)}"
+
+
+def entity_domain(entity_id: str) -> str:
+    return entity_id.split(".", 1)[0] if "." in entity_id else ""
+
+
+def pick_name(*values: Any) -> str:
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def state_name(state: dict[str, Any] | None) -> str:
+    if not state:
+        return "unknown"
+    return str(state.get("state") or "unknown")
+
+
+def friendly_from_state(state: dict[str, Any] | None) -> str:
+    attrs = state.get("attributes") if isinstance(state, dict) else None
+    if isinstance(attrs, dict):
+        return str(attrs.get("friendly_name") or "").strip()
+    return ""
+
+
+def area_name(area_id: str | None, areas_by_id: dict[str, dict[str, Any]]) -> str:
+    if not area_id:
+        return ""
+    area = areas_by_id.get(str(area_id))
+    return pick_name(area.get("name") if area else "", area_id)
+
+
+def config_entry_domain(entry_id: str | None, entries_by_id: dict[str, dict[str, Any]]) -> str:
+    if not entry_id:
+        return ""
+    entry = entries_by_id.get(str(entry_id))
+    return str(entry.get("domain") or "") if entry else ""
+
+
+def entity_integration(
+    entity: dict[str, Any],
+    device: dict[str, Any] | None,
+    entries_by_id: dict[str, dict[str, Any]],
+) -> str:
+    platform = str(entity.get("platform") or "").strip()
+    if platform:
+        return platform
+    candidate_entry_ids = [entity.get("config_entry_id")]
+    candidate_entry_ids.extend((device or {}).get("config_entries") or [])
+    for entry_id in candidate_entry_ids:
+        domain = config_entry_domain(str(entry_id), entries_by_id)
+        if domain:
+            return domain
+    return "unknown"
+
+
+def summarize_entities(
+    entities: list[dict[str, Any]],
+    devices_by_id: dict[str, dict[str, Any]],
+    areas_by_id: dict[str, dict[str, Any]],
+    entries_by_id: dict[str, dict[str, Any]],
+    states: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for entity in entities:
+        entity_id = str(entity.get("entity_id") or "")
+        if not entity_id:
+            continue
+        device_id = str(entity.get("device_id") or "")
+        device = devices_by_id.get(device_id) if device_id else None
+        state = states.get(entity_id)
+        domain = entity_domain(entity_id)
+        integration = entity_integration(entity, device, entries_by_id)
+        entity_area_id = entity.get("area_id") or (device or {}).get("area_id")
+        rows.append(
+            {
+                "entity_id": entity_id,
+                "domain": domain,
+                "integration": integration,
+                "name": pick_name(
+                    entity.get("name"),
+                    entity.get("original_name"),
+                    friendly_from_state(state),
+                ),
+                "friendly_name": friendly_from_state(state),
+                "state": state_name(state),
+                "area_id": entity_area_id or "",
+                "area": area_name(entity_area_id, areas_by_id),
+                "device_id": device_id,
+                "device_name": pick_name(
+                    (device or {}).get("name_by_user"),
+                    (device or {}).get("name"),
+                ),
+                "manufacturer": pick_name((device or {}).get("manufacturer")),
+                "model": pick_name((device or {}).get("model")),
+                "hidden": bool(entity.get("hidden_by")),
+                "disabled": bool(entity.get("disabled_by")),
+            }
+        )
+    return rows
+
+
+def phrase_key(*parts: str) -> str:
+    return " ".join(part.strip().lower() for part in parts if part.strip()).strip()
+
+
+def entity_label(row: dict[str, Any]) -> str:
+    label = f"`{row['entity_id']}`"
+    state = row.get("state")
+    if state:
+        label += f" ({state})"
+    return label
+
+
+def build_phrase_shortcuts(rows: list[dict[str, Any]], max_phrases: int) -> list[dict[str, Any]]:
+    groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        if row.get("disabled") or row.get("hidden"):
+            continue
+        domain = str(row.get("domain") or "")
+        if domain not in PRIMARY_DOMAINS:
+            continue
+        plural = DOMAIN_PLURALS.get(domain, f"{domain}s")
+        integration = str(row.get("integration") or "")
+        area = str(row.get("area") or "")
+        manufacturer = str(row.get("manufacturer") or "")
+        device_name = str(row.get("device_name") or "")
+
+        for left in (integration, area, manufacturer):
+            key = phrase_key(left, plural)
+            if key and not key.startswith("unknown "):
+                groups[key].append(row)
+
+        # Device names often carry the phrase users type: "front Ring path lights".
+        key = phrase_key(device_name, plural)
+        if key:
+            groups[key].append(row)
+
+    shortcuts = []
+    for key, items in groups.items():
+        deduped = {}
+        for item in items:
+            deduped[item["entity_id"]] = item
+        values = sorted(deduped.values(), key=lambda item: item["entity_id"])
+        if not values:
+            continue
+        states = Counter(str(item.get("state") or "unknown") for item in values)
+        shortcuts.append(
+            {
+                "phrase": key,
+                "count": len(values),
+                "states": dict(states.most_common()),
+                "entities": [item["entity_id"] for item in values],
+                "sample": values[:8],
+            }
+        )
+
+    shortcuts.sort(key=lambda item: (item["phrase"].count(" "), -item["count"], item["phrase"]))
+    return shortcuts[:max_phrases]
+
+
+def build_area_summaries(rows: list[dict[str, Any]], areas: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    by_area: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        if row.get("disabled") or row.get("hidden"):
+            continue
+        area = str(row.get("area") or "Unassigned")
+        by_area[area].append(row)
+
+    summaries = []
+    known_names = {str(area.get("name") or "").strip() for area in areas if area.get("name")}
+    for area_name_value in sorted(set(by_area) | known_names):
+        items = by_area.get(area_name_value, [])
+        domains = Counter(str(item.get("domain") or "unknown") for item in items)
+        integrations = Counter(str(item.get("integration") or "unknown") for item in items)
+        summaries.append(
+            {
+                "area": area_name_value,
+                "entity_count": len(items),
+                "domains": dict(domains.most_common(8)),
+                "integrations": dict(integrations.most_common(6)),
+            }
+        )
+    return summaries
+
+
+def build_integration_summaries(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    by_integration: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        if row.get("disabled") or row.get("hidden"):
+            continue
+        by_integration[str(row.get("integration") or "unknown")].append(row)
+
+    summaries = []
+    for integration, items in by_integration.items():
+        domains = Counter(str(item.get("domain") or "unknown") for item in items)
+        areas = Counter(str(item.get("area") or "Unassigned") for item in items)
+        summaries.append(
+            {
+                "integration": integration,
+                "entity_count": len(items),
+                "domains": dict(domains.most_common(8)),
+                "areas": dict(areas.most_common(6)),
+            }
+        )
+    summaries.sort(key=lambda item: (-item["entity_count"], item["integration"]))
+    return summaries
+
+
+def should_include_entity(row: dict[str, Any]) -> bool:
+    if row.get("disabled") or row.get("hidden"):
+        return False
+    domain = str(row.get("domain") or "")
+    if domain in {"light", "switch", "camera", "cover", "lock", "climate", "fan", "siren", "vacuum"}:
+        return True
+    if str(row.get("state") or "").lower() in {"unavailable", "unknown"}:
+        return True
+    integration = str(row.get("integration") or "").lower()
+    if integration in {"ring", "shelly", "zwave_js", "zha", "matter", "mqtt", "esphome", "homekit"}:
+        return True
+    return False
+
+
+def format_counter(counter: dict[str, int], limit: int = 6) -> str:
+    parts = [f"{key} {value}" for key, value in list(counter.items())[:limit]]
+    return ", ".join(parts) if parts else "none"
+
+
+def render_markdown(memory: dict[str, Any], max_entities: int) -> str:
+    rows = memory["entities"]
+    entity_directory = [row for row in rows if should_include_entity(row)]
+    entity_directory.sort(
+        key=lambda row: (
+            str(row.get("integration") or ""),
+            str(row.get("domain") or ""),
+            str(row.get("area") or ""),
+            str(row.get("entity_id") or ""),
+        )
+    )
+
+    lines = [
+        "# Home Assistant Site Memory",
+        "",
+        f"Generated: {memory['generated_at']}",
+        "",
+        "Use this as the local house dictionary before rediscovering user phrases.",
+        "It is a map, not proof: refresh it and verify exact live state before changes.",
+        "",
+        "First moves for named-device troubleshooting:",
+        "",
+        "- Read or search this file for the phrase the human used.",
+        "- Run `ha-site-memory refresh` if this file is stale.",
+        "- Verify live with `ha-api states --pattern <term>` and `ha-ws entity-registry --pattern <term>`.",
+        "- Use `ha-api state <entity_id>` on the exact entities before edits, reloads, or restarts.",
+        "",
+        "## Sources",
+        "",
+    ]
+    for source, status in memory["sources"].items():
+        lines.append(f"- {source}: {status}")
+
+    notes = str(memory.get("notes") or "").strip()
+    if notes:
+        lines.extend(["", "## Human Notes", "", notes])
+
+    lines.extend(["", "## Phrase Shortcuts", ""])
+
+    shortcuts = memory["phrase_shortcuts"]
+    if shortcuts:
+        for shortcut in shortcuts:
+            samples = ", ".join(entity_label(item) for item in shortcut["sample"])
+            lines.append(
+                f"- {shortcut['phrase']}: {shortcut['count']} entities; "
+                f"states {format_counter(shortcut['states'])}; {samples}"
+            )
+    else:
+        lines.append("- none yet")
+
+    lines.extend(["", "## Integrations", ""])
+    for item in memory["integrations"][:40]:
+        lines.append(
+            f"- {item['integration']}: {item['entity_count']} entities; "
+            f"domains {format_counter(item['domains'])}; areas {format_counter(item['areas'])}"
+        )
+
+    lines.extend(["", "## Areas", ""])
+    for item in memory["areas"][:80]:
+        lines.append(
+            f"- {item['area']}: {item['entity_count']} entities; "
+            f"domains {format_counter(item['domains'])}; integrations {format_counter(item['integrations'])}"
+        )
+
+    lines.extend(["", "## Entity Directory", ""])
+    for row in entity_directory[:max_entities]:
+        name = pick_name(row.get("friendly_name"), row.get("name"), row.get("device_name"))
+        details = [
+            f"integration {row.get('integration') or 'unknown'}",
+            f"area {row.get('area') or 'Unassigned'}",
+            f"state {row.get('state') or 'unknown'}",
+        ]
+        if row.get("device_name"):
+            details.append(f"device {row['device_name']}")
+        if row.get("manufacturer"):
+            details.append(f"maker {row['manufacturer']}")
+        suffix = f" - {name}" if name else ""
+        lines.append(f"- `{row['entity_id']}`{suffix}; " + "; ".join(details))
+
+    if len(entity_directory) > max_entities:
+        lines.append(f"- ... {len(entity_directory) - max_entities} more omitted from markdown; see JSON memory.")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def build_memory(args: argparse.Namespace) -> dict[str, Any]:
+    config_dir = Path(args.config).expanduser()
+    areas, area_source = load_storage(config_dir, "core.area_registry")
+    devices, device_source = load_storage(config_dir, "core.device_registry")
+    entities, entity_source = load_storage(config_dir, "core.entity_registry")
+    entries, entry_source = load_storage(config_dir, "core.config_entries")
+    states, state_source = fetch_states(args.timeout)
+    notes, notes_source = read_notes(Path(args.notes).expanduser(), args.max_notes_chars)
+
+    areas_by_id = {str(area.get("area_id")): area for area in areas if area.get("area_id")}
+    devices_by_id = {str(device.get("id")): device for device in devices if device.get("id")}
+    entries_by_id = {str(entry.get("entry_id")): entry for entry in entries if entry.get("entry_id")}
+    rows = summarize_entities(entities, devices_by_id, areas_by_id, entries_by_id, states)
+
+    return {
+        "generated_at": utc_now(),
+        "sources": {
+            "area_registry": area_source,
+            "device_registry": device_source,
+            "entity_registry": entity_source,
+            "config_entries": entry_source,
+            "states": state_source,
+            "notes": notes_source,
+        },
+        "counts": {
+            "areas": len(areas),
+            "devices": len(devices),
+            "entities": len(entities),
+            "states": len(states),
+        },
+        "phrase_shortcuts": build_phrase_shortcuts(rows, args.max_phrases),
+        "notes": notes,
+        "integrations": build_integration_summaries(rows),
+        "areas": build_area_summaries(rows, areas),
+        "entities": rows,
+    }
+
+
+def write_text(path: Path, value: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(value, encoding="utf-8")
+    path.chmod(0o600)
+
+
+def command_refresh(args: argparse.Namespace) -> int:
+    memory = build_memory(args)
+    markdown = render_markdown(memory, args.max_entities)
+    markdown_file = Path(args.markdown).expanduser()
+    json_file = Path(args.json_file).expanduser()
+    write_text(markdown_file, markdown)
+    write_text(json_file, json.dumps(memory, indent=2, sort_keys=True) + "\n")
+    if not args.quiet:
+        print(f"Wrote {markdown_file}")
+        print(f"Wrote {json_file}")
+        print(
+            "Counts: "
+            f"{memory['counts']['areas']} areas, "
+            f"{memory['counts']['devices']} devices, "
+            f"{memory['counts']['entities']} entities, "
+            f"{memory['counts']['states']} live states"
+        )
+    return 0
+
+
+def command_status(args: argparse.Namespace) -> int:
+    markdown_file = Path(args.markdown).expanduser()
+    json_file = Path(args.json_file).expanduser()
+    print(f"Markdown: {markdown_file}")
+    print(f"JSON: {json_file}")
+    if not markdown_file.is_file():
+        print("No site memory exists yet. Run: ha-site-memory refresh")
+        return 0
+    print("")
+    lines = markdown_file.read_text(encoding="utf-8", errors="replace").splitlines()
+    for line in lines[: args.lines]:
+        print(line)
+    if len(lines) > args.lines:
+        print(f"... {len(lines) - args.lines} more lines")
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Read-only Home Assistant site memory helper.")
+    parser.add_argument("--version", action="version", version=f"ha-site-memory {VERSION}")
+    parser.add_argument("--config", default=str(DEFAULT_CONFIG_DIR), help="Home Assistant config directory")
+    parser.add_argument("--markdown", default=str(DEFAULT_MARKDOWN_FILE), help="Markdown output path")
+    parser.add_argument("--json-file", default=str(DEFAULT_JSON_FILE), help="JSON output path")
+    parser.add_argument("--notes", default=str(DEFAULT_NOTES_FILE), help="Optional human-maintained notes file")
+    parser.add_argument("--max-notes-chars", type=int, default=12000, help="Maximum notes characters to include")
+    parser.add_argument("--timeout", type=int, default=10, help="Live state request timeout")
+    subparsers = parser.add_subparsers(dest="command")
+
+    refresh = subparsers.add_parser("refresh", help="Refresh site memory from local registries and live states")
+    refresh.add_argument("--max-entities", type=int, default=260, help="Maximum entity rows in markdown")
+    refresh.add_argument("--max-phrases", type=int, default=140, help="Maximum phrase shortcuts in markdown")
+    refresh.add_argument("--quiet", action="store_true", help="Only write files")
+
+    status = subparsers.add_parser("status", help="Print the current site memory summary")
+    status.add_argument("--lines", type=int, default=120, help="Maximum markdown lines to print")
+
+    subparsers.add_parser("path", help="Print the markdown memory path")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.command == "refresh":
+        return command_refresh(args)
+    if args.command == "status":
+        return command_status(args)
+    if args.command == "path":
+        print(Path(args.markdown).expanduser())
+        return 0
+    parser.print_help()
+    return 2
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except BrokenPipeError:
+        raise SystemExit(1)
+    except KeyboardInterrupt:
+        raise SystemExit(130)
+    except Exception as exc:
+        print(f"ha-site-memory: {exc}", file=sys.stderr)
+        raise SystemExit(1)

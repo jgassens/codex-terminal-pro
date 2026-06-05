@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.3.0
+
+- Add `ha-site-memory`, a read-only Home Assistant site-memory helper that builds
+  `/data/monitor/ha-site-memory.md` and JSON from local registries and live
+  states.
+- Refresh site memory during add-on startup before writing the Codex briefing, so
+  fresh Codex sessions can resolve house-specific phrases such as "Ring lights"
+  to likely entity IDs before broad triage.
+- Include optional human-maintained notes from `/config/HA_SITE_NOTES.md` in the
+  generated site memory when present.
+- Teach the runtime briefing, managed AGENTS guidance, docs, and field guide to
+  use site memory as a map while still verifying exact live state with `ha-api`
+  or `ha-ws` before changes.
+
 ## 2.2.5
 
 - Add a colored raw Shell prompt so command entry is visually distinct from

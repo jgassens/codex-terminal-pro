@@ -7,8 +7,8 @@ Unofficial OpenAI Codex CLI terminal for Home Assistant.
 Codex Terminal Pro provides a Home Assistant ingress web terminal that starts in
 `/config`, with Codex CLI, image paste support, persistent packages, Home
 Assistant CLI, `ha-toolbox`, read-only REST/WebSocket helpers, MCP status
-checks, the bounded `ha-monitor` observer, GitHub CLI, read-only Modbus helpers,
-and a solar commissioning toolbox preinstalled.
+checks, the bounded `ha-monitor` observer, `ha-site-memory`, GitHub CLI,
+read-only Modbus helpers, and a solar commissioning toolbox preinstalled.
 
 It registers an admin-only Home Assistant sidebar panel titled **Codex Terminal
 Pro** through ingress.
@@ -97,7 +97,8 @@ capabilities block is appended to `/config/AGENTS.md` or refreshed in place.
 
 This guidance tells Codex about `,,`, `codex-shell-dispatch`, `ha`,
 `supervisor-api`, `ha-toolbox`, `ha-api`, `ha-ws`, `ha-mcp-status`,
-`solar-toolbox`, `modbus-toolbox`, `modbus-scan`, and `modbus-read`.
+`ha-monitor`, `ha-site-memory`, `solar-toolbox`, `modbus-toolbox`,
+`modbus-scan`, and `modbus-read`.
 
 ## Home Assistant Readiness
 
@@ -130,6 +131,7 @@ ha-ws target-info --entity light.kitchen --capabilities
 ha-ws validate --file /config/action-snippet.yaml --section action
 ha-mcp-status
 ha-monitor status
+ha-site-memory status
 ```
 
 `ha-api` talks to Home Assistant Core's REST API through the add-on's internal
@@ -145,6 +147,14 @@ writes `/data/monitor/ha-monitor.json`. It does not call services, reload,
 restart, edit `/config`, or execute arbitrary task files. The reserved
 `/data/monitor/tasks.d` directory is intentionally ignored in this release so a
 future bespoke persistent-task design can be added behind explicit guardrails.
+
+`ha-site-memory` builds a read-only house dictionary from Home Assistant's local
+registries and live states. Startup refreshes `/data/monitor/ha-site-memory.md`
+when Home Assistant is reachable, and the Codex briefing includes a capped copy
+so phrases such as "Ring lights" can resolve to likely entity IDs before Codex
+starts broad triage. Optional human notes from `/config/HA_SITE_NOTES.md` are
+included when present. Run `ha-site-memory refresh` after renaming devices,
+integrations, or areas.
 
 The image also bundles practical Home Assistant admin utilities including
 `sqlite3`, `mosquitto_sub`, `mosquitto_pub`, `dig`, `nslookup`, `ping`, `ncat`,

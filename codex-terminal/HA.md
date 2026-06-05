@@ -16,6 +16,7 @@ local operating map for Codex when it works inside `/config`.
    - `supervisor-api /core/api/states`
    - `ha apps logs <addon>` or `ha core logs`
    - `ha-monitor status`
+   - `ha-site-memory status`
 4. Show diffs before editing Home Assistant configuration when practical.
 5. Reload the smallest target that matches the change.
 6. Restart Core or add-ons only when reloads are not enough or the human asks.
@@ -26,6 +27,8 @@ local operating map for Codex when it works inside `/config`.
 - `supervisor-api`: direct Supervisor and Home Assistant REST helper.
 - `ha-toolbox`: read-only Home Assistant briefing, config audit, states, and
   service discovery helper.
+- `ha-site-memory`: read-only local house dictionary for integrations, areas,
+  phrase shortcuts, and likely entity IDs.
 - `codex-shell-dispatch`: direct human shell dispatch for `,,` commands.
 - `jq` and `yq`: JSON/YAML inspection.
 - `sqlite3`: recorder database inspection when the DB is safely readable.
@@ -71,6 +74,7 @@ ha-toolbox services --domain homeassistant
 ha core check
 ha core logs
 ha-monitor status
+ha-site-memory status
 supervisor-api /core/api/states | jq 'length'
 supervisor-api /core/api/services | jq '.[].domain'
 sqlite3 /config/home-assistant_v2.db '.tables'
@@ -111,6 +115,15 @@ Use the smallest practical reload:
 - Before touching integrations or add-ons, capture logs and current options.
 - Before recorder or database work, stop and consider backups, locking, and DB
   integrity.
+
+## Site Memory
+
+Use `/data/monitor/ha-site-memory.md` before rediscovering the house. It maps
+phrases such as "Ring lights" to likely integrations, areas, and entity IDs from
+Home Assistant's registries and live states. Refresh it with
+`ha-site-memory refresh` after renaming devices, integrations, or areas. Optional
+human notes in `/config/HA_SITE_NOTES.md` are included when present. Treat it as
+a map, not proof; verify live state with `ha-api` or `ha-ws` before changes.
 
 ## When Current Knowledge Matters
 

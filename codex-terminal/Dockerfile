@@ -1,7 +1,7 @@
 FROM ghcr.io/home-assistant/base:latest
 
 LABEL \
-    io.hass.version="2.2.5" \
+    io.hass.version="2.3.0" \
     io.hass.type="addon" \
     io.hass.arch="aarch64|amd64" \
     org.opencontainers.image.title="Home Assistant Add-on: Codex Terminal Pro" \
@@ -126,6 +126,7 @@ RUN mkdir -p /usr/libexec/codex-terminal \
     && chmod +x /opt/scripts/ha-ws \
     && chmod +x /opt/scripts/ha-mcp-status \
     && chmod +x /opt/scripts/ha-monitor \
+    && chmod +x /opt/scripts/ha-site-memory \
     && chmod +x /opt/scripts/modbus-* \
     && chmod +x /opt/scripts/solar-* \
     && ln -sf /opt/scripts/codex-shell-dispatch /usr/local/bin/codex-shell-dispatch \
@@ -135,6 +136,7 @@ RUN mkdir -p /usr/libexec/codex-terminal \
     && ln -sf /opt/scripts/ha-ws /usr/local/bin/ha-ws \
     && ln -sf /opt/scripts/ha-mcp-status /usr/local/bin/ha-mcp-status \
     && ln -sf /opt/scripts/ha-monitor /usr/local/bin/ha-monitor \
+    && ln -sf /opt/scripts/ha-site-memory /usr/local/bin/ha-site-memory \
     && ln -sf /opt/scripts/modbus-read /usr/local/bin/modbus-read \
     && ln -sf /opt/scripts/modbus-scan /usr/local/bin/modbus-scan \
     && ln -sf /opt/scripts/modbus-toolbox /usr/local/bin/modbus-toolbox \
