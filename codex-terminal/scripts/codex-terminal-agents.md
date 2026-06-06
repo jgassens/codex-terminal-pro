@@ -25,8 +25,13 @@ You are running inside the Codex Terminal Pro Home Assistant add-on.
   state samples, and MCP status under `/data/monitor` but does not reload,
   restart, edit files, run bespoke tasks, or call an LLM in this release.
 - Use `/data/monitor/change-desk-dispatch.json` as the prepared Change Desk
-  packet when present. It contains deterministic deltas and reasoning budget
-  gates; high reasoning should happen only from explicit human action.
+  packet when present. It contains deterministic deltas, triage labels, and
+  reasoning budget gates; high reasoning should happen only from explicit human
+  action.
+- Treat monitor findings labeled localized connectivity noise as device,
+  Modbus, Wi-Fi, socket, or reachability trouble first, not proof of broken
+  Home Assistant configuration. Confirm whether the entity is safety, security,
+  or otherwise critical before dismissing it as benign noise.
 - Use `ha-site-memory status` or read `/data/monitor/ha-site-memory.md` before
   troubleshooting named rooms, integrations, or house-specific devices such as
   "Ring lights". Treat it as a map of likely entities, then refresh and verify

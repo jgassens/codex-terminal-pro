@@ -740,6 +740,174 @@ function normalizeLogSignature(line) {
         .slice(0, 220);
 }
 
+const CONNECTIVITY_RE = /\b(modbus|pymodbus|minimalmodbus|rtu|wifi|wi-fi|wlan|brcmf|escan|timeout|timed out|read timed out|socket timeout|scan timeout|no response|not responding|unreachable|host is down|network is unreachable|connection (?:reset|refused|aborted|closed|lost|timeout)|connect(?:ion)? failed|cannot connect|can't connect|disconnected|gateway timeout|i\/o error|ioerror|broken pipe|transaction id|mismatched transaction|request failed after)\b/i;
+const STRONG_CONFIG_RE = /\b(invalid (?:config|configuration|yaml|option)|configuration (?:invalid|error)|yaml|while parsing|mapping values|expected (?:<block end>|key)|not a valid value|integration not found|platform error|component error|schema validation|deprecated option|breaking change)\b/i;
+const WEAK_CONFIG_RE = /\b(config entry|setup failed|failed to set up|could not set up|integration setup)\b/i;
+const AUTH_RE = /\b(unauthorized|forbidden|authentication failed|invalid auth|token expired|invalid token|login required|reauthentication required|credentials? (?:invalid|expired)|permission denied)\b/i;
+const SYSTEMIC_RE = /\b(no space left|disk full|out of memory|database is locked|home assistant (?:failed to start|crashed|stopped)|recorder.*(?:failed|corrupt|locked)|supervisor.*unhealthy|watchdog|event loop blocked)\b/i;
+const CRITICAL_ENTITY_RE = /\b(alarm|security|lock|door lock|garage|smoke|carbon monoxide|\bco\b|leak|water leak|flood|siren|valve|shutoff|medical|critical)\b|\b(?:alarm_control_panel|lock)\.|\b(?:binary_sensor|sensor)\.[a-z0-9_]*(?:smoke|carbon_monoxide|co_|leak|flood)|\bcover\.[a-z0-9_]*(?:garage|door)/i;
+
+function issueText(issue) {
+    return [
+        issue?.key,
+        issue?.source,
+        issue?.signature,
+        issue?.sample
+    ].filter(Boolean).join(' ');
+}
+
+function classifyChangeDeskIssue(issue) {
+    const text = issueText(issue);
+    const source = String(issue?.source || '');
+    const criticalCandidate = CRITICAL_ENTITY_RE.test(text);
+
+    if (SYSTEMIC_RE.test(text)) {
+        return {
+            category: 'systemic',
+            label: 'system-wide risk',
+            posture: 'systemic_risk',
+            impact: 'could affect Home Assistant broadly',
+            codexActionability: 'review core health before config or reload work',
+            configBlocker: true,
+            systemWideRisk: 'high',
+            requiresHumanPriorityCheck: true,
+            confidence: 'medium'
+        };
+    }
+
+    if (AUTH_RE.test(text)) {
+        return {
+            category: 'auth',
+            label: 'auth or permission issue',
+            posture: 'needs_account_or_token_attention',
+            impact: 'localized to the integration unless shared credentials are involved',
+            codexActionability: 'Codex can inspect config, but account or token repair may need a human',
+            configBlocker: false,
+            systemWideRisk: 'medium',
+            requiresHumanPriorityCheck: criticalCandidate,
+            confidence: 'medium'
+        };
+    }
+
+    if (STRONG_CONFIG_RE.test(text)) {
+        return {
+            category: 'configuration',
+            label: 'configuration blocker',
+            posture: 'config_review_needed',
+            impact: 'may block reload, setup, or integration startup',
+            codexActionability: 'Codex should inspect YAML, storage, or integration setup before changes',
+            configBlocker: true,
+            systemWideRisk: 'medium',
+            requiresHumanPriorityCheck: criticalCandidate,
+            confidence: 'medium'
+        };
+    }
+
+    if (CONNECTIVITY_RE.test(text)) {
+        return {
+            category: 'noisy_connectivity',
+            label: 'localized connectivity noise',
+            posture: 'localized_connectivity_noise',
+            impact: criticalCandidate
+                ? 'potentially critical entity; confirm priority before treating as low risk'
+                : 'localized device or link failure, low system-wide risk',
+            codexActionability: 'not fixable from Home Assistant config alone; inspect network/device health if it matters',
+            configBlocker: false,
+            systemWideRisk: criticalCandidate ? 'needs_human_priority_check' : 'low_unless_critical',
+            requiresHumanPriorityCheck: criticalCandidate,
+            confidence: 'medium'
+        };
+    }
+
+    if (source === 'states') {
+        return {
+            category: 'entity_availability',
+            label: 'entity unavailable',
+            posture: 'localized_entity_availability',
+            impact: criticalCandidate
+                ? 'potentially critical entity; confirm priority before treating as low risk'
+                : 'localized entity state issue, low system-wide risk',
+            codexActionability: 'inspect entity history, device reachability, and site notes before changing config',
+            configBlocker: false,
+            systemWideRisk: criticalCandidate ? 'needs_human_priority_check' : 'low_unless_critical',
+            requiresHumanPriorityCheck: criticalCandidate,
+            confidence: criticalCandidate ? 'low' : 'medium'
+        };
+    }
+
+    if (WEAK_CONFIG_RE.test(text)) {
+        return {
+            category: 'configuration',
+            label: 'possible setup/config issue',
+            posture: 'config_review_needed',
+            impact: 'may be integration setup or configuration-related',
+            codexActionability: 'Codex should inspect setup evidence before recommending reloads',
+            configBlocker: true,
+            systemWideRisk: 'medium',
+            requiresHumanPriorityCheck: criticalCandidate,
+            confidence: 'low'
+        };
+    }
+
+    return {
+        category: 'unknown',
+        label: 'needs review',
+        posture: 'needs_review',
+        impact: 'unknown until reviewed with current HA context',
+        codexActionability: 'review logs and live entity context before acting',
+        configBlocker: false,
+        systemWideRisk: 'unknown',
+        requiresHumanPriorityCheck: criticalCandidate,
+        confidence: 'low'
+    };
+}
+
+function normalizeIssueClassification(classification, issue) {
+    const classified = classification && typeof classification === 'object'
+        ? classification
+        : classifyChangeDeskIssue(issue || {});
+    return {
+        category: classified.category || 'unknown',
+        label: classified.label || 'needs review',
+        posture: classified.posture || 'needs_review',
+        impact: classified.impact || '',
+        codexActionability: classified.codex_actionability || classified.codexActionability || '',
+        configBlocker: Boolean(classified.config_blocker ?? classified.configBlocker),
+        systemWideRisk: classified.system_wide_risk || classified.systemWideRisk || 'unknown',
+        requiresHumanPriorityCheck: Boolean(classified.requires_human_priority_check ?? classified.requiresHumanPriorityCheck),
+        confidence: classified.confidence || 'low'
+    };
+}
+
+function issueWithClassification(issue) {
+    const updated = { ...issue };
+    updated.classification = normalizeIssueClassification(updated.classification, updated);
+    return updated;
+}
+
+function isLowRiskLocalNoise(issue) {
+    const classification = normalizeIssueClassification(issue?.classification, issue);
+    return issue?.severity !== 'critical'
+        && ['noisy_connectivity', 'entity_availability'].includes(classification.category)
+        && !classification.configBlocker
+        && !classification.requiresHumanPriorityCheck
+        && String(classification.systemWideRisk || '').startsWith('low');
+}
+
+function isHardErrorIssue(issue) {
+    return ['critical', 'error'].includes(issue?.severity) && !isLowRiskLocalNoise(issue);
+}
+
+function deriveLogStatus(counts, issues) {
+    if ((counts?.critical || 0) > 0 || (counts?.error || 0) > 0) {
+        if (issues?.length && !issues.some(isHardErrorIssue)) {
+            return 'warning';
+        }
+        return 'error';
+    }
+    return (counts?.warning || 0) > 0 ? 'warning' : 'clean';
+}
+
 function summarizeLogIssues(output) {
     const lines = String(output || '')
         .replace(/\r/g, '')
@@ -784,7 +952,8 @@ function summarizeLogIssues(output) {
             const severityRank = { critical: 3, error: 2, warning: 1 };
             return (severityRank[b.severity] - severityRank[a.severity]) || (b.count - a.count);
         })
-        .slice(0, 12);
+        .slice(0, 12)
+        .map((issue) => issueWithClassification({ ...issue, source: 'logs' }));
     const repeated = issues.filter((issue) => issue.count >= 3).slice(0, 8);
 
     return {
@@ -823,9 +992,7 @@ async function collectChangeDeskLogs() {
     }
 
     const summary = summarizeLogIssues(result.stdout || result.output);
-    const status = summary.counts.critical > 0 || summary.counts.error > 0
-        ? 'error'
-        : (summary.counts.warning > 0 ? 'warning' : 'clean');
+    const status = deriveLogStatus(summary.counts, summary.issues);
 
     return {
         available: true,
@@ -925,7 +1092,7 @@ async function collectChangeDeskMcp() {
 
 function normalizeMonitorIssue(issue) {
     const sample = redactSensitiveText(issue?.sample || issue?.signature || '');
-    return {
+    const normalized = {
         key: issue?.key || '',
         source: issue?.source || 'unknown',
         severity: issue?.severity || 'warning',
@@ -934,6 +1101,27 @@ function normalizeMonitorIssue(issue) {
         occurrences: Number.isInteger(issue?.occurrences) ? issue.occurrences : (Number.isInteger(issue?.count) ? issue.count : 0),
         firstSeen: issue?.first_seen || '',
         lastSeen: issue?.last_seen || ''
+    };
+    normalized.classification = normalizeIssueClassification(issue?.classification, normalized);
+    return normalized;
+}
+
+function normalizeMonitorTriage(triage) {
+    const categoryCounts = triage?.category_counts || {};
+    const postureCounts = triage?.posture_counts || {};
+    return {
+        dominantPosture: triage?.dominant_posture || 'unknown',
+        issueCount: Number.isInteger(triage?.issue_count) ? triage.issue_count : 0,
+        localizedNoiseCount: Number.isInteger(triage?.localized_noise_count) ? triage.localized_noise_count : 0,
+        configBlockerCount: Number.isInteger(triage?.config_blocker_count) ? triage.config_blocker_count : 0,
+        priorityCheckCount: Number.isInteger(triage?.priority_check_count) ? triage.priority_check_count : 0,
+        hardIssueCount: Number.isInteger(triage?.hard_issue_count) ? triage.hard_issue_count : 0,
+        lowRiskOnly: Boolean(triage?.low_risk_only),
+        categoryCounts,
+        postureCounts,
+        summaryLines: Array.isArray(triage?.summary_lines)
+            ? triage.summary_lines.map((line) => redactSensitiveText(String(line)).slice(0, 500))
+            : []
     };
 }
 
@@ -956,6 +1144,7 @@ function normalizeMonitorDispatch(dispatch) {
             statusChanged: Boolean(delta.status_changed),
             previousStatus: delta.previous_status || '',
             currentStatus: delta.current_status || '',
+            triage: normalizeMonitorTriage(delta.triage || {}),
             configChanged: delta.config_changed,
             summaryLines: lines,
             newIssues: (delta.new_issues || []).slice(0, 6).map(normalizeMonitorIssue),
@@ -972,6 +1161,8 @@ function normalizeMonitorDispatch(dispatch) {
             maxScheduledLlmCallsPerDay: Number.isInteger(gate.max_scheduled_llm_calls_per_day) ? gate.max_scheduled_llm_calls_per_day : null,
             maxDispatchChars: Number.isInteger(gate.max_dispatch_chars) ? gate.max_dispatch_chars : null,
             deltaFingerprint: gate.delta_fingerprint || '',
+            deterministicPosture: gate.deterministic_posture || 'unknown',
+            deterministicLowRiskOnly: Boolean(gate.deterministic_low_risk_only),
             sameFingerprintAsPrevious: Boolean(gate.same_fingerprint_as_previous),
             cooldownRemainingSeconds: Number.isInteger(gate.cooldown_remaining_seconds) ? gate.cooldown_remaining_seconds : 0,
             highReasoningRequiresUserAction: gate.high_reasoning_requires_user_action !== false,
@@ -1027,6 +1218,7 @@ function collectChangeDeskMonitor() {
         logLines: parsed.log_lines || null,
         currentIssues: (parsed.current_issues || []).slice(0, 8).map(normalizeMonitorIssue),
         persistentIssues: (parsed.persistent_issues || []).slice(0, 8).map(normalizeMonitorIssue),
+        triage: normalizeMonitorTriage(parsed.triage || parsed.delta?.triage || {}),
         logCounts: checks.logs?.counts || {},
         states: {
             status: checks.states?.status || 'unknown',
@@ -1046,6 +1238,13 @@ function collectChangeDeskMonitor() {
 
 function buildChangeDeskRecommendations(snapshot) {
     const recommendations = [];
+    const repeatedLogs = snapshot.logs?.repeated || [];
+    const hardRepeatedLogs = repeatedLogs.filter(isHardErrorIssue);
+    const localizedRepeatedLogs = repeatedLogs.filter(isLowRiskLocalNoise);
+    const monitorPersistent = snapshot.monitor?.persistentIssues || [];
+    const monitorConfigBlockers = monitorPersistent.filter((item) => item.classification?.configBlocker);
+    const monitorPriorityChecks = monitorPersistent.filter((item) => item.classification?.requiresHumanPriorityCheck);
+    const monitorLocalizedNoise = monitorPersistent.filter(isLowRiskLocalNoise);
 
     if (snapshot.audit?.available && snapshot.audit.status === 'failed') {
         recommendations.push('Fix YAML audit issues before running a Home Assistant reload.');
@@ -1059,15 +1258,23 @@ function buildChangeDeskRecommendations(snapshot) {
         recommendations.push('Core check is still running or timed out; rerun it in Shell mode before applying changes.');
     }
 
-    if (snapshot.logs?.available && snapshot.logs.repeated?.length > 0) {
+    if (snapshot.logs?.available && hardRepeatedLogs.length > 0) {
         recommendations.push('Review repeated Home Assistant log issues before reload or restart.');
+    } else if (snapshot.logs?.available && localizedRepeatedLogs.length > 0) {
+        recommendations.push('Repeated log issues look like localized device connectivity noise; confirm the devices are non-critical before spending config time.');
     } else if (snapshot.logs?.available && snapshot.logs.status === 'error') {
         recommendations.push('Recent Home Assistant logs include errors; inspect them before applying changes.');
     } else if (snapshot.logs?.available && snapshot.logs.status === 'warning') {
         recommendations.push('Recent Home Assistant logs include warnings worth checking.');
     }
 
-    if (snapshot.monitor?.available && snapshot.monitor.persistentIssues?.length > 0) {
+    if (snapshot.monitor?.available && monitorConfigBlockers.length > 0) {
+        recommendations.push('HA monitor sees persistent configuration or setup blockers; review them before changing Home Assistant.');
+    } else if (snapshot.monitor?.available && monitorPriorityChecks.length > 0) {
+        recommendations.push('HA monitor sees persistent issues on safety/security/critical-looking entities; confirm priority before treating them as benign noise.');
+    } else if (snapshot.monitor?.available && monitorLocalizedNoise.length > 0 && monitorLocalizedNoise.length === monitorPersistent.length) {
+        recommendations.push('HA monitor sees persistent localized connectivity noise; network or device health is more likely than broken Home Assistant config.');
+    } else if (snapshot.monitor?.available && snapshot.monitor.persistentIssues?.length > 0) {
         recommendations.push('HA monitor has persistent issues; review them before changing Home Assistant.');
     } else if (snapshot.monitor?.available && snapshot.monitor.status === 'stale') {
         recommendations.push('HA monitor state is stale; check the add-on log or run `ha-monitor once`.');

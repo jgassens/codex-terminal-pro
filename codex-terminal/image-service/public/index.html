@@ -1391,7 +1391,7 @@
                 body.appendChild(changeDeskElement('div', 'change-desk-muted', 'Repeated:'));
                 appendChangeDeskList(
                     body,
-                    logs.repeated.map((item) => `${item.count}x ${item.severity}: ${item.sample}`),
+                    logs.repeated.map((item) => `${item.count}x ${formatChangeDeskIssue(item)}`),
                     'No repeated issues.'
                 );
             }
@@ -1400,7 +1400,7 @@
                 body.appendChild(changeDeskElement('div', 'change-desk-muted', 'Apparent issues:'));
                 appendChangeDeskList(
                     body,
-                    logs.issues.slice(0, 6).map((item) => `${item.severity}: ${item.sample}`),
+                    logs.issues.slice(0, 6).map(formatChangeDeskIssue),
                     'No apparent issues.'
                 );
             } else {
@@ -1423,6 +1423,16 @@
             appendChangeDeskLine(body, 'Last run', `${monitor.generatedAt || 'unknown'} (${formatChangeDeskAge(monitor.ageSeconds)})`);
             appendChangeDeskLine(body, 'Persistent/current', `${monitor.persistentIssues?.length || 0}/${monitor.currentIssues?.length || 0}`);
             appendChangeDeskLine(body, 'Interval', monitor.intervalSeconds ? `${monitor.intervalSeconds}s` : 'unknown');
+            if (monitor.triage?.dominantPosture) {
+                appendChangeDeskLine(
+                    body,
+                    'Triage',
+                    `${monitor.triage.dominantPosture} (${monitor.triage.localizedNoiseCount || 0} local noise, ${monitor.triage.configBlockerCount || 0} config blockers)`
+                );
+                if (monitor.triage.summaryLines?.length) {
+                    appendChangeDeskList(body, monitor.triage.summaryLines.slice(0, 3), 'No triage summary.');
+                }
+            }
 
             const dispatch = monitor.dispatch || {};
             const gate = dispatch.reasoningGate || {};
@@ -1445,7 +1455,7 @@
                 body.appendChild(changeDeskElement('div', 'change-desk-muted', 'Persistent issues:'));
                 appendChangeDeskList(
                     body,
-                    monitor.persistentIssues.map((item) => `${item.runsSeen || 0} runs ${item.severity}: ${item.sample}`),
+                    monitor.persistentIssues.map((item) => `${item.runsSeen || 0} runs ${formatChangeDeskIssue(item)}`),
                     'No persistent issues.'
                 );
             }
@@ -1454,7 +1464,7 @@
                 body.appendChild(changeDeskElement('div', 'change-desk-muted', 'Current issues:'));
                 appendChangeDeskList(
                     body,
-                    monitor.currentIssues.slice(0, 6).map((item) => `${item.severity}: ${item.sample}`),
+                    monitor.currentIssues.slice(0, 6).map(formatChangeDeskIssue),
                     'No current issues.'
                 );
             } else {
@@ -1478,6 +1488,11 @@
             }
 
             parent.appendChild(section);
+        }
+
+        function formatChangeDeskIssue(item) {
+            const label = item?.classification?.label ? ` [${item.classification.label}]` : '';
+            return `${item?.severity || 'warning'}${label}: ${item?.sample || ''}`;
         }
 
         function renderChangeDeskLive(parent, live, mcp) {
@@ -1529,6 +1544,11 @@
                 data.monitor.dispatch.delta.summaryLines.forEach((item) => lines.push(`  - ${item}`));
             }
 
+            if (data.monitor?.triage?.summaryLines?.length) {
+                lines.push('', `Monitor triage: ${data.monitor.triage.dominantPosture || 'unknown'}`);
+                data.monitor.triage.summaryLines.forEach((item) => lines.push(`  - ${item}`));
+            }
+
             if (data.monitor?.dispatch?.reasoningGate) {
                 const gate = data.monitor.dispatch.reasoningGate;
                 lines.push(
@@ -1539,6 +1559,8 @@
                     `  - low reasoning interval: ${gate.lowReasoningIntervalSeconds || 'unknown'}s`,
                     `  - cooldown: ${gate.lowReasoningCooldownSeconds || 'unknown'}s`,
                     `  - cooldown remaining: ${gate.cooldownRemainingSeconds || 0}s`,
+                    `  - deterministic posture: ${gate.deterministicPosture || 'unknown'}`,
+                    `  - deterministic low risk only: ${gate.deterministicLowRiskOnly ? 'yes' : 'no'}`,
                     `  - same fingerprint as previous: ${gate.sameFingerprintAsPrevious ? 'yes' : 'no'}`,
                     `  - daily scheduled cap: ${gate.maxScheduledLlmCallsPerDay ?? 'unknown'}`,
                     `  - high reasoning requires user action: ${gate.highReasoningRequiresUserAction ? 'yes' : 'no'}`
@@ -1559,22 +1581,22 @@
 
             if (data.logs?.repeated?.length) {
                 lines.push('', 'Repeated log issues:');
-                data.logs.repeated.forEach((item) => lines.push(`  - ${item.count}x ${item.severity}: ${item.sample}`));
+                data.logs.repeated.forEach((item) => lines.push(`  - ${item.count}x ${formatChangeDeskIssue(item)}`));
             }
 
             if (data.logs?.issues?.length) {
                 lines.push('', 'Apparent log issues:');
-                data.logs.issues.slice(0, 8).forEach((item) => lines.push(`  - ${item.severity}: ${item.sample}`));
+                data.logs.issues.slice(0, 8).forEach((item) => lines.push(`  - ${formatChangeDeskIssue(item)}`));
             }
 
             if (data.monitor?.persistentIssues?.length) {
                 lines.push('', 'Persistent monitor issues:');
-                data.monitor.persistentIssues.forEach((item) => lines.push(`  - ${item.runsSeen || 0} runs ${item.severity}: ${item.sample}`));
+                data.monitor.persistentIssues.forEach((item) => lines.push(`  - ${item.runsSeen || 0} runs ${formatChangeDeskIssue(item)}`));
             }
 
             if (data.monitor?.currentIssues?.length) {
                 lines.push('', 'Current monitor issues:');
-                data.monitor.currentIssues.slice(0, 8).forEach((item) => lines.push(`  - ${item.severity}: ${item.sample}`));
+                data.monitor.currentIssues.slice(0, 8).forEach((item) => lines.push(`  - ${formatChangeDeskIssue(item)}`));
             }
 
             if (data.recommendations?.length) {

@@ -146,7 +146,11 @@ unavailable/unknown entity samples through `ha-api`, records MCP status, and
 writes `/data/monitor/ha-monitor.json` plus
 `/data/monitor/change-desk-dispatch.json`. The dispatch packet is a compact delta
 for Change Desk: new issues, resolved issues, newly persistent issues, config
-fingerprint changes, and reasoning budget gates. It does not call services,
+fingerprint changes, deterministic triage posture, and reasoning budget gates.
+Repeated Modbus, Wi-Fi, socket, timeout, and unavailable-entity noise is labeled
+as localized connectivity trouble with low system-wide risk unless the entity
+looks safety, security, or otherwise critical. Configuration, auth, and
+system-health patterns remain review findings. It does not call services,
 reload, restart, edit `/config`, execute arbitrary task files, or call an LLM.
 The reserved `/data/monitor/tasks.d` directory is intentionally ignored in this
 release so a future bespoke persistent-task design can be added behind explicit

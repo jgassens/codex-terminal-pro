@@ -278,7 +278,7 @@ install_tools() {
 
 log_startup_diagnostics() {
     local app_name="${APP_NAME:-${ADDON_NAME:-Codex Terminal Pro}}"
-    local app_version="${BUILD_VERSION:-${APP_VERSION:-2.4.0}}"
+    local app_version="${BUILD_VERSION:-${APP_VERSION:-2.5.0}}"
 
     bashio::log.info "Startup diagnostics:"
     bashio::log.info "  - Date: $(date)"
@@ -503,8 +503,13 @@ write_codex_terminal_agents_block() {
   MCP status under `/data/monitor`, but it does not reload, restart, edit files,
   run bespoke task manifests, or call an LLM in this release.
 - Use `/data/monitor/change-desk-dispatch.json` as the prepared Change Desk
-  packet when present. It contains deterministic deltas and reasoning budget
-  gates; high reasoning should happen only from explicit human action.
+  packet when present. It contains deterministic deltas, triage labels, and
+  reasoning budget gates; high reasoning should happen only from explicit human
+  action.
+- Treat monitor findings labeled localized connectivity noise as device,
+  Modbus, Wi-Fi, socket, or reachability trouble first, not proof of broken
+  Home Assistant configuration. Confirm whether the entity is safety, security,
+  or otherwise critical before dismissing it as benign noise.
 - Use `ha-site-memory status` or read `/data/monitor/ha-site-memory.md` before
   troubleshooting named rooms, integrations, or house-specific devices such as
   "Ring lights". Treat it as a map of likely entities, then refresh and verify

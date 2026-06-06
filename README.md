@@ -34,8 +34,8 @@ This is an MVP fork. It is not an official OpenAI add-on.
   unavailable/unknown states, records MCP status, and stores safe summaries under
   `/data/monitor`.
 - Deterministic Change Desk dispatch packets under `/data/monitor` with compact
-  deltas, config-change fingerprints, and reasoning budget gates; no autonomous
-  model calls are made by the monitor.
+  deltas, config-change fingerprints, localized-connectivity triage, and
+  reasoning budget gates; no autonomous model calls are made by the monitor.
 - Read-only `ha-site-memory` helper that builds a compact house dictionary under
   `/data/monitor/ha-site-memory.md` so phrases like "Ring lights" resolve to
   likely integrations, areas, and entity IDs before Codex starts troubleshooting.
@@ -244,6 +244,11 @@ so Change Desk can say whether anything is new, resolved, persistent, or likely
 unchanged. It does not call services, reload, restart, edit `/config`, execute
 bespoke task files, or call an LLM. Reasoning budget fields are gate metadata for
 future scheduled summaries and explicit Send Report/user-question flows.
+The monitor also triages issues deterministically: Modbus, Wi-Fi, socket,
+timeout, and unavailable-entity noise is labeled as localized connectivity
+trouble with low system-wide risk unless the entity looks safety, security, or
+otherwise critical. Configuration, auth, and system-health patterns still remain
+review findings.
 
 `ha-site-memory` builds a read-only site map from Home Assistant's local
 registries and live states. Startup refreshes `/data/monitor/ha-site-memory.md`

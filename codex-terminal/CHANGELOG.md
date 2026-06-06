@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.5.0
+
+- Add deterministic issue triage to `ha-monitor` so repeated Modbus, Wi-Fi,
+  socket, timeout, and unavailable-entity noise is labeled as localized
+  connectivity trouble instead of treated like a Home Assistant config blocker.
+- Keep safety/security/critical-looking entities out of the benign-noise bucket
+  until a human confirms priority, and keep true config/system blockers as
+  review-before-reload findings.
+- Surface triage posture, issue labels, and deterministic low-risk budget gates
+  in Change Desk, staged reports, monitor history, and dispatch packets.
+
 ## 2.4.0
 
 - Add deterministic Change Desk dispatch packets to `ha-monitor`, written under

@@ -130,8 +130,10 @@ a map, not proof; verify live state with `ha-api` or `ha-ws` before changes.
 Use `/data/monitor/change-desk-dispatch.json` as the compact monitor packet
 before spending reasoning. It records deterministic deltas such as new,
 resolved, and newly persistent issues plus config-fingerprint changes and budget
-gates. The monitor does not call an LLM; high reasoning should come from an
-explicit user question or Send Report.
+gates. It also labels noisy Modbus, Wi-Fi, socket, timeout, and unavailable
+entity findings as localized connectivity trouble unless the entity looks
+safety, security, or otherwise critical. The monitor does not call an LLM; high
+reasoning should come from an explicit user question or Send Report.
 
 ## When Current Knowledge Matters
 

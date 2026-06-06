@@ -218,10 +218,13 @@ scrollback.
 `ha-api`, checks MCP status, writes `/data/monitor/ha-monitor.json`, writes a
 compact `/data/monitor/change-desk-dispatch.json` delta packet, and appends a
 small JSONL history. Dispatch packets record new/resolved/persistent issues,
-config fingerprints, and reasoning budget gates. The monitor does not call
-services, reload, restart, edit `/config`, execute arbitrary user task files, or
-call an LLM. `/data/monitor/tasks.d` is reserved for a future explicit
-task-manifest design and is ignored by this release.
+config fingerprints, deterministic triage posture, and reasoning budget gates.
+Modbus, Wi-Fi, socket, timeout, and unavailable-entity noise is treated as
+localized connectivity trouble unless it matches safety/security/critical
+wording; configuration, auth, and system-health patterns stay review findings.
+The monitor does not call services, reload, restart, edit `/config`, execute
+arbitrary user task files, or call an LLM. `/data/monitor/tasks.d` is reserved
+for a future explicit task-manifest design and is ignored by this release.
 
 ## Safe Home Assistant Workflow
 

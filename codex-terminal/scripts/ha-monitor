@@ -41,6 +41,60 @@ SEVERITY_RANK = {
     "error": 2,
     "warning": 1,
 }
+CONNECTIVITY_RE = re.compile(
+    r"\b("
+    r"modbus|pymodbus|minimalmodbus|rtu|"
+    r"wifi|wi-fi|wlan|brcmf|escan|"
+    r"timeout|timed out|read timed out|socket timeout|scan timeout|"
+    r"no response|not responding|unreachable|host is down|network is unreachable|"
+    r"connection (?:reset|refused|aborted|closed|lost|timeout)|"
+    r"connect(?:ion)? failed|cannot connect|can't connect|disconnected|"
+    r"gateway timeout|i/o error|ioerror|broken pipe|"
+    r"transaction id|mismatched transaction|request failed after"
+    r")\b",
+    flags=re.I,
+)
+STRONG_CONFIG_RE = re.compile(
+    r"\b("
+    r"invalid (?:config|configuration|yaml|option)|"
+    r"configuration (?:invalid|error)|"
+    r"yaml|while parsing|mapping values|expected (?:<block end>|key)|"
+    r"not a valid value|integration not found|platform error|"
+    r"component error|schema validation|deprecated option|breaking change"
+    r")\b",
+    flags=re.I,
+)
+WEAK_CONFIG_RE = re.compile(
+    r"\b(config entry|setup failed|failed to set up|could not set up|integration setup)\b",
+    flags=re.I,
+)
+AUTH_RE = re.compile(
+    r"\b("
+    r"unauthorized|forbidden|authentication failed|invalid auth|"
+    r"token expired|invalid token|login required|reauthentication required|"
+    r"credentials? (?:invalid|expired)|permission denied"
+    r")\b",
+    flags=re.I,
+)
+SYSTEMIC_RE = re.compile(
+    r"\b("
+    r"no space left|disk full|out of memory|database is locked|"
+    r"home assistant (?:failed to start|crashed|stopped)|"
+    r"recorder.*(?:failed|corrupt|locked)|supervisor.*unhealthy|"
+    r"watchdog|event loop blocked"
+    r")\b",
+    flags=re.I,
+)
+CRITICAL_ENTITY_RE = re.compile(
+    r"\b("
+    r"alarm|security|lock|door lock|garage|smoke|carbon monoxide|"
+    r"\bco\b|leak|water leak|flood|siren|valve|shutoff|medical|critical"
+    r")\b|"
+    r"\b(?:alarm_control_panel|lock)\.|"
+    r"\b(?:binary_sensor|sensor)\.[a-z0-9_]*(?:smoke|carbon_monoxide|co_|leak|flood)|"
+    r"\bcover\.[a-z0-9_]*(?:garage|door)",
+    flags=re.I,
+)
 
 
 def utc_now() -> datetime:
@@ -175,6 +229,160 @@ def issue_sort_key(issue: dict[str, Any]) -> tuple[int, int, str]:
     )
 
 
+def issue_text(issue: dict[str, Any]) -> str:
+    parts = [
+        issue.get("key"),
+        issue.get("source"),
+        issue.get("signature"),
+        issue.get("sample"),
+    ]
+    return " ".join(str(part) for part in parts if part)
+
+
+def classify_issue(issue: dict[str, Any]) -> dict[str, Any]:
+    text = issue_text(issue)
+    source = str(issue.get("source") or "")
+    critical_candidate = bool(CRITICAL_ENTITY_RE.search(text))
+
+    if SYSTEMIC_RE.search(text):
+        return {
+            "category": "systemic",
+            "label": "system-wide risk",
+            "posture": "systemic_risk",
+            "impact": "could affect Home Assistant broadly",
+            "codex_actionability": "review core health before config or reload work",
+            "config_blocker": True,
+            "system_wide_risk": "high",
+            "requires_human_priority_check": True,
+            "confidence": "medium",
+        }
+
+    if AUTH_RE.search(text):
+        return {
+            "category": "auth",
+            "label": "auth or permission issue",
+            "posture": "needs_account_or_token_attention",
+            "impact": "localized to the integration unless shared credentials are involved",
+            "codex_actionability": "Codex can inspect config, but account or token repair may need a human",
+            "config_blocker": False,
+            "system_wide_risk": "medium",
+            "requires_human_priority_check": critical_candidate,
+            "confidence": "medium",
+        }
+
+    if STRONG_CONFIG_RE.search(text):
+        return {
+            "category": "configuration",
+            "label": "configuration blocker",
+            "posture": "config_review_needed",
+            "impact": "may block reload, setup, or integration startup",
+            "codex_actionability": "Codex should inspect YAML, storage, or integration setup before changes",
+            "config_blocker": True,
+            "system_wide_risk": "medium",
+            "requires_human_priority_check": critical_candidate,
+            "confidence": "medium",
+        }
+
+    if CONNECTIVITY_RE.search(text):
+        return {
+            "category": "noisy_connectivity",
+            "label": "localized connectivity noise",
+            "posture": "localized_connectivity_noise",
+            "impact": (
+                "potentially critical entity; confirm priority before treating as low risk"
+                if critical_candidate
+                else "localized device or link failure, low system-wide risk"
+            ),
+            "codex_actionability": "not fixable from Home Assistant config alone; inspect network/device health if it matters",
+            "config_blocker": False,
+            "system_wide_risk": "needs_human_priority_check" if critical_candidate else "low_unless_critical",
+            "requires_human_priority_check": critical_candidate,
+            "confidence": "medium",
+        }
+
+    if source == "states":
+        return {
+            "category": "entity_availability",
+            "label": "entity unavailable",
+            "posture": "localized_entity_availability",
+            "impact": (
+                "potentially critical entity; confirm priority before treating as low risk"
+                if critical_candidate
+                else "localized entity state issue, low system-wide risk"
+            ),
+            "codex_actionability": "inspect entity history, device reachability, and site notes before changing config",
+            "config_blocker": False,
+            "system_wide_risk": "needs_human_priority_check" if critical_candidate else "low_unless_critical",
+            "requires_human_priority_check": critical_candidate,
+            "confidence": "low" if critical_candidate else "medium",
+        }
+
+    if WEAK_CONFIG_RE.search(text):
+        return {
+            "category": "configuration",
+            "label": "possible setup/config issue",
+            "posture": "config_review_needed",
+            "impact": "may be integration setup or configuration-related",
+            "codex_actionability": "Codex should inspect setup evidence before recommending reloads",
+            "config_blocker": True,
+            "system_wide_risk": "medium",
+            "requires_human_priority_check": critical_candidate,
+            "confidence": "low",
+        }
+
+    return {
+        "category": "unknown",
+        "label": "needs review",
+        "posture": "needs_review",
+        "impact": "unknown until reviewed with current HA context",
+        "codex_actionability": "review logs and live entity context before acting",
+        "config_blocker": False,
+        "system_wide_risk": "unknown",
+        "requires_human_priority_check": critical_candidate,
+        "confidence": "low",
+    }
+
+
+def with_classification(issue: dict[str, Any]) -> dict[str, Any]:
+    updated = dict(issue)
+    classification = updated.get("classification")
+    if not isinstance(classification, dict):
+        classification = classify_issue(updated)
+    updated["classification"] = classification
+    return updated
+
+
+def is_low_risk_local_noise(issue: dict[str, Any]) -> bool:
+    classification = issue.get("classification")
+    if not isinstance(classification, dict):
+        classification = classify_issue(issue)
+    if issue.get("severity") == "critical":
+        return False
+    return (
+        classification.get("category") in ("noisy_connectivity", "entity_availability")
+        and not classification.get("config_blocker")
+        and not classification.get("requires_human_priority_check")
+        and str(classification.get("system_wide_risk") or "").startswith("low")
+    )
+
+
+def is_hard_error_issue(issue: dict[str, Any]) -> bool:
+    severity = str(issue.get("severity") or "")
+    if severity not in ("critical", "error"):
+        return False
+    return not is_low_risk_local_noise(issue)
+
+
+def derive_log_status(counts: dict[str, int], issues: list[dict[str, Any]]) -> str:
+    if counts.get("critical") or counts.get("error"):
+        if issues and not any(is_hard_error_issue(issue) for issue in issues):
+            return "warning"
+        return "error"
+    if counts.get("warning"):
+        return "warning"
+    return "clean"
+
+
 def summarize_log_issues(output: str, line_limit: int, max_issues: int) -> dict[str, Any]:
     lines = [line.rstrip() for line in str(output or "").replace("\r", "").splitlines() if line.strip()]
     lines = lines[-max(1, line_limit):]
@@ -205,9 +413,9 @@ def summarize_log_issues(output: str, line_limit: int, max_issues: int) -> dict[
         if SEVERITY_RANK[severity] > SEVERITY_RANK.get(existing["severity"], 0):
             existing["severity"] = severity
 
-    issues = sorted(issue_map.values(), key=issue_sort_key, reverse=True)[:max_issues]
+    issues = [with_classification(issue) for issue in sorted(issue_map.values(), key=issue_sort_key, reverse=True)[:max_issues]]
     repeated = [issue for issue in issues if int(issue.get("count") or 0) >= 3][:max_issues]
-    status = "error" if counts["critical"] or counts["error"] else ("warning" if counts["warning"] else "clean")
+    status = derive_log_status(counts, issues)
     return {
         "available": True,
         "status": status,
@@ -272,14 +480,14 @@ def state_issue(entity: dict[str, Any]) -> dict[str, Any]:
     if friendly:
         label = f"{label} ({friendly})"
     signature = normalize_signature(label)
-    return {
+    return with_classification({
         "key": f"state:{signature}",
         "source": "states",
         "signature": signature,
         "severity": "warning",
         "count": 1,
         "sample": label[:500],
-    }
+    })
 
 
 def collect_state_pattern(pattern: str, limit: int, timeout: int) -> dict[str, Any]:
@@ -469,12 +677,14 @@ def merge_issue_state(existing_state: dict[str, Any], current_issues: list[dict[
         first_seen = old.get("first_seen") or now
         runs_seen = int(old.get("runs_seen") or 0) + 1
         occurrences = int(old.get("occurrences") or 0) + int(issue.get("count") or 1)
+        classification = issue.get("classification") if isinstance(issue.get("classification"), dict) else classify_issue(issue)
         merged[key] = {
             "key": key,
             "source": issue.get("source") or "unknown",
             "signature": issue.get("signature") or key,
             "severity": issue.get("severity") or "warning",
             "sample": issue.get("sample") or issue.get("signature") or key,
+            "classification": classification,
             "first_seen": first_seen,
             "last_seen": now,
             "runs_seen": runs_seen,
@@ -490,6 +700,8 @@ def merge_issue_state(existing_state: dict[str, Any], current_issues: list[dict[
         if last_seen_dt and last_seen_dt.timestamp() < cutoff:
             continue
         kept = dict(old)
+        if not isinstance(kept.get("classification"), dict):
+            kept["classification"] = classify_issue(kept)
         kept["current_count"] = 0
         merged[key] = kept
 
@@ -506,9 +718,12 @@ def derive_status(checks: dict[str, Any], persistent_issues: list[dict[str, Any]
 
     log_counts = checks.get("logs", {}).get("counts") or {}
     if log_counts.get("critical") or log_counts.get("error"):
-        return "error"
+        log_issues = list(checks.get("logs", {}).get("issues") or [])
+        if not log_issues or any(is_hard_error_issue(issue) for issue in log_issues):
+            return "error"
+        return "warning"
     for issue in persistent_issues:
-        if issue.get("severity") in ("critical", "error"):
+        if is_hard_error_issue(issue):
             return "error"
 
     if log_counts.get("warning"):
@@ -529,16 +744,94 @@ def issue_map(issues: list[dict[str, Any]] | None) -> dict[str, dict[str, Any]]:
 
 
 def compact_issue(issue: dict[str, Any]) -> dict[str, Any]:
+    classification = issue.get("classification") if isinstance(issue.get("classification"), dict) else classify_issue(issue)
     return {
         "key": issue.get("key") or issue.get("signature") or "",
         "source": issue.get("source") or "unknown",
         "severity": issue.get("severity") or "warning",
         "sample": str(issue.get("sample") or issue.get("signature") or "")[:500],
+        "classification": classification,
         "runs_seen": int(issue.get("runs_seen") or 0),
         "occurrences": int(issue.get("occurrences") or issue.get("count") or 0),
         "current_count": int(issue.get("current_count") or issue.get("count") or 0),
         "first_seen": issue.get("first_seen") or "",
         "last_seen": issue.get("last_seen") or "",
+    }
+
+
+def unique_issues(*groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    mapped: dict[str, dict[str, Any]] = {}
+    for group in groups:
+        for issue in group or []:
+            if not isinstance(issue, dict):
+                continue
+            key = str(issue.get("key") or issue.get("signature") or "")
+            if not key:
+                continue
+            mapped[key] = with_classification(issue)
+    return list(mapped.values())
+
+
+def build_triage_rollup(current_issues: list[dict[str, Any]], persistent_issues: list[dict[str, Any]]) -> dict[str, Any]:
+    issues = unique_issues(current_issues, persistent_issues)
+    category_counts: dict[str, int] = {}
+    posture_counts: dict[str, int] = {}
+    localized_noise = 0
+    config_blockers = 0
+    priority_checks = 0
+    hard_errors = 0
+
+    for issue in issues:
+        classification = issue.get("classification") if isinstance(issue.get("classification"), dict) else classify_issue(issue)
+        category = str(classification.get("category") or "unknown")
+        posture = str(classification.get("posture") or "needs_review")
+        category_counts[category] = category_counts.get(category, 0) + 1
+        posture_counts[posture] = posture_counts.get(posture, 0) + 1
+        if is_low_risk_local_noise(issue):
+            localized_noise += 1
+        if classification.get("config_blocker"):
+            config_blockers += 1
+        if classification.get("requires_human_priority_check"):
+            priority_checks += 1
+        if is_hard_error_issue(issue) or classification.get("config_blocker"):
+            hard_errors += 1
+
+    if not issues:
+        dominant = "quiet"
+    elif config_blockers:
+        dominant = "config_review_needed"
+    elif priority_checks:
+        dominant = "priority_check_needed"
+    elif localized_noise == len(issues):
+        dominant = "localized_connectivity_noise"
+    elif localized_noise:
+        dominant = "mixed_with_localized_noise"
+    else:
+        dominant = "needs_review"
+
+    summary_lines = []
+    if localized_noise:
+        summary_lines.append(
+            f"{localized_noise} localized connectivity/entity issue(s): low system-wide risk unless one is critical."
+        )
+    if config_blockers:
+        summary_lines.append(f"{config_blockers} issue(s) look configuration-related; review before reload/restart.")
+    if priority_checks:
+        summary_lines.append(f"{priority_checks} issue(s) match safety/security/critical wording; confirm priority.")
+    if not summary_lines:
+        summary_lines.append("No persistent or current monitor issues need triage.")
+
+    return {
+        "dominant_posture": dominant,
+        "issue_count": len(issues),
+        "localized_noise_count": localized_noise,
+        "config_blocker_count": config_blockers,
+        "priority_check_count": priority_checks,
+        "hard_issue_count": hard_errors,
+        "category_counts": category_counts,
+        "posture_counts": posture_counts,
+        "low_risk_only": bool(issues) and localized_noise == len(issues),
+        "summary_lines": summary_lines[:5],
     }
 
 
@@ -561,6 +854,7 @@ def build_delta(
     checks: dict[str, Any],
     status: str,
     now: str,
+    triage: dict[str, Any],
 ) -> dict[str, Any]:
     old_state = issue_map(previous.get("issue_state"))
     current = issue_map(current_issues)
@@ -597,6 +891,7 @@ def build_delta(
     config_phrase = "config changed" if changed_config is True else ("no config change" if changed_config is False else "config change unknown")
     fingerprint_input = {
         "status": status,
+        "triage": triage.get("dominant_posture") or "unknown",
         "config_changed": changed_config,
         "new": sorted(issue["key"] for issue in new_issues),
         "resolved": sorted(issue["key"] for issue in resolved_issues),
@@ -611,10 +906,14 @@ def build_delta(
     ]
     if status_changed:
         summary_lines.append(f"Status changed from {previous_status} to {status}.")
+    for line in (triage.get("summary_lines") or [])[:3]:
+        summary_lines.append(f"Triage: {line}")
     for issue in new_issues[:5]:
-        summary_lines.append(f"New {issue['severity']} from {issue['source']}: {issue['sample']}")
+        label = issue.get("classification", {}).get("label", "needs review")
+        summary_lines.append(f"New {issue['severity']} from {issue['source']} [{label}]: {issue['sample']}")
     for issue in newly_persistent[:5]:
-        summary_lines.append(f"Persistent now {issue['runs_seen']} runs: {issue['sample']}")
+        label = issue.get("classification", {}).get("label", "needs review")
+        summary_lines.append(f"Persistent now {issue['runs_seen']} runs [{label}]: {issue['sample']}")
     for issue in resolved_issues[:5]:
         summary_lines.append(f"Resolved: {issue['sample']}")
 
@@ -626,6 +925,7 @@ def build_delta(
         "status_changed": status_changed,
         "previous_status": previous_status,
         "current_status": status,
+        "triage": triage,
         "config_changed": changed_config,
         "new_issues": new_issues[:10],
         "resolved_issues": resolved_issues[:10],
@@ -638,6 +938,8 @@ def build_delta(
 
 def build_reasoning_gate(args: argparse.Namespace, previous: dict[str, Any], delta: dict[str, Any]) -> dict[str, Any]:
     meaningful = bool(delta.get("meaningful"))
+    triage = delta.get("triage", {}) if isinstance(delta.get("triage"), dict) else {}
+    deterministic_low_risk = bool(triage.get("low_risk_only"))
     previous_dispatch = previous.get("dispatch", {}) if isinstance(previous.get("dispatch"), dict) else {}
     previous_delta = previous_dispatch.get("delta", {}) if isinstance(previous_dispatch.get("delta"), dict) else {}
     same_fingerprint = bool(delta.get("fingerprint") and delta.get("fingerprint") == previous_delta.get("fingerprint"))
@@ -647,9 +949,16 @@ def build_reasoning_gate(args: argparse.Namespace, previous: dict[str, Any], del
         elapsed = max(0, int((utc_now() - previous_time).total_seconds()))
         cooldown_remaining = max(0, args.reasoning_cooldown_seconds - elapsed)
 
-    low_reasoning_eligible = meaningful and cooldown_remaining == 0 and args.reasoning_daily_budget > 0
+    low_reasoning_eligible = (
+        meaningful
+        and not deterministic_low_risk
+        and cooldown_remaining == 0
+        and args.reasoning_daily_budget > 0
+    )
     if not meaningful:
         reason = "no meaningful delta"
+    elif deterministic_low_risk:
+        reason = "deterministic triage says localized connectivity/entity noise"
     elif cooldown_remaining > 0:
         reason = "same fingerprint inside cooldown"
     elif args.reasoning_daily_budget <= 0:
@@ -666,6 +975,8 @@ def build_reasoning_gate(args: argparse.Namespace, previous: dict[str, Any], del
         "max_scheduled_llm_calls_per_day": args.reasoning_daily_budget,
         "max_dispatch_chars": args.dispatch_max_chars,
         "delta_fingerprint": delta.get("fingerprint") or "",
+        "deterministic_posture": triage.get("dominant_posture") or "unknown",
+        "deterministic_low_risk_only": deterministic_low_risk,
         "same_fingerprint_as_previous": same_fingerprint,
         "cooldown_remaining_seconds": cooldown_remaining,
         "high_reasoning_requires_user_action": True,
@@ -676,12 +987,17 @@ def build_reasoning_gate(args: argparse.Namespace, previous: dict[str, Any], del
 def build_dispatch_packet(summary: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
     delta = summary.get("delta") or {}
     gate = summary.get("reasoning_gate") or {}
+    triage = summary.get("triage") or delta.get("triage") or {}
     lines = list(delta.get("summary_lines") or [])
     if not lines:
         lines.append("No meaningful monitor delta.")
+    if triage.get("summary_lines"):
+        lines.extend(["", "Deterministic triage:"])
+        lines.extend(str(line) for line in triage.get("summary_lines")[:5])
     lines.extend([
         "",
         f"Monitor status: {summary.get('status', 'unknown')}",
+        f"Triage posture: {triage.get('dominant_posture', 'unknown')}",
         f"Budget gate: automatic LLM calls disabled; low reasoning eligible: {gate.get('low_reasoning_eligible')}; high reasoning requires user action.",
     ])
 
@@ -739,7 +1055,8 @@ def build_summary(args: argparse.Namespace) -> dict[str, Any]:
         if int(issue.get("runs_seen") or 0) >= 2 or int(issue.get("occurrences") or 0) >= 3
     ][: args.max_issues]
     status = derive_status(checks, persistent_issues)
-    delta = build_delta(previous, current_issues, issue_state, persistent_issues, checks, status, now)
+    triage = build_triage_rollup(current_issues, persistent_issues)
+    delta = build_delta(previous, current_issues, issue_state, persistent_issues, checks, status, now, triage)
     reasoning_gate = build_reasoning_gate(args, previous, delta)
     summary = {
         "success": True,
@@ -755,6 +1072,7 @@ def build_summary(args: argparse.Namespace) -> dict[str, Any]:
         "current_issues": current_issues,
         "persistent_issues": persistent_issues,
         "issue_state": issue_state,
+        "triage": triage,
         "delta": delta,
         "reasoning_gate": reasoning_gate,
         "capabilities": {
@@ -817,6 +1135,9 @@ def append_history(path: Path, payload: dict[str, Any], limit: int) -> None:
         "new_issues": len(payload.get("delta", {}).get("new_issues") or []),
         "resolved_issues": len(payload.get("delta", {}).get("resolved_issues") or []),
         "config_changed": payload.get("delta", {}).get("config_changed"),
+        "triage_posture": payload.get("triage", {}).get("dominant_posture"),
+        "localized_noise_count": payload.get("triage", {}).get("localized_noise_count"),
+        "config_blocker_count": payload.get("triage", {}).get("config_blocker_count"),
         "log_counts": payload.get("checks", {}).get("logs", {}).get("counts") or {},
     }
     lines: list[str] = []
@@ -847,6 +1168,14 @@ def save_summary(args: argparse.Namespace, summary: dict[str, Any]) -> None:
 
 def print_human_status(summary: dict[str, Any]) -> None:
     print(f"HA Monitor: {summary.get('status', 'unknown')} ({summary.get('generated_at', 'unknown')})")
+    triage = summary.get("triage") or {}
+    if triage:
+        print(
+            "Triage: "
+            f"{triage.get('dominant_posture', 'unknown')} "
+            f"({triage.get('localized_noise_count', 0)} localized noise, "
+            f"{triage.get('config_blocker_count', 0)} config blockers)"
+        )
     logs = summary.get("checks", {}).get("logs", {})
     if logs:
         counts = logs.get("counts") or {}
@@ -863,7 +1192,8 @@ def print_human_status(summary: dict[str, Any]) -> None:
     if persistent:
         print("Persistent issues:")
         for issue in persistent[:10]:
-            print(f"  - {issue.get('severity')}: {issue.get('sample')} ({issue.get('runs_seen')} runs)")
+            label = issue.get("classification", {}).get("label", "needs review")
+            print(f"  - {issue.get('severity')} [{label}]: {issue.get('sample')} ({issue.get('runs_seen')} runs)")
     else:
         print("Persistent issues: none")
     dispatch = summary.get("dispatch") or {}

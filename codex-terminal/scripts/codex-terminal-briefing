@@ -90,6 +90,10 @@ Treat this file as the local map of the room.
 - Treat Change Desk dispatch as the mall-cop notebook: local facts, deltas, and
   budget gates first. Use stronger reasoning only when the human asks or presses
   Send Report.
+- Treat monitor findings labeled localized connectivity noise as device,
+  Modbus, Wi-Fi, socket, or reachability trouble first, not proof of broken
+  Home Assistant configuration. Confirm whether the entity is safety, security,
+  or otherwise critical before dismissing it as benign noise.
 - Use `ha-site-memory status` or read `/data/monitor/ha-site-memory.md` before
   troubleshooting named rooms, integrations, or house-specific devices such as
   "Ring lights". It is a map of likely entities, not proof; refresh it with
