@@ -28,11 +28,14 @@ This is an MVP fork. It is not an official OpenAI add-on.
 - Hidden Shell dispatch output capture for completed commands, with copy and
   dismiss controls in the Codex view.
 - Change Desk snapshot for Home Assistant YAML audit, `ha core check`, recent
-  log issues, persistent HA monitor findings, live REST config reachability, and
-  MCP Server status before reloads or restarts.
+  log issues, persistent HA monitor findings, prepared dispatch deltas, live REST
+  config reachability, and MCP Server status before reloads or restarts.
 - Bounded `ha-monitor` observer that fingerprints recent HA log issues, samples
   unavailable/unknown states, records MCP status, and stores safe summaries under
   `/data/monitor`.
+- Deterministic Change Desk dispatch packets under `/data/monitor` with compact
+  deltas, config-change fingerprints, and reasoning budget gates; no autonomous
+  model calls are made by the monitor.
 - Read-only `ha-site-memory` helper that builds a compact house dictionary under
   `/data/monitor/ha-site-memory.md` so phrases like "Ring lights" resolve to
   likely integrations, areas, and entity IDs before Codex starts troubleshooting.
@@ -235,10 +238,12 @@ or human Shell dispatch path for control actions.
 `ha-monitor` is the safe first slice of persistent agent behavior. When enabled,
 it runs in the background every few minutes, reads recent Home Assistant logs,
 collects bounded unavailable/unknown state samples, checks MCP status, and writes
-summaries to `/data/monitor/ha-monitor.json`. It does not call services, reload,
-restart, edit `/config`, or execute bespoke task files. The reserved
-`/data/monitor/tasks.d` directory is present for a future opt-in task-manifest
-design.
+summaries to `/data/monitor/ha-monitor.json` plus dispatch packets to
+`/data/monitor/change-desk-dispatch.json`. It fingerprints deltas between samples
+so Change Desk can say whether anything is new, resolved, persistent, or likely
+unchanged. It does not call services, reload, restart, edit `/config`, execute
+bespoke task files, or call an LLM. Reasoning budget fields are gate metadata for
+future scheduled summaries and explicit Send Report/user-question flows.
 
 `ha-site-memory` builds a read-only site map from Home Assistant's local
 registries and live states. Startup refreshes `/data/monitor/ha-site-memory.md`

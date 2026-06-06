@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -16,16 +17,22 @@ from pathlib import Path
 from typing import Any
 
 
-VERSION = "0.1"
+VERSION = "0.2"
 DEFAULT_STATE_FILE = Path("/data/monitor/ha-monitor.json")
 DEFAULT_HISTORY_FILE = Path("/data/monitor/ha-monitor-history.jsonl")
+DEFAULT_DISPATCH_FILE = Path("/data/monitor/change-desk-dispatch.json")
 DEFAULT_TASK_DIR = Path("/data/monitor/tasks.d")
+DEFAULT_CONFIG_ROOT = Path("/config")
 DEFAULT_INTERVAL_SECONDS = 300
 DEFAULT_LOG_LINES = 500
 DEFAULT_MAX_ISSUES = 20
 DEFAULT_TIMEOUT_SECONDS = 20
 DEFAULT_ISSUE_TTL_SECONDS = 7 * 24 * 60 * 60
 DEFAULT_HISTORY_LIMIT = 200
+DEFAULT_SUMMARY_INTERVAL_SECONDS = 3600
+DEFAULT_REASONING_COOLDOWN_SECONDS = 3600
+DEFAULT_REASONING_DAILY_BUDGET = 8
+DEFAULT_DISPATCH_MAX_CHARS = 12000
 MAX_COMMAND_OUTPUT_CHARS = 300_000
 ANSI_ESCAPE_RE = re.compile(r"(?:\x1b\[[0-?]*[ -/]*[@-~]|\x9b[0-?]*[ -/]*[@-~]|\ufffd\[[0-?]*[ -/]*[@-~])")
 
@@ -361,6 +368,79 @@ def collect_mcp_status(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def iter_config_fingerprint_paths(root: Path, max_files: int) -> list[Path]:
+    candidates = [
+        root / "configuration.yaml",
+        root / "automations.yaml",
+        root / "scripts.yaml",
+        root / "scenes.yaml",
+        root / ".storage" / "core.entity_registry",
+        root / ".storage" / "core.device_registry",
+        root / ".storage" / "core.config_entries",
+        root / ".storage" / "core.area_registry",
+        root / ".storage" / "lovelace",
+    ]
+
+    package_root = root / "packages"
+    if package_root.is_dir():
+        for path in sorted(package_root.rglob("*.yaml"))[: max(0, max_files - len(candidates))]:
+            candidates.append(path)
+
+    seen = set()
+    paths = []
+    for path in candidates[:max_files]:
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        paths.append(path)
+    return paths
+
+
+def collect_config_fingerprint(args: argparse.Namespace) -> dict[str, Any]:
+    root = args.config_root
+    if not root.exists():
+        return {
+            "available": False,
+            "status": "unavailable",
+            "root": str(root),
+            "message": "Home Assistant config root is not available",
+        }
+
+    digest = hashlib.sha256()
+    files = []
+    missing = []
+    for path in iter_config_fingerprint_paths(root, args.config_max_files):
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            missing.append(str(path.relative_to(root)) if path.is_absolute() else str(path))
+            continue
+        except OSError:
+            continue
+        try:
+            rel = str(path.relative_to(root))
+        except ValueError:
+            rel = str(path)
+        item = {
+            "path": rel,
+            "size": stat.st_size,
+            "mtime_ns": getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1_000_000_000)),
+        }
+        files.append(item)
+        digest.update(f"{item['path']}\0{item['size']}\0{item['mtime_ns']}\n".encode("utf-8"))
+
+    return {
+        "available": True,
+        "status": "ok",
+        "root": str(root),
+        "fingerprint": digest.hexdigest(),
+        "files_checked": len(files),
+        "missing": missing[:20],
+        "samples": files[:20],
+    }
+
+
 def load_state(path: Path) -> dict[str, Any]:
     try:
         with path.open("r", encoding="utf-8") as handle:
@@ -440,6 +520,188 @@ def derive_status(checks: dict[str, Any], persistent_issues: list[dict[str, Any]
     return "clean"
 
 
+def issue_map(issues: list[dict[str, Any]] | None) -> dict[str, dict[str, Any]]:
+    mapped = {}
+    for issue in issues or []:
+        if isinstance(issue, dict) and issue.get("key"):
+            mapped[str(issue["key"])] = issue
+    return mapped
+
+
+def compact_issue(issue: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "key": issue.get("key") or issue.get("signature") or "",
+        "source": issue.get("source") or "unknown",
+        "severity": issue.get("severity") or "warning",
+        "sample": str(issue.get("sample") or issue.get("signature") or "")[:500],
+        "runs_seen": int(issue.get("runs_seen") or 0),
+        "occurrences": int(issue.get("occurrences") or issue.get("count") or 0),
+        "current_count": int(issue.get("current_count") or issue.get("count") or 0),
+        "first_seen": issue.get("first_seen") or "",
+        "last_seen": issue.get("last_seen") or "",
+    }
+
+
+def config_changed(previous: dict[str, Any], checks: dict[str, Any]) -> bool | None:
+    current = checks.get("config", {}) if isinstance(checks.get("config"), dict) else {}
+    previous_checks = previous.get("checks", {}) if isinstance(previous.get("checks"), dict) else {}
+    old = previous_checks.get("config", {}) if isinstance(previous_checks.get("config"), dict) else {}
+    current_fp = current.get("fingerprint")
+    old_fp = old.get("fingerprint")
+    if not current_fp or not old_fp:
+        return None
+    return current_fp != old_fp
+
+
+def build_delta(
+    previous: dict[str, Any],
+    current_issues: list[dict[str, Any]],
+    issue_state: list[dict[str, Any]],
+    persistent_issues: list[dict[str, Any]],
+    checks: dict[str, Any],
+    status: str,
+    now: str,
+) -> dict[str, Any]:
+    old_state = issue_map(previous.get("issue_state"))
+    current = issue_map(current_issues)
+    merged = issue_map(issue_state)
+    previous_status = previous.get("status") or "unknown"
+
+    new_issues = []
+    continuing_issues = []
+    for key, issue in current.items():
+        old = old_state.get(key)
+        if not old or int(old.get("current_count") or 0) <= 0:
+            new_issues.append(compact_issue(merged.get(key, issue)))
+        else:
+            continuing_issues.append(compact_issue(merged.get(key, issue)))
+
+    resolved_issues = [
+        compact_issue(old)
+        for key, old in old_state.items()
+        if int(old.get("current_count") or 0) > 0 and key not in current
+    ]
+
+    newly_persistent = []
+    for issue in persistent_issues:
+        key = str(issue.get("key") or "")
+        old = old_state.get(key, {})
+        was_persistent = int(old.get("runs_seen") or 0) >= 2 or int(old.get("occurrences") or 0) >= 3
+        if key in current and not was_persistent:
+            newly_persistent.append(compact_issue(issue))
+
+    changed_config = config_changed(previous, checks)
+    status_changed = bool(previous) and previous_status != status
+    meaningful = bool(new_issues or resolved_issues or newly_persistent or status_changed or changed_config is True)
+
+    config_phrase = "config changed" if changed_config is True else ("no config change" if changed_config is False else "config change unknown")
+    fingerprint_input = {
+        "status": status,
+        "config_changed": changed_config,
+        "new": sorted(issue["key"] for issue in new_issues),
+        "resolved": sorted(issue["key"] for issue in resolved_issues),
+        "newly_persistent": sorted(issue["key"] for issue in newly_persistent),
+    }
+    fingerprint = hashlib.sha256(json.dumps(fingerprint_input, sort_keys=True).encode("utf-8")).hexdigest()
+    summary_lines = [
+        (
+            f"Since last sample: {len(new_issues)} new, {len(resolved_issues)} resolved, "
+            f"{len(persistent_issues)} persistent; {config_phrase}."
+        )
+    ]
+    if status_changed:
+        summary_lines.append(f"Status changed from {previous_status} to {status}.")
+    for issue in new_issues[:5]:
+        summary_lines.append(f"New {issue['severity']} from {issue['source']}: {issue['sample']}")
+    for issue in newly_persistent[:5]:
+        summary_lines.append(f"Persistent now {issue['runs_seen']} runs: {issue['sample']}")
+    for issue in resolved_issues[:5]:
+        summary_lines.append(f"Resolved: {issue['sample']}")
+
+    return {
+        "generated_at": now,
+        "since": previous.get("generated_at") or "",
+        "fingerprint": fingerprint,
+        "meaningful": meaningful,
+        "status_changed": status_changed,
+        "previous_status": previous_status,
+        "current_status": status,
+        "config_changed": changed_config,
+        "new_issues": new_issues[:10],
+        "resolved_issues": resolved_issues[:10],
+        "newly_persistent_issues": newly_persistent[:10],
+        "continuing_issue_count": len(continuing_issues),
+        "persistent_issue_count": len(persistent_issues),
+        "summary_lines": summary_lines[:20],
+    }
+
+
+def build_reasoning_gate(args: argparse.Namespace, previous: dict[str, Any], delta: dict[str, Any]) -> dict[str, Any]:
+    meaningful = bool(delta.get("meaningful"))
+    previous_dispatch = previous.get("dispatch", {}) if isinstance(previous.get("dispatch"), dict) else {}
+    previous_delta = previous_dispatch.get("delta", {}) if isinstance(previous_dispatch.get("delta"), dict) else {}
+    same_fingerprint = bool(delta.get("fingerprint") and delta.get("fingerprint") == previous_delta.get("fingerprint"))
+    previous_time = parse_iso(previous_dispatch.get("generated_at") or previous.get("generated_at"))
+    cooldown_remaining = 0
+    if same_fingerprint and previous_time:
+        elapsed = max(0, int((utc_now() - previous_time).total_seconds()))
+        cooldown_remaining = max(0, args.reasoning_cooldown_seconds - elapsed)
+
+    low_reasoning_eligible = meaningful and cooldown_remaining == 0 and args.reasoning_daily_budget > 0
+    if not meaningful:
+        reason = "no meaningful delta"
+    elif cooldown_remaining > 0:
+        reason = "same fingerprint inside cooldown"
+    elif args.reasoning_daily_budget <= 0:
+        reason = "scheduled reasoning daily budget is zero"
+    else:
+        reason = ""
+
+    return {
+        "automatic_llm_calls": False,
+        "policy": "deterministic monitor only; scheduled or high-reasoning model calls require a separate explicit implementation",
+        "low_reasoning_eligible": low_reasoning_eligible,
+        "low_reasoning_interval_seconds": args.summary_interval_seconds,
+        "low_reasoning_cooldown_seconds": args.reasoning_cooldown_seconds,
+        "max_scheduled_llm_calls_per_day": args.reasoning_daily_budget,
+        "max_dispatch_chars": args.dispatch_max_chars,
+        "delta_fingerprint": delta.get("fingerprint") or "",
+        "same_fingerprint_as_previous": same_fingerprint,
+        "cooldown_remaining_seconds": cooldown_remaining,
+        "high_reasoning_requires_user_action": True,
+        "no_call_reason": reason,
+    }
+
+
+def build_dispatch_packet(summary: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
+    delta = summary.get("delta") or {}
+    gate = summary.get("reasoning_gate") or {}
+    lines = list(delta.get("summary_lines") or [])
+    if not lines:
+        lines.append("No meaningful monitor delta.")
+    lines.extend([
+        "",
+        f"Monitor status: {summary.get('status', 'unknown')}",
+        f"Budget gate: automatic LLM calls disabled; low reasoning eligible: {gate.get('low_reasoning_eligible')}; high reasoning requires user action.",
+    ])
+
+    text = "\n".join(lines).strip()
+    truncated = False
+    if len(text) > args.dispatch_max_chars:
+        text = text[: args.dispatch_max_chars].rstrip() + "\n...[dispatch packet truncated]"
+        truncated = True
+
+    return {
+        "generated_at": summary.get("generated_at"),
+        "status": "ready" if delta.get("meaningful") else "quiet",
+        "meaningful_delta": bool(delta.get("meaningful")),
+        "delta": delta,
+        "reasoning_gate": gate,
+        "text": text,
+        "truncated": truncated,
+    }
+
+
 def build_summary(args: argparse.Namespace) -> dict[str, Any]:
     now = iso_now()
     previous = load_state(args.state_file)
@@ -455,6 +717,8 @@ def build_summary(args: argparse.Namespace) -> dict[str, Any]:
         checks["mcp"] = collect_mcp_status(args)
     else:
         checks["mcp"] = {"available": False, "status": "disabled", "message": "MCP status scan disabled by add-on option"}
+
+    checks["config"] = collect_config_fingerprint(args)
 
     current_issues = []
     for check in checks.values():
@@ -475,7 +739,9 @@ def build_summary(args: argparse.Namespace) -> dict[str, Any]:
         if int(issue.get("runs_seen") or 0) >= 2 or int(issue.get("occurrences") or 0) >= 3
     ][: args.max_issues]
     status = derive_status(checks, persistent_issues)
-    return {
+    delta = build_delta(previous, current_issues, issue_state, persistent_issues, checks, status, now)
+    reasoning_gate = build_reasoning_gate(args, previous, delta)
+    summary = {
         "success": True,
         "version": VERSION,
         "mode": "observer",
@@ -489,6 +755,8 @@ def build_summary(args: argparse.Namespace) -> dict[str, Any]:
         "current_issues": current_issues,
         "persistent_issues": persistent_issues,
         "issue_state": issue_state,
+        "delta": delta,
+        "reasoning_gate": reasoning_gate,
         "capabilities": {
             "allowed": [
                 "read ha core logs",
@@ -510,6 +778,8 @@ def build_summary(args: argparse.Namespace) -> dict[str, Any]:
             "note": "Reserved for future read-only bespoke task manifests; ignored by this release.",
         },
     }
+    summary["dispatch"] = build_dispatch_packet(summary, args)
+    return summary
 
 
 def ensure_parent(path: Path, mode: int = 0o700) -> None:
@@ -543,6 +813,10 @@ def append_history(path: Path, payload: dict[str, Any], limit: int) -> None:
         "status": payload.get("status"),
         "current_issues": len(payload.get("current_issues") or []),
         "persistent_issues": len(payload.get("persistent_issues") or []),
+        "meaningful_delta": bool(payload.get("delta", {}).get("meaningful")),
+        "new_issues": len(payload.get("delta", {}).get("new_issues") or []),
+        "resolved_issues": len(payload.get("delta", {}).get("resolved_issues") or []),
+        "config_changed": payload.get("delta", {}).get("config_changed"),
         "log_counts": payload.get("checks", {}).get("logs", {}).get("counts") or {},
     }
     lines: list[str] = []
@@ -567,6 +841,7 @@ def save_summary(args: argparse.Namespace, summary: dict[str, Any]) -> None:
     except OSError:
         pass
     write_json_atomic(args.state_file, summary)
+    write_json_atomic(args.dispatch_file, summary.get("dispatch") or {})
     append_history(args.history_file, summary, args.history_limit)
 
 
@@ -591,6 +866,15 @@ def print_human_status(summary: dict[str, Any]) -> None:
             print(f"  - {issue.get('severity')}: {issue.get('sample')} ({issue.get('runs_seen')} runs)")
     else:
         print("Persistent issues: none")
+    dispatch = summary.get("dispatch") or {}
+    if dispatch:
+        print(
+            "Dispatch: "
+            f"{dispatch.get('status', 'unknown')} "
+            f"(meaningful_delta={str(dispatch.get('meaningful_delta', False)).lower()})"
+        )
+        for line in (dispatch.get("delta", {}).get("summary_lines") or [])[:5]:
+            print(f"  - {line}")
 
 
 def run_once(args: argparse.Namespace) -> int:
@@ -638,13 +922,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"ha-monitor {VERSION}")
     parser.add_argument("--state-file", type=Path, default=DEFAULT_STATE_FILE)
     parser.add_argument("--history-file", type=Path, default=DEFAULT_HISTORY_FILE)
+    parser.add_argument("--dispatch-file", type=Path, default=DEFAULT_DISPATCH_FILE)
     parser.add_argument("--task-dir", type=Path, default=DEFAULT_TASK_DIR)
+    parser.add_argument("--config-root", type=Path, default=DEFAULT_CONFIG_ROOT)
     parser.add_argument("--interval", type=int, default=DEFAULT_INTERVAL_SECONDS)
     parser.add_argument("--log-lines", type=int, default=DEFAULT_LOG_LINES)
     parser.add_argument("--max-issues", type=int, default=DEFAULT_MAX_ISSUES)
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_SECONDS)
     parser.add_argument("--issue-ttl-seconds", type=int, default=DEFAULT_ISSUE_TTL_SECONDS)
     parser.add_argument("--history-limit", type=int, default=DEFAULT_HISTORY_LIMIT)
+    parser.add_argument("--summary-interval-seconds", type=int, default=DEFAULT_SUMMARY_INTERVAL_SECONDS)
+    parser.add_argument("--reasoning-cooldown-seconds", type=int, default=DEFAULT_REASONING_COOLDOWN_SECONDS)
+    parser.add_argument("--reasoning-daily-budget", type=int, default=DEFAULT_REASONING_DAILY_BUDGET)
+    parser.add_argument("--dispatch-max-chars", type=int, default=DEFAULT_DISPATCH_MAX_CHARS)
+    parser.add_argument("--config-max-files", type=int, default=200)
     parser.add_argument("--no-state-scan", action="store_true")
     parser.add_argument("--no-mcp-status", action="store_true")
 
@@ -669,6 +960,11 @@ def main(argv: list[str] | None = None) -> int:
     args.log_lines = min(5000, max(50, args.log_lines))
     args.max_issues = min(100, max(1, args.max_issues))
     args.timeout = max(3, args.timeout)
+    args.summary_interval_seconds = max(300, args.summary_interval_seconds)
+    args.reasoning_cooldown_seconds = max(300, args.reasoning_cooldown_seconds)
+    args.reasoning_daily_budget = min(100, max(0, args.reasoning_daily_budget))
+    args.dispatch_max_chars = min(60000, max(1000, args.dispatch_max_chars))
+    args.config_max_files = min(1000, max(20, args.config_max_files))
 
     if args.command == "once":
         return run_once(args)

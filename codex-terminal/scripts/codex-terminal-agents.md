@@ -23,7 +23,10 @@ You are running inside the Codex Terminal Pro Home Assistant add-on.
 - Use `ha-monitor status` to read the add-on's bounded observer summary before
   broad Home Assistant triage. It is read-only: it records logs, unavailable
   state samples, and MCP status under `/data/monitor` but does not reload,
-  restart, edit files, or run bespoke tasks in this release.
+  restart, edit files, run bespoke tasks, or call an LLM in this release.
+- Use `/data/monitor/change-desk-dispatch.json` as the prepared Change Desk
+  packet when present. It contains deterministic deltas and reasoning budget
+  gates; high reasoning should happen only from explicit human action.
 - Use `ha-site-memory status` or read `/data/monitor/ha-site-memory.md` before
   troubleshooting named rooms, integrations, or house-specific devices such as
   "Ring lights". Treat it as a map of likely entities, then refresh and verify

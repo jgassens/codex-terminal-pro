@@ -55,10 +55,10 @@ behind the keyboard.
 
 The **Change Desk** button opens a read-only Home Assistant review panel. It
 collects the `ha-toolbox` YAML audit, `ha core check`, recent `ha core logs`
-issues, persistent `ha-monitor` findings, live `ha-api config` reachability, and
-`ha-mcp-status` so you can inspect the blast radius before a reload or restart.
-It can copy the summary or insert a Codex review prompt, but it does not apply
-changes.
+issues, persistent `ha-monitor` findings, prepared dispatch deltas, live
+`ha-api config` reachability, and `ha-mcp-status` so you can inspect the blast
+radius before a reload or restart. It can copy the summary or insert a Codex
+review prompt, but it does not apply changes or call a model by itself.
 
 ## Shell Mode And `,,` Dispatch
 
@@ -143,10 +143,14 @@ integration is loaded before Codex assumes `/api/mcp` is available.
 `ha-monitor` is a lightweight persistent observer. When enabled, it runs every
 few minutes, fingerprints recent `ha core logs` warnings/errors, collects bounded
 unavailable/unknown entity samples through `ha-api`, records MCP status, and
-writes `/data/monitor/ha-monitor.json`. It does not call services, reload,
-restart, edit `/config`, or execute arbitrary task files. The reserved
-`/data/monitor/tasks.d` directory is intentionally ignored in this release so a
-future bespoke persistent-task design can be added behind explicit guardrails.
+writes `/data/monitor/ha-monitor.json` plus
+`/data/monitor/change-desk-dispatch.json`. The dispatch packet is a compact delta
+for Change Desk: new issues, resolved issues, newly persistent issues, config
+fingerprint changes, and reasoning budget gates. It does not call services,
+reload, restart, edit `/config`, execute arbitrary task files, or call an LLM.
+The reserved `/data/monitor/tasks.d` directory is intentionally ignored in this
+release so a future bespoke persistent-task design can be added behind explicit
+guardrails.
 
 `ha-site-memory` builds a read-only house dictionary from Home Assistant's local
 registries and live states. Startup refreshes `/data/monitor/ha-site-memory.md`
@@ -241,6 +245,10 @@ ha_monitor_log_lines: 500
 ha_monitor_state_scan_enabled: true
 ha_monitor_mcp_status_enabled: true
 ha_monitor_max_issues: 20
+ha_monitor_summary_interval_seconds: 3600
+ha_monitor_reasoning_cooldown_seconds: 3600
+ha_monitor_reasoning_daily_budget: 8
+ha_monitor_dispatch_max_chars: 12000
 supervisor_broker_enabled: true
 supervisor_broker_t1_ttl_seconds: 120
 supervisor_broker_comma_dispatch_enabled: true
@@ -270,6 +278,13 @@ persistent_pip_packages: []
 - `ha_monitor_mcp_status_enabled`: Include MCP Server integration status.
 - `ha_monitor_max_issues`: Maximum current/persistent issue samples retained in
   monitor summaries.
+- `ha_monitor_summary_interval_seconds`: Low-reasoning eligibility interval
+  recorded in dispatch budget gates. The add-on does not call a model by itself.
+- `ha_monitor_reasoning_cooldown_seconds`: Cooldown metadata for repeated
+  dispatch packets with the same underlying fingerprints.
+- `ha_monitor_reasoning_daily_budget`: Scheduled reasoning-call cap recorded in
+  the budget gate for future or explicit workflows.
+- `ha_monitor_dispatch_max_chars`: Maximum prepared dispatch packet text size.
 - `supervisor_broker_enabled`: Require confirmation for risky Home Assistant
   management operations outside the trusted human Shell pane.
 - `supervisor_broker_t1_ttl_seconds`: Short reuse window for routine

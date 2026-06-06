@@ -29,6 +29,7 @@ const TTYD_PORT = process.env.TTYD_PORT || 7681;
 const UPLOAD_DIR = process.env.UPLOAD_DIR || '/data/images';
 const CONFIG_ROOT = process.env.HA_CONFIG_DIR || '/config';
 const HA_MONITOR_STATE_FILE = process.env.HA_MONITOR_STATE_FILE || '/data/monitor/ha-monitor.json';
+const CHANGE_DESK_DISPATCH_FILE = process.env.CHANGE_DESK_DISPATCH_FILE || '/data/monitor/change-desk-dispatch.json';
 const CHANGE_DESK_REPORT_DIR = process.env.CHANGE_DESK_REPORT_DIR || '/data/monitor/reports';
 const CODEX_TMUX_TARGET = process.env.CODEX_TMUX_TARGET || process.env.TMUX_TARGET || 'codex-terminal:0.0';
 const TMUX_SESSION = process.env.TMUX_SESSION || CODEX_TMUX_TARGET.split(':')[0] || 'codex-terminal';
@@ -925,6 +926,7 @@ async function collectChangeDeskMcp() {
 function normalizeMonitorIssue(issue) {
     const sample = redactSensitiveText(issue?.sample || issue?.signature || '');
     return {
+        key: issue?.key || '',
         source: issue?.source || 'unknown',
         severity: issue?.severity || 'warning',
         sample: sample.slice(0, 500),
@@ -933,6 +935,58 @@ function normalizeMonitorIssue(issue) {
         firstSeen: issue?.first_seen || '',
         lastSeen: issue?.last_seen || ''
     };
+}
+
+function normalizeMonitorDispatch(dispatch) {
+    const delta = dispatch?.delta || {};
+    const gate = dispatch?.reasoning_gate || {};
+    const lines = Array.isArray(delta.summary_lines)
+        ? delta.summary_lines.map((line) => redactSensitiveText(String(line)).slice(0, 500))
+        : [];
+
+    return {
+        available: Boolean(dispatch),
+        status: dispatch?.status || 'quiet',
+        meaningfulDelta: Boolean(dispatch?.meaningful_delta || delta.meaningful),
+        generatedAt: dispatch?.generated_at || '',
+        text: redactSensitiveText(dispatch?.text || '').slice(0, 12000),
+        truncated: Boolean(dispatch?.truncated),
+        delta: {
+            since: delta.since || '',
+            statusChanged: Boolean(delta.status_changed),
+            previousStatus: delta.previous_status || '',
+            currentStatus: delta.current_status || '',
+            configChanged: delta.config_changed,
+            summaryLines: lines,
+            newIssues: (delta.new_issues || []).slice(0, 6).map(normalizeMonitorIssue),
+            resolvedIssues: (delta.resolved_issues || []).slice(0, 6).map(normalizeMonitorIssue),
+            newlyPersistentIssues: (delta.newly_persistent_issues || []).slice(0, 6).map(normalizeMonitorIssue),
+            continuingIssueCount: Number.isInteger(delta.continuing_issue_count) ? delta.continuing_issue_count : 0,
+            persistentIssueCount: Number.isInteger(delta.persistent_issue_count) ? delta.persistent_issue_count : 0
+        },
+        reasoningGate: {
+            automaticLlmCalls: Boolean(gate.automatic_llm_calls),
+            lowReasoningEligible: Boolean(gate.low_reasoning_eligible),
+            lowReasoningIntervalSeconds: Number.isInteger(gate.low_reasoning_interval_seconds) ? gate.low_reasoning_interval_seconds : null,
+            lowReasoningCooldownSeconds: Number.isInteger(gate.low_reasoning_cooldown_seconds) ? gate.low_reasoning_cooldown_seconds : null,
+            maxScheduledLlmCallsPerDay: Number.isInteger(gate.max_scheduled_llm_calls_per_day) ? gate.max_scheduled_llm_calls_per_day : null,
+            maxDispatchChars: Number.isInteger(gate.max_dispatch_chars) ? gate.max_dispatch_chars : null,
+            deltaFingerprint: gate.delta_fingerprint || '',
+            sameFingerprintAsPrevious: Boolean(gate.same_fingerprint_as_previous),
+            cooldownRemainingSeconds: Number.isInteger(gate.cooldown_remaining_seconds) ? gate.cooldown_remaining_seconds : 0,
+            highReasoningRequiresUserAction: gate.high_reasoning_requires_user_action !== false,
+            noCallReason: gate.no_call_reason || '',
+            policy: gate.policy || ''
+        }
+    };
+}
+
+function loadChangeDeskDispatch(fallbackDispatch) {
+    try {
+        return normalizeMonitorDispatch(JSON.parse(fs.readFileSync(CHANGE_DESK_DISPATCH_FILE, 'utf8')));
+    } catch {
+        return normalizeMonitorDispatch(fallbackDispatch || null);
+    }
 }
 
 function collectChangeDeskMonitor() {
@@ -958,6 +1012,7 @@ function collectChangeDeskMonitor() {
     const stale = ageSeconds !== null && ageSeconds > staleAfterSeconds;
     const monitorStatus = stale ? 'stale' : (parsed.status || 'unknown');
     const checks = parsed.checks || {};
+    const dispatch = loadChangeDeskDispatch(parsed.dispatch);
 
     return {
         available: true,
@@ -983,6 +1038,7 @@ function collectChangeDeskMonitor() {
             status: checks.mcp?.status || 'unknown',
             componentLoaded: Boolean(checks.mcp?.component_loaded)
         },
+        dispatch,
         taskSlots: parsed.task_slots || {},
         mtimeMs: stat.mtimeMs
     };
@@ -1017,6 +1073,12 @@ function buildChangeDeskRecommendations(snapshot) {
         recommendations.push('HA monitor state is stale; check the add-on log or run `ha-monitor once`.');
     } else if (!snapshot.monitor?.available) {
         recommendations.push('HA monitor has not reported yet; wait for the first interval or run `ha-monitor once`.');
+    }
+
+    if (snapshot.monitor?.dispatch?.meaningfulDelta) {
+        recommendations.push('Change Desk dispatch has a meaningful delta; use Send Report when you want model judgment.');
+    } else if (snapshot.monitor?.dispatch?.available) {
+        recommendations.push('Change Desk dispatch is quiet; no scheduled reasoning is warranted by the monitor packet.');
     }
 
     if (snapshot.live?.available) {

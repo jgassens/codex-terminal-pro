@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.4.0
+
+- Add deterministic Change Desk dispatch packets to `ha-monitor`, written under
+  `/data/monitor/change-desk-dispatch.json` alongside the existing monitor state.
+- Track compact deltas between monitor samples: new issues, resolved issues,
+  newly persistent issues, status changes, and cheap config fingerprints.
+- Add reasoning budget gate metadata without making autonomous LLM calls: no
+  call when there is no meaningful delta, hourly/cooldown defaults, a scheduled
+  daily cap, and high reasoning marked as explicit-user-action only.
+- Surface the prepared dispatch packet and budget gate in Change Desk and include
+  them in staged Send Report prompts.
+
 ## 2.3.0
 
 - Add `ha-site-memory`, a read-only Home Assistant site-memory helper that builds

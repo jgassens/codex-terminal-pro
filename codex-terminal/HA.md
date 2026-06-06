@@ -125,6 +125,14 @@ Home Assistant's registries and live states. Refresh it with
 human notes in `/config/HA_SITE_NOTES.md` are included when present. Treat it as
 a map, not proof; verify live state with `ha-api` or `ha-ws` before changes.
 
+## Change Desk Dispatch
+
+Use `/data/monitor/change-desk-dispatch.json` as the compact monitor packet
+before spending reasoning. It records deterministic deltas such as new,
+resolved, and newly persistent issues plus config-fingerprint changes and budget
+gates. The monitor does not call an LLM; high reasoning should come from an
+explicit user question or Send Report.
+
 ## When Current Knowledge Matters
 
 Home Assistant changes quickly. When behavior depends on a current integration,

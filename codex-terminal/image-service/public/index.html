@@ -1424,6 +1424,23 @@
             appendChangeDeskLine(body, 'Persistent/current', `${monitor.persistentIssues?.length || 0}/${monitor.currentIssues?.length || 0}`);
             appendChangeDeskLine(body, 'Interval', monitor.intervalSeconds ? `${monitor.intervalSeconds}s` : 'unknown');
 
+            const dispatch = monitor.dispatch || {};
+            const gate = dispatch.reasoningGate || {};
+            if (dispatch.available) {
+                const dispatchLabel = dispatch.meaningfulDelta ? 'meaningful delta' : 'quiet';
+                appendChangeDeskLine(body, 'Dispatch', `${dispatch.status || 'unknown'} (${dispatchLabel})`);
+                appendChangeDeskLine(
+                    body,
+                    'Budget gate',
+                    `auto LLM ${gate.automaticLlmCalls ? 'enabled' : 'off'}, low ${gate.lowReasoningEligible ? 'eligible' : 'deferred'}, cooldown ${gate.cooldownRemainingSeconds || 0}s, high on demand`
+                );
+                const deltaLines = dispatch.delta?.summaryLines || [];
+                if (deltaLines.length) {
+                    body.appendChild(changeDeskElement('div', 'change-desk-muted', 'Dispatch packet:'));
+                    appendChangeDeskList(body, deltaLines.slice(0, 6), 'No monitor delta.');
+                }
+            }
+
             if (monitor.persistentIssues?.length) {
                 body.appendChild(changeDeskElement('div', 'change-desk-muted', 'Persistent issues:'));
                 appendChangeDeskList(
@@ -1501,10 +1518,35 @@
                 `YAML audit: ${data.audit?.status || 'unavailable'} (${data.audit?.yaml?.ok || 0}/${data.audit?.yaml?.checked || 0} ok)`,
                 `Core check: ${data.coreCheck?.status || 'unavailable'}`,
                 `Monitor: ${data.monitor?.status || 'unavailable'} (${data.monitor?.persistentIssues?.length || 0} persistent, ${data.monitor?.currentIssues?.length || 0} current)`,
+                `Dispatch: ${data.monitor?.dispatch?.status || 'unavailable'} (meaningful_delta=${Boolean(data.monitor?.dispatch?.meaningfulDelta)})`,
                 `Logs: ${data.logs?.status || 'unavailable'} (${(data.logs?.counts?.critical || 0) + (data.logs?.counts?.error || 0)} errors, ${data.logs?.counts?.warning || 0} warnings)`,
                 `Live API: ${data.live?.status || 'unavailable'}`,
                 `MCP: ${data.mcp?.status || 'unavailable'}`
             );
+
+            if (data.monitor?.dispatch?.delta?.summaryLines?.length) {
+                lines.push('', 'Prepared dispatch packet:');
+                data.monitor.dispatch.delta.summaryLines.forEach((item) => lines.push(`  - ${item}`));
+            }
+
+            if (data.monitor?.dispatch?.reasoningGate) {
+                const gate = data.monitor.dispatch.reasoningGate;
+                lines.push(
+                    '',
+                    'Reasoning budget gate:',
+                    `  - automatic LLM calls: ${gate.automaticLlmCalls ? 'enabled' : 'disabled'}`,
+                    `  - low reasoning eligible: ${gate.lowReasoningEligible ? 'yes' : 'no'}`,
+                    `  - low reasoning interval: ${gate.lowReasoningIntervalSeconds || 'unknown'}s`,
+                    `  - cooldown: ${gate.lowReasoningCooldownSeconds || 'unknown'}s`,
+                    `  - cooldown remaining: ${gate.cooldownRemainingSeconds || 0}s`,
+                    `  - same fingerprint as previous: ${gate.sameFingerprintAsPrevious ? 'yes' : 'no'}`,
+                    `  - daily scheduled cap: ${gate.maxScheduledLlmCallsPerDay ?? 'unknown'}`,
+                    `  - high reasoning requires user action: ${gate.highReasoningRequiresUserAction ? 'yes' : 'no'}`
+                );
+                if (gate.noCallReason) {
+                    lines.push(`  - no-call reason: ${gate.noCallReason}`);
+                }
+            }
 
             if (data.audit?.yaml?.errors?.length) {
                 lines.push('', 'YAML errors:');
@@ -1556,6 +1598,12 @@
             const monitorLabel = data.monitor?.available
                 ? `${data.monitor.persistentIssues?.length || 0}/${data.monitor.currentIssues?.length || 0}`
                 : 'Unavailable';
+            const dispatchLabel = data.monitor?.dispatch?.available
+                ? (data.monitor.dispatch.meaningfulDelta ? 'Ready' : 'Quiet')
+                : 'Unavailable';
+            const dispatchStatus = data.monitor?.dispatch?.available
+                ? (data.monitor.dispatch.meaningfulDelta ? 'warn' : 'ok')
+                : 'unavailable';
             const logErrorCount = (data.logs?.counts?.critical || 0) + (data.logs?.counts?.error || 0);
             const logsLabel = data.logs?.available
                 ? `${logErrorCount}/${data.logs.counts?.warning || 0}`
@@ -1566,6 +1614,7 @@
                 changeDeskMetric('YAML audit', auditLabel, data.audit?.status || 'unavailable'),
                 changeDeskMetric('Core check', coreLabel, data.coreCheck?.status || 'unavailable'),
                 changeDeskMetric('Monitor P/C', monitorLabel, data.monitor?.status || 'unavailable'),
+                changeDeskMetric('Dispatch', dispatchLabel, dispatchStatus),
                 changeDeskMetric('Logs E/W', logsLabel, data.logs?.status || 'unavailable'),
                 changeDeskMetric('Live API', liveLabel, data.live?.available ? 'ok' : 'unavailable')
             );
@@ -1667,7 +1716,7 @@
             const promptLines = [
                 'Review this Home Assistant Change Desk report:',
                 staged.path,
-                'Focus on validation blockers, persistent monitor findings, repeated log issues, live Home Assistant reachability, and whether reload or restart is safe.',
+                'Start from the prepared dispatch packet and reasoning budget gate, then review validation blockers, persistent monitor findings, repeated log issues, live Home Assistant reachability, and whether reload or restart is safe.',
                 'Do not apply changes without my confirmation.'
             ];
             if (staged.truncated) {

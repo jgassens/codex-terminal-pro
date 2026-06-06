@@ -60,9 +60,9 @@ discovery work. Run `ha-api`, `ha-ws`, `ha-mcp-status`, `ha-monitor status`,
 The toolbar **Change Desk** button opens a read-only review panel for the
 current `/config` workspace. It summarizes `ha-toolbox` YAML audit results,
 `ha core check`, recent `ha core logs` issues, persistent `ha-monitor`
-findings, live `ha-api config` reachability, and `ha-mcp-status`. It can copy
-the summary or insert a Codex review prompt, but it does not reload, restart, or
-apply changes.
+findings, the prepared dispatch delta packet, live `ha-api config` reachability,
+and `ha-mcp-status`. It can copy the summary or insert a Codex review prompt,
+but it does not reload, restart, apply changes, or call a model by itself.
 
 For domestic and small commercial solar work, run `solar-toolbox`. It can print
 a site-intake brief, inspect Home Assistant config/entity registry for
@@ -194,6 +194,10 @@ ha_monitor_log_lines: 500
 ha_monitor_state_scan_enabled: true
 ha_monitor_mcp_status_enabled: true
 ha_monitor_max_issues: 20
+ha_monitor_summary_interval_seconds: 3600
+ha_monitor_reasoning_cooldown_seconds: 3600
+ha_monitor_reasoning_daily_budget: 8
+ha_monitor_dispatch_max_chars: 12000
 supervisor_broker_enabled: true
 supervisor_broker_t1_ttl_seconds: 120
 supervisor_broker_comma_dispatch_enabled: true
@@ -211,10 +215,13 @@ scrollback.
 
 `ha-monitor` is enabled by default as a safe observer. It scans recent
 `ha core logs`, collects bounded unavailable/unknown state samples through
-`ha-api`, checks MCP status, and writes `/data/monitor/ha-monitor.json` plus a
-small JSONL history. It does not call services, reload, restart, edit `/config`,
-or execute arbitrary user task files. `/data/monitor/tasks.d` is reserved for a
-future explicit task-manifest design and is ignored by this release.
+`ha-api`, checks MCP status, writes `/data/monitor/ha-monitor.json`, writes a
+compact `/data/monitor/change-desk-dispatch.json` delta packet, and appends a
+small JSONL history. Dispatch packets record new/resolved/persistent issues,
+config fingerprints, and reasoning budget gates. The monitor does not call
+services, reload, restart, edit `/config`, execute arbitrary user task files, or
+call an LLM. `/data/monitor/tasks.d` is reserved for a future explicit
+task-manifest design and is ignored by this release.
 
 ## Safe Home Assistant Workflow
 

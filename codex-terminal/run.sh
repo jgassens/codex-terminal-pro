@@ -278,7 +278,7 @@ install_tools() {
 
 log_startup_diagnostics() {
     local app_name="${APP_NAME:-${ADDON_NAME:-Codex Terminal Pro}}"
-    local app_version="${BUILD_VERSION:-${APP_VERSION:-2.3.0}}"
+    local app_version="${BUILD_VERSION:-${APP_VERSION:-2.4.0}}"
 
     bashio::log.info "Startup diagnostics:"
     bashio::log.info "  - Date: $(date)"
@@ -501,7 +501,10 @@ write_codex_terminal_agents_block() {
 - Use `ha-monitor status` to read the add-on's bounded observer summary before
   broad Home Assistant triage. It records logs, unavailable state samples, and
   MCP status under `/data/monitor`, but it does not reload, restart, edit files,
-  or run bespoke task manifests in this release.
+  run bespoke task manifests, or call an LLM in this release.
+- Use `/data/monitor/change-desk-dispatch.json` as the prepared Change Desk
+  packet when present. It contains deterministic deltas and reasoning budget
+  gates; high reasoning should happen only from explicit human action.
 - Use `ha-site-memory status` or read `/data/monitor/ha-site-memory.md` before
   troubleshooting named rooms, integrations, or house-specific devices such as
   "Ring lights". Treat it as a map of likely entities, then refresh and verify
@@ -945,6 +948,10 @@ start_ha_monitor() {
     local monitor_interval
     local monitor_log_lines
     local monitor_max_issues
+    local monitor_summary_interval
+    local monitor_reasoning_cooldown
+    local monitor_reasoning_daily_budget
+    local monitor_dispatch_max_chars
     local state_scan_enabled
     local mcp_status_enabled
     local monitor_args=()
@@ -966,6 +973,10 @@ start_ha_monitor() {
     monitor_interval=$(normalize_nonnegative_int "$(bashio::config 'ha_monitor_interval_seconds' '300')" "300")
     monitor_log_lines=$(normalize_nonnegative_int "$(bashio::config 'ha_monitor_log_lines' '500')" "500")
     monitor_max_issues=$(normalize_nonnegative_int "$(bashio::config 'ha_monitor_max_issues' '20')" "20")
+    monitor_summary_interval=$(normalize_nonnegative_int "$(bashio::config 'ha_monitor_summary_interval_seconds' '3600')" "3600")
+    monitor_reasoning_cooldown=$(normalize_nonnegative_int "$(bashio::config 'ha_monitor_reasoning_cooldown_seconds' '3600')" "3600")
+    monitor_reasoning_daily_budget=$(normalize_nonnegative_int "$(bashio::config 'ha_monitor_reasoning_daily_budget' '8')" "8")
+    monitor_dispatch_max_chars=$(normalize_nonnegative_int "$(bashio::config 'ha_monitor_dispatch_max_chars' '12000')" "12000")
     state_scan_enabled=$(bashio::config 'ha_monitor_state_scan_enabled' 'true')
     mcp_status_enabled=$(bashio::config 'ha_monitor_mcp_status_enabled' 'true')
 
@@ -975,7 +986,12 @@ start_ha_monitor() {
         "--max-issues" "${monitor_max_issues}"
         "--state-file" "/data/monitor/ha-monitor.json"
         "--history-file" "/data/monitor/ha-monitor-history.jsonl"
+        "--dispatch-file" "/data/monitor/change-desk-dispatch.json"
         "--task-dir" "/data/monitor/tasks.d"
+        "--summary-interval-seconds" "${monitor_summary_interval}"
+        "--reasoning-cooldown-seconds" "${monitor_reasoning_cooldown}"
+        "--reasoning-daily-budget" "${monitor_reasoning_daily_budget}"
+        "--dispatch-max-chars" "${monitor_dispatch_max_chars}"
     )
 
     if [ "${state_scan_enabled}" != "true" ]; then
@@ -986,7 +1002,7 @@ start_ha_monitor() {
         monitor_args+=("--no-mcp-status")
     fi
 
-    bashio::log.info "Starting HA monitor: interval=${monitor_interval}s, log_lines=${monitor_log_lines}, max_issues=${monitor_max_issues}"
+    bashio::log.info "Starting HA monitor: interval=${monitor_interval}s, log_lines=${monitor_log_lines}, max_issues=${monitor_max_issues}, dispatch=${monitor_dispatch_max_chars} chars"
     (
         "${monitor_bin}" "${monitor_args[@]}" daemon 2>&1 | while IFS= read -r line; do
             bashio::log.info "[HA Monitor] ${line}"
