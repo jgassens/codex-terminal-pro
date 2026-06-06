@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.5.1
+
+- Put Change Desk recommendations directly under the summary metrics so the
+  action list appears before detailed audit, monitor, log, and live sections.
+- Add an explicit **Mall cop** status metric and HA Monitor line showing whether
+  the read-only observer is on patrol, stale, or unavailable.
+- Include the Mall cop status near the top of copied and staged Change Desk
+  reports.
+
 ## 2.5.0
 
 - Add deterministic issue triage to `ha-monitor` so repeated Modbus, Wi-Fi,

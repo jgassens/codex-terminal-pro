@@ -1307,6 +1307,31 @@
             parent.appendChild(changeDeskElement('pre', 'change-desk-output', output));
         }
 
+        function getMallCopStatus(monitor) {
+            if (!monitor?.available) {
+                return {
+                    label: 'Off',
+                    status: 'unavailable',
+                    detail: monitor?.message || 'HA monitor has not reported yet.'
+                };
+            }
+            if (monitor.stale || monitor.status === 'stale') {
+                return {
+                    label: 'Stale',
+                    status: 'warning',
+                    detail: `Last patrol ${formatChangeDeskAge(monitor.ageSeconds)}; observer state is older than expected.`
+                };
+            }
+            const dispatch = monitor.dispatch?.available
+                ? `dispatch ${monitor.dispatch.meaningfulDelta ? 'ready' : 'quiet'}`
+                : 'dispatch unavailable';
+            return {
+                label: 'On patrol',
+                status: 'ok',
+                detail: `Observer active every ${monitor.intervalSeconds || 300}s; ${dispatch}.`
+            };
+        }
+
         function formatChangeDeskAge(seconds) {
             if (!Number.isFinite(seconds)) {
                 return 'unknown';
@@ -1325,6 +1350,7 @@
         function setChangeDeskLoading() {
             changeDeskGenerated.textContent = 'Collecting snapshot...';
             changeDeskSummary.replaceChildren(
+                changeDeskMetric('Mall cop', 'loading'),
                 changeDeskMetric('YAML audit', 'loading'),
                 changeDeskMetric('Core check', 'loading'),
                 changeDeskMetric('Monitor', 'loading'),
@@ -1419,6 +1445,8 @@
                 return;
             }
 
+            const mallCop = getMallCopStatus(monitor);
+            appendChangeDeskLine(body, 'Mall cop', `${mallCop.label} - ${mallCop.detail}`);
             appendChangeDeskLine(body, 'Mode', monitor.mode || 'observer');
             appendChangeDeskLine(body, 'Last run', `${monitor.generatedAt || 'unknown'} (${formatChangeDeskAge(monitor.ageSeconds)})`);
             appendChangeDeskLine(body, 'Persistent/current', `${monitor.persistentIssues?.length || 0}/${monitor.currentIssues?.length || 0}`);
@@ -1522,6 +1550,7 @@
         }
 
         function changeDeskPlainText(data) {
+            const mallCop = getMallCopStatus(data.monitor);
             const lines = [
                 `Change Desk snapshot: ${data.generatedAt || 'unknown'}`,
                 `Workspace: ${data.workspace || '/config'}`,
@@ -1533,11 +1562,17 @@
                 `YAML audit: ${data.audit?.status || 'unavailable'} (${data.audit?.yaml?.ok || 0}/${data.audit?.yaml?.checked || 0} ok)`,
                 `Core check: ${data.coreCheck?.status || 'unavailable'}`,
                 `Monitor: ${data.monitor?.status || 'unavailable'} (${data.monitor?.persistentIssues?.length || 0} persistent, ${data.monitor?.currentIssues?.length || 0} current)`,
+                `Mall cop: ${mallCop.label} - ${mallCop.detail}`,
                 `Dispatch: ${data.monitor?.dispatch?.status || 'unavailable'} (meaningful_delta=${Boolean(data.monitor?.dispatch?.meaningfulDelta)})`,
                 `Logs: ${data.logs?.status || 'unavailable'} (${(data.logs?.counts?.critical || 0) + (data.logs?.counts?.error || 0)} errors, ${data.logs?.counts?.warning || 0} warnings)`,
                 `Live API: ${data.live?.status || 'unavailable'}`,
                 `MCP: ${data.mcp?.status || 'unavailable'}`
             );
+
+            if (data.recommendations?.length) {
+                lines.push('', 'Recommendations:');
+                data.recommendations.forEach((item) => lines.push(`  - ${item}`));
+            }
 
             if (data.monitor?.dispatch?.delta?.summaryLines?.length) {
                 lines.push('', 'Prepared dispatch packet:');
@@ -1599,11 +1634,6 @@
                 data.monitor.currentIssues.slice(0, 8).forEach((item) => lines.push(`  - ${formatChangeDeskIssue(item)}`));
             }
 
-            if (data.recommendations?.length) {
-                lines.push('', 'Recommendations:');
-                data.recommendations.forEach((item) => lines.push(`  - ${item}`));
-            }
-
             return lines.join('\n');
         }
 
@@ -1631,8 +1661,10 @@
                 ? `${logErrorCount}/${data.logs.counts?.warning || 0}`
                 : 'Unavailable';
             const liveLabel = data.live?.available ? 'Reachable' : 'Unavailable';
+            const mallCop = getMallCopStatus(data.monitor);
 
             changeDeskSummary.replaceChildren(
+                changeDeskMetric('Mall cop', mallCop.label, mallCop.status),
                 changeDeskMetric('YAML audit', auditLabel, data.audit?.status || 'unavailable'),
                 changeDeskMetric('Core check', coreLabel, data.coreCheck?.status || 'unavailable'),
                 changeDeskMetric('Monitor P/C', monitorLabel, data.monitor?.status || 'unavailable'),
@@ -1642,12 +1674,12 @@
             );
 
             const fragment = document.createDocumentFragment();
+            renderChangeDeskRecommendations(fragment, data.recommendations || []);
             renderChangeDeskAudit(fragment, data.audit);
             renderChangeDeskCoreCheck(fragment, data.coreCheck);
             renderChangeDeskMonitor(fragment, data.monitor);
             renderChangeDeskLogs(fragment, data.logs);
             renderChangeDeskLive(fragment, data.live, data.mcp);
-            renderChangeDeskRecommendations(fragment, data.recommendations || []);
             changeDeskContent.replaceChildren(fragment);
             latestChangeDeskSummary = changeDeskPlainText(data);
         }
