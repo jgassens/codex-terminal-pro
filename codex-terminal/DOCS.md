@@ -178,6 +178,12 @@ warns about. `auto-review`, `permissions`, and `approval-mode` are valid Codex
 permission concepts, but this pinned CLI does not accept those strings as
 footer item IDs.
 
+Startup also repairs the known HeyGen plugin cache issue where the persisted
+`/data/.codex/plugins/cache/openai-curated-remote/heygen/*/skills/*/SKILL.md`
+metadata uses descriptions longer than Codex CLI accepts. The repair shortens
+only those cached skill descriptions and does not read or modify
+`/data/.codex/auth.json`.
+
 ## Configuration
 
 ```yaml
