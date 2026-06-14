@@ -5,6 +5,9 @@
 - Repair cached HeyGen skill metadata during startup so persisted plugin
   descriptions that exceed Codex CLI limits do not keep producing skill-loader
   warnings.
+- Redact privacy-sensitive live state values such as precise location, SSID,
+  BSSID, IP, phone, SIM, and serial-like fields from generated `ha-site-memory`
+  Markdown and JSON while preserving the entity IDs and mappings.
 
 ## 2.5.1
 

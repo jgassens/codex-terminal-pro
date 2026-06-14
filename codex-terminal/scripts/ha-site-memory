@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -15,13 +16,33 @@ from pathlib import Path
 from typing import Any
 
 
-VERSION = "0.1"
+VERSION = "0.2"
 DEFAULT_CONFIG_DIR = Path("/config")
 DEFAULT_MARKDOWN_FILE = Path("/data/monitor/ha-site-memory.md")
 DEFAULT_JSON_FILE = Path("/data/monitor/ha-site-memory.json")
 DEFAULT_NOTES_FILE = Path("/config/HA_SITE_NOTES.md")
 TOKEN_FILE = Path("/data/.supervisor/token")
 SUPERVISOR_STATES_URL = "http://supervisor/core/api/states"
+REDACTED_STATE = "[redacted]"
+SENSITIVE_STATE_NAME_RE = re.compile(
+    r"("
+    r"geocoded|latitude|longitude|address|street|postal|zip|"
+    r"\bssid\b|bssid|mac_address|ip_address|public_ip|"
+    r"phone|carrier|sim|imei|imsi|serial|"
+    r"precise|coordinate"
+    r")",
+    flags=re.I,
+)
+SENSITIVE_STATE_VALUE_RE = re.compile(
+    r"("
+    r"\b\d{1,5}\s+[A-Za-z0-9 .'-]+(?:St|Street|Ave|Avenue|Rd|Road|Dr|Drive|Ln|Lane|Ct|Court|Way|Blvd|Boulevard)\b|"
+    r"\b[A-Z]{2}\s+\d{5}(?:-\d{4})?\b|"
+    r"\bUnited States\b|"
+    r"\b(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}\b|"
+    r"\b(?:\d{1,3}\.){3}\d{1,3}\b"
+    r")",
+    flags=re.I,
+)
 
 PRIMARY_DOMAINS = {
     "alarm_control_panel",
@@ -176,6 +197,16 @@ def state_name(state: dict[str, Any] | None) -> str:
     return str(state.get("state") or "unknown")
 
 
+def safe_state_name(entity_id: str, state: dict[str, Any] | None, *context: Any) -> str:
+    value = state_name(state)
+    haystack = " ".join(str(part or "") for part in (entity_id, *context))
+    if SENSITIVE_STATE_NAME_RE.search(haystack):
+        return REDACTED_STATE
+    if SENSITIVE_STATE_VALUE_RE.search(value):
+        return REDACTED_STATE
+    return value
+
+
 def friendly_from_state(state: dict[str, Any] | None) -> str:
     attrs = state.get("attributes") if isinstance(state, dict) else None
     if isinstance(attrs, dict):
@@ -232,25 +263,28 @@ def summarize_entities(
         domain = entity_domain(entity_id)
         integration = entity_integration(entity, device, entries_by_id)
         entity_area_id = entity.get("area_id") or (device or {}).get("area_id")
+        name = pick_name(
+            entity.get("name"),
+            entity.get("original_name"),
+            friendly_from_state(state),
+        )
+        friendly_name = friendly_from_state(state)
+        device_name = pick_name(
+            (device or {}).get("name_by_user"),
+            (device or {}).get("name"),
+        )
         rows.append(
             {
                 "entity_id": entity_id,
                 "domain": domain,
                 "integration": integration,
-                "name": pick_name(
-                    entity.get("name"),
-                    entity.get("original_name"),
-                    friendly_from_state(state),
-                ),
-                "friendly_name": friendly_from_state(state),
-                "state": state_name(state),
+                "name": name,
+                "friendly_name": friendly_name,
+                "state": safe_state_name(entity_id, state, name, friendly_name, device_name),
                 "area_id": entity_area_id or "",
                 "area": area_name(entity_area_id, areas_by_id),
                 "device_id": device_id,
-                "device_name": pick_name(
-                    (device or {}).get("name_by_user"),
-                    (device or {}).get("name"),
-                ),
+                "device_name": device_name,
                 "manufacturer": pick_name((device or {}).get("manufacturer")),
                 "model": pick_name((device or {}).get("model")),
                 "hidden": bool(entity.get("hidden_by")),
