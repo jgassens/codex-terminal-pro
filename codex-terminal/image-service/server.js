@@ -20,6 +20,7 @@ const { execFile, spawn } = require('child_process');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const { createProxyMiddleware } = require('http-proxy-middleware');
 const { normalizeShellCommandForDispatch } = require('./shell-command-normalizer');
 
@@ -29,6 +30,7 @@ const TTYD_PORT = process.env.TTYD_PORT || 7681;
 const UPLOAD_DIR = process.env.UPLOAD_DIR || '/data/images';
 const CONFIG_ROOT = process.env.HA_CONFIG_DIR || '/config';
 const HA_MONITOR_STATE_FILE = process.env.HA_MONITOR_STATE_FILE || '/data/monitor/ha-monitor.json';
+const HA_MONITOR_HISTORY_FILE = process.env.HA_MONITOR_HISTORY_FILE || '/data/monitor/ha-monitor-history.jsonl';
 const CHANGE_DESK_DISPATCH_FILE = process.env.CHANGE_DESK_DISPATCH_FILE || '/data/monitor/change-desk-dispatch.json';
 const CHANGE_DESK_REPORT_DIR = process.env.CHANGE_DESK_REPORT_DIR || '/data/monitor/reports';
 const CODEX_TMUX_TARGET = process.env.CODEX_TMUX_TARGET || process.env.TMUX_TARGET || 'codex-terminal:0.0';
@@ -46,6 +48,8 @@ const CHANGE_DESK_OUTPUT_MAX_CHARS = parseNonNegativeInt(process.env.CHANGE_DESK
 const CHANGE_DESK_LOG_OUTPUT_MAX_CHARS = parseNonNegativeInt(process.env.CHANGE_DESK_LOG_OUTPUT_MAX_CHARS, 60000);
 const CHANGE_DESK_LOG_LINE_LIMIT = parseNonNegativeInt(process.env.CHANGE_DESK_LOG_LINE_LIMIT, 500);
 const CHANGE_DESK_REPORT_MAX_CHARS = parseNonNegativeInt(process.env.CHANGE_DESK_REPORT_MAX_CHARS, 200000);
+const CHANGE_DESK_MALL_COP_TIMEOUT_MS = parseNonNegativeInt(process.env.CHANGE_DESK_MALL_COP_TIMEOUT_MS, 180000);
+const CHANGE_DESK_MALL_COP_MAX_CHARS = parseNonNegativeInt(process.env.CHANGE_DESK_MALL_COP_MAX_CHARS, 18000);
 const IMAGE_RETENTION_DAYS = parseNonNegativeInt(process.env.IMAGE_RETENTION_DAYS, 30);
 const IMAGE_RETENTION_MAX_BYTES = parseNonNegativeInt(process.env.IMAGE_RETENTION_MAX_BYTES, 256 * 1024 * 1024);
 const SCROLL_CONTROL_ACTIONS = new Set(['scroll-up', 'scroll-down', 'scroll-bottom']);
@@ -1099,6 +1103,7 @@ function normalizeMonitorIssue(issue) {
         sample: sample.slice(0, 500),
         runsSeen: Number.isInteger(issue?.runs_seen) ? issue.runs_seen : 0,
         occurrences: Number.isInteger(issue?.occurrences) ? issue.occurrences : (Number.isInteger(issue?.count) ? issue.count : 0),
+        currentCount: Number.isInteger(issue?.current_count) ? issue.current_count : (Number.isInteger(issue?.count) ? issue.count : 0),
         firstSeen: issue?.first_seen || '',
         lastSeen: issue?.last_seen || ''
     };
@@ -1180,6 +1185,195 @@ function loadChangeDeskDispatch(fallbackDispatch) {
     }
 }
 
+function loadMonitorHistory(limit = 48) {
+    try {
+        return fs.readFileSync(HA_MONITOR_HISTORY_FILE, 'utf8')
+            .split(/\r?\n/)
+            .filter(Boolean)
+            .slice(-Math.max(1, limit))
+            .map((line) => JSON.parse(line))
+            .filter((entry) => entry && typeof entry === 'object');
+    } catch {
+        return [];
+    }
+}
+
+function countBy(items, pickValue) {
+    const counts = {};
+    for (const item of items || []) {
+        const value = pickValue(item);
+        if (!value) {
+            continue;
+        }
+        counts[value] = (counts[value] || 0) + 1;
+    }
+    return counts;
+}
+
+function numericSeries(items, key) {
+    return (items || [])
+        .map((item) => Number(item?.[key]))
+        .filter((value) => Number.isFinite(value));
+}
+
+function seriesDirection(values) {
+    if (!values.length) {
+        return 'unknown';
+    }
+
+    const first = values[0];
+    const last = values[values.length - 1];
+    const delta = last - first;
+    if (delta >= 3) {
+        return 'worsening';
+    }
+    if (delta <= -3) {
+        return 'improving';
+    }
+    return 'stable';
+}
+
+function summarizeMonitorHistory(history) {
+    const recent = history.slice(-12);
+    const currentSeries = numericSeries(recent, 'current_issues');
+    const persistentSeries = numericSeries(recent, 'persistent_issues');
+    const first = history[0] || {};
+    const last = history[history.length - 1] || {};
+    const logErrorSeries = recent.map((entry) => {
+        const counts = entry?.log_counts || {};
+        return Number(counts.critical || 0) + Number(counts.error || 0);
+    }).filter((value) => Number.isFinite(value));
+
+    return {
+        samples: history.length,
+        firstSeen: first.generated_at || '',
+        lastSeen: last.generated_at || '',
+        statusCounts: countBy(history, (entry) => entry.status || 'unknown'),
+        postureCounts: countBy(history, (entry) => entry.triage_posture || 'unknown'),
+        meaningfulDeltas: history.filter((entry) => entry.meaningful_delta).length,
+        configChanges: history.filter((entry) => entry.config_changed === true).length,
+        recentCurrentIssues: currentSeries,
+        recentPersistentIssues: persistentSeries,
+        currentIssueDirection: seriesDirection(currentSeries),
+        persistentIssueDirection: seriesDirection(persistentSeries),
+        logErrorDirection: seriesDirection(logErrorSeries)
+    };
+}
+
+function conditionGroupKey(issue) {
+    const classification = issue?.classification || {};
+    return [
+        classification.posture || 'needs_review',
+        classification.category || 'unknown',
+        issue?.source || 'unknown'
+    ].join(':');
+}
+
+function buildConditionLedger(monitor, historySummary) {
+    const issueMap = new Map();
+    for (const issue of [...(monitor.currentIssues || []), ...(monitor.persistentIssues || [])]) {
+        if (!issue?.key) {
+            continue;
+        }
+        const existing = issueMap.get(issue.key) || {};
+        issueMap.set(issue.key, { ...existing, ...issue });
+    }
+
+    const groups = new Map();
+    for (const issue of issueMap.values()) {
+        const classification = issue.classification || {};
+        const key = conditionGroupKey(issue);
+        const group = groups.get(key) || {
+            key,
+            label: classification.label || classification.posture || 'needs review',
+            category: classification.category || 'unknown',
+            posture: classification.posture || 'needs_review',
+            source: issue.source || 'unknown',
+            impact: classification.impact || '',
+            codexActionability: classification.codexActionability || '',
+            systemWideRisk: classification.systemWideRisk || '',
+            configBlocker: Boolean(classification.configBlocker),
+            requiresHumanPriorityCheck: Boolean(classification.requiresHumanPriorityCheck),
+            issueCount: 0,
+            activeCount: 0,
+            chronicCount: 0,
+            totalRuns: 0,
+            totalOccurrences: 0,
+            firstSeen: '',
+            lastSeen: '',
+            samples: []
+        };
+
+        const runsSeen = Number(issue.runsSeen || 0);
+        const occurrences = Number(issue.occurrences || 0);
+        const active = Number(issue.currentCount || 0) > 0 || (monitor.currentIssues || []).some((current) => current.key === issue.key);
+        group.issueCount += 1;
+        group.activeCount += active ? 1 : 0;
+        group.chronicCount += runsSeen >= 3 || occurrences >= 5 ? 1 : 0;
+        group.totalRuns += Number.isFinite(runsSeen) ? runsSeen : 0;
+        group.totalOccurrences += Number.isFinite(occurrences) ? occurrences : 0;
+        group.firstSeen = earlierIso(group.firstSeen, issue.firstSeen);
+        group.lastSeen = laterIso(group.lastSeen, issue.lastSeen);
+        group.samples.push({
+            severity: issue.severity || 'warning',
+            runsSeen,
+            occurrences,
+            active,
+            firstSeen: issue.firstSeen || '',
+            lastSeen: issue.lastSeen || '',
+            sample: redactSensitiveText(issue.sample || '').slice(0, 500)
+        });
+        groups.set(key, group);
+    }
+
+    const conditions = [...groups.values()].map((group) => {
+        let trajectory = 'stable chronic';
+        if (group.activeCount === 0) {
+            trajectory = 'quiet recently';
+        } else if (group.chronicCount === 0) {
+            trajectory = 'new or intermittent';
+        } else if (historySummary.currentIssueDirection === 'worsening' || historySummary.logErrorDirection === 'worsening') {
+            trajectory = 'worsening';
+        } else if (historySummary.currentIssueDirection === 'improving' && group.chronicCount > 0) {
+            trajectory = 'improving but recurring';
+        }
+
+        return {
+            ...group,
+            trajectory,
+            samples: group.samples
+                .sort((a, b) => (b.runsSeen + b.occurrences) - (a.runsSeen + a.occurrences))
+                .slice(0, 5)
+        };
+    });
+
+    return conditions.sort((a, b) => {
+        const priorityA = (a.configBlocker ? 100 : 0) + (a.requiresHumanPriorityCheck ? 50 : 0) + a.chronicCount + a.activeCount;
+        const priorityB = (b.configBlocker ? 100 : 0) + (b.requiresHumanPriorityCheck ? 50 : 0) + b.chronicCount + b.activeCount;
+        return priorityB - priorityA;
+    }).slice(0, 12);
+}
+
+function earlierIso(left, right) {
+    if (!left) {
+        return right || '';
+    }
+    if (!right) {
+        return left;
+    }
+    return Date.parse(right) < Date.parse(left) ? right : left;
+}
+
+function laterIso(left, right) {
+    if (!left) {
+        return right || '';
+    }
+    if (!right) {
+        return left;
+    }
+    return Date.parse(right) > Date.parse(left) ? right : left;
+}
+
 function collectChangeDeskMonitor() {
     let parsed;
     let stat;
@@ -1204,8 +1398,9 @@ function collectChangeDeskMonitor() {
     const monitorStatus = stale ? 'stale' : (parsed.status || 'unknown');
     const checks = parsed.checks || {};
     const dispatch = loadChangeDeskDispatch(parsed.dispatch);
+    const history = summarizeMonitorHistory(loadMonitorHistory());
 
-    return {
+    const monitor = {
         available: true,
         status: monitorStatus,
         rawStatus: parsed.status || 'unknown',
@@ -1234,6 +1429,9 @@ function collectChangeDeskMonitor() {
         taskSlots: parsed.task_slots || {},
         mtimeMs: stat.mtimeMs
     };
+    monitor.history = history;
+    monitor.conditions = buildConditionLedger(monitor, history);
+    return monitor;
 }
 
 function buildChangeDeskRecommendations(snapshot) {
@@ -1324,6 +1522,197 @@ async function collectChangeDeskSnapshot() {
 
     snapshot.recommendations = buildChangeDeskRecommendations(snapshot);
     return snapshot;
+}
+
+function formatCountMap(counts) {
+    return Object.entries(counts || {})
+        .sort((a, b) => b[1] - a[1])
+        .map(([key, value]) => `${key}:${value}`)
+        .join(', ') || 'none';
+}
+
+function buildMallCopObservationPacket(snapshot) {
+    const monitor = snapshot.monitor || {};
+    const dispatch = monitor.dispatch || {};
+    const gate = dispatch.reasoningGate || {};
+    const history = monitor.history || {};
+    const conditions = monitor.conditions || [];
+    const lines = [
+        '# Mall Cop: To Observe and Report',
+        '',
+        'Purpose: make sense of changing Home Assistant log and entity states without assuming every repeated warning is a fixable config bug.',
+        '',
+        'Rules for this response:',
+        '- Return concise advice for a human Change Desk panel.',
+        '- Separate acute health from chronic conditions.',
+        '- Call out whether each chronic condition looks Codex-fixable, network/device-shaped, auth-shaped, config-shaped, or human-priority-only.',
+        '- Treat repeated Modbus, Wi-Fi, timeout, unavailable, and socket noise as localized connectivity unless evidence says it is spreading or critical.',
+        '- Do not suggest reload, restart, service calls, config edits, or shell commands as actions unless the packet shows a clear blocker.',
+        '- Do not ask follow-up questions; state assumptions and what to observe next.',
+        '',
+        'Requested output shape:',
+        'Mall Cop: To Observe and Report',
+        '1. Bottom line',
+        '2. Acute state',
+        '3. Chronic conditions',
+        '4. What changed',
+        '5. What Codex can and cannot fix',
+        '6. Next observation',
+        '',
+        '## Snapshot',
+        `Generated: ${snapshot.generatedAt || 'unknown'}`,
+        `Workspace: ${snapshot.workspace || CONFIG_ROOT}`,
+        `Monitor status: ${monitor.status || 'unavailable'}; raw=${monitor.rawStatus || 'unknown'}; stale=${Boolean(monitor.stale)}; age=${monitor.ageSeconds ?? 'unknown'}s`,
+        `Current issues: ${(monitor.currentIssues || []).length}; persistent issues: ${(monitor.persistentIssues || []).length}`,
+        `Log status: ${snapshot.logs?.status || 'unavailable'}; errors=${(snapshot.logs?.counts?.critical || 0) + (snapshot.logs?.counts?.error || 0)}; warnings=${snapshot.logs?.counts?.warning || 0}`,
+        `State scan: ${monitor.states?.status || 'unknown'}; entity_count=${monitor.states?.entityCount ?? 'unknown'}; unavailable_samples=${(monitor.states?.unavailableSamples || []).length}; unknown_samples=${(monitor.states?.unknownSamples || []).length}`,
+        `Config fingerprint changed in delta: ${dispatch.delta?.configChanged === true ? 'yes' : (dispatch.delta?.configChanged === false ? 'no' : 'unknown')}`,
+        '',
+        '## History Window',
+        `Samples: ${history.samples || 0}; first=${history.firstSeen || 'unknown'}; last=${history.lastSeen || 'unknown'}`,
+        `Status counts: ${formatCountMap(history.statusCounts)}`,
+        `Posture counts: ${formatCountMap(history.postureCounts)}`,
+        `Meaningful deltas: ${history.meaningfulDeltas ?? 0}; config changes: ${history.configChanges ?? 0}`,
+        `Recent current issue counts: ${(history.recentCurrentIssues || []).join(', ') || 'none'} (${history.currentIssueDirection || 'unknown'})`,
+        `Recent persistent issue counts: ${(history.recentPersistentIssues || []).join(', ') || 'none'} (${history.persistentIssueDirection || 'unknown'})`,
+        `Recent log error direction: ${history.logErrorDirection || 'unknown'}`,
+        '',
+        '## Deterministic Triage',
+        `Dominant posture: ${monitor.triage?.dominantPosture || 'unknown'}`,
+        `Localized noise: ${monitor.triage?.localizedNoiseCount ?? 0}; config blockers: ${monitor.triage?.configBlockerCount ?? 0}; priority checks: ${monitor.triage?.priorityCheckCount ?? 0}`,
+        ...((monitor.triage?.summaryLines || []).map((line) => `- ${line}`)),
+        '',
+        '## Dispatch Delta',
+        `Dispatch status: ${dispatch.status || 'unavailable'}; meaningful=${Boolean(dispatch.meaningfulDelta)}`,
+        `Reasoning gate: automatic_llm_calls=${gate.automaticLlmCalls ? 'enabled' : 'disabled'}; low_reasoning=${gate.lowReasoningEligible ? 'eligible' : 'deferred'}; high_reasoning_requires_user_action=${gate.highReasoningRequiresUserAction !== false}`,
+        ...((dispatch.delta?.summaryLines || []).map((line) => `- ${line}`)),
+        '',
+        '## Chronic Condition Ledger'
+    ];
+
+    if (!conditions.length) {
+        lines.push('- No chronic conditions are currently grouped by the monitor.');
+    } else {
+        conditions.forEach((condition, index) => {
+            lines.push(
+                '',
+                `### Condition ${index + 1}: ${condition.label}`,
+                `Category/posture/source: ${condition.category} / ${condition.posture} / ${condition.source}`,
+                `Trajectory: ${condition.trajectory}; issues=${condition.issueCount}; active=${condition.activeCount}; chronic=${condition.chronicCount}; runs=${condition.totalRuns}; occurrences=${condition.totalOccurrences}`,
+                `First seen: ${condition.firstSeen || 'unknown'}; last seen: ${condition.lastSeen || 'unknown'}`,
+                `Impact: ${condition.impact || 'unknown'}`,
+                `Codex actionability: ${condition.codexActionability || 'unknown'}`,
+                `System-wide risk: ${condition.systemWideRisk || 'unknown'}; config_blocker=${condition.configBlocker}; human_priority_check=${condition.requiresHumanPriorityCheck}`
+            );
+            for (const sample of condition.samples || []) {
+                lines.push(`- ${sample.runsSeen} runs/${sample.occurrences} occurrences/${sample.active ? 'active' : 'quiet'}: ${sample.sample}`);
+            }
+        });
+    }
+
+    lines.push(
+        '',
+        '## Recommendations Already Computed',
+        ...((snapshot.recommendations || []).map((item) => `- ${item}`)),
+        '',
+        'Now produce the requested Mall Cop summary. Keep it under 500 words.'
+    );
+
+    return redactSensitiveText(lines.join('\n'));
+}
+
+function runCodexMallCopObservation(prompt) {
+    return new Promise((resolve) => {
+        const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'change-desk-mall-cop-'));
+        const outputFile = path.join(tempDir, 'summary.md');
+        const args = [
+            'exec',
+            '--sandbox',
+            'read-only',
+            '--cd',
+            CONFIG_ROOT,
+            '--skip-git-repo-check',
+            '--output-last-message',
+            outputFile,
+            '-'
+        ];
+        const child = spawn('codex', args, {
+            cwd: CONFIG_ROOT,
+            env: {
+                ...process.env,
+                CODEX_HOME: process.env.CODEX_HOME || '/data/.codex'
+            },
+            stdio: ['pipe', 'pipe', 'pipe']
+        });
+        let stdout = '';
+        let stderr = '';
+        let settled = false;
+        const startedAt = Date.now();
+        const timeout = setTimeout(() => {
+            if (settled) {
+                return;
+            }
+            child.kill('SIGTERM');
+        }, CHANGE_DESK_MALL_COP_TIMEOUT_MS);
+
+        child.stdout.on('data', (chunk) => {
+            stdout += chunk.toString();
+            if (stdout.length > CHANGE_DESK_MALL_COP_MAX_CHARS * 2) {
+                stdout = stdout.slice(-CHANGE_DESK_MALL_COP_MAX_CHARS);
+            }
+        });
+        child.stderr.on('data', (chunk) => {
+            stderr += chunk.toString();
+            if (stderr.length > CHANGE_DESK_MALL_COP_MAX_CHARS * 2) {
+                stderr = stderr.slice(-CHANGE_DESK_MALL_COP_MAX_CHARS);
+            }
+        });
+        child.on('error', (err) => {
+            if (settled) {
+                return;
+            }
+            settled = true;
+            clearTimeout(timeout);
+            resolve({
+                success: false,
+                exitCode: null,
+                timedOut: false,
+                durationMs: Date.now() - startedAt,
+                summary: '',
+                output: '',
+                error: redactSensitiveText(err.message)
+            });
+        });
+        child.on('close', (code, signal) => {
+            if (settled) {
+                return;
+            }
+            settled = true;
+            clearTimeout(timeout);
+            let summary = '';
+            try {
+                summary = fs.readFileSync(outputFile, 'utf8');
+            } catch {
+                summary = stdout;
+            }
+            const output = truncateChangeDeskText(stdout, CHANGE_DESK_MALL_COP_MAX_CHARS);
+            const error = truncateChangeDeskText(stderr, CHANGE_DESK_MALL_COP_MAX_CHARS);
+            const text = truncateChangeDeskText(summary || stdout, CHANGE_DESK_MALL_COP_MAX_CHARS);
+            resolve({
+                success: code === 0 && Boolean(text.text.trim()),
+                exitCode: Number.isInteger(code) ? code : null,
+                signal: signal || '',
+                timedOut: signal === 'SIGTERM',
+                durationMs: Date.now() - startedAt,
+                summary: text.text.trim(),
+                output: output.text,
+                error: error.text,
+                truncated: text.truncated || output.truncated || error.truncated
+            });
+            fs.rm(tempDir, { recursive: true, force: true }, () => {});
+        });
+        child.stdin.end(prompt);
+    });
 }
 
 function runTerminalControl(action, callback) {
@@ -1550,6 +1939,44 @@ app.post('/change-desk/report', (req, res) => {
         res.status(500).json({
             success: false,
             error: 'Failed to stage Change Desk report'
+        });
+    }
+});
+
+app.post('/change-desk/mall-cop', async (req, res) => {
+    if (!isSameOriginBrowserRequest(req)) {
+        return res.status(403).json({ success: false, error: 'Cross-origin Mall Cop access is not allowed' });
+    }
+
+    try {
+        const snapshot = await collectChangeDeskSnapshot();
+        const packet = buildMallCopObservationPacket(snapshot);
+        const report = writeChangeDeskReport(packet);
+        const observation = await runCodexMallCopObservation(packet);
+
+        if (!observation.success) {
+            return res.status(observation.timedOut ? 504 : 502).json({
+                success: false,
+                error: observation.timedOut ? 'Mall Cop summary timed out' : 'Codex did not return a Mall Cop summary',
+                observation,
+                packetPath: report.path,
+                snapshot
+            });
+        }
+
+        res.json({
+            success: true,
+            generatedAt: new Date().toISOString(),
+            packetPath: report.path,
+            packetTruncated: report.truncated,
+            observation,
+            snapshot
+        });
+    } catch (err) {
+        console.error('Mall Cop observation failed:', err.message);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to run Mall Cop observation'
         });
     }
 });

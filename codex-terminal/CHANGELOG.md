@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.5.3
+
+- Add an on-demand **Mall Cop: To Observe and Report** flow in Change Desk.
+  The panel now groups persistent monitor findings into chronic conditions,
+  then runs `codex exec` in read-only mode only when the user clicks
+  **Ask Mall Cop**.
+- Render the returned Mall Cop summary back inside Change Desk and include the
+  chronic condition ledger in copied reports.
+
 ## 2.5.2
 
 - Repair cached HeyGen skill metadata during startup so persisted plugin

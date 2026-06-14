@@ -229,8 +229,11 @@ Modbus, Wi-Fi, socket, timeout, and unavailable-entity noise is treated as
 localized connectivity trouble unless it matches safety/security/critical
 wording; configuration, auth, and system-health patterns stay review findings.
 The monitor does not call services, reload, restart, edit `/config`, execute
-arbitrary user task files, or call an LLM. `/data/monitor/tasks.d` is reserved
-for a future explicit task-manifest design and is ignored by this release.
+arbitrary user task files, or call an LLM. Change Desk can run the explicit
+**Ask Mall Cop** action, which sends a chronic-condition packet to `codex exec`
+in read-only mode and renders **Mall Cop: To Observe and Report** back in the
+panel. `/data/monitor/tasks.d` is reserved for a future explicit task-manifest
+design and is ignored by this release.
 
 ## Safe Home Assistant Workflow
 

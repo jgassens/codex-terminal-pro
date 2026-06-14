@@ -679,6 +679,14 @@
             color: var(--muted);
         }
 
+        .change-desk-observation {
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+            color: var(--text);
+            font-size: 13px;
+            line-height: 1.5;
+        }
+
         #change-desk-footer {
             display: flex;
             justify-content: flex-end;
@@ -1002,7 +1010,7 @@
         </div>
         <div id="change-desk-footer">
             <button id="change-desk-copy" class="modal-btn modal-btn-secondary">Copy Summary</button>
-            <button id="change-desk-prompt" class="modal-btn modal-btn-secondary">Send Report</button>
+            <button id="change-desk-prompt" class="modal-btn modal-btn-secondary">Ask Mall Cop</button>
             <button id="change-desk-refresh" class="modal-btn modal-btn-primary">Refresh</button>
         </div>
     </div>
@@ -1021,6 +1029,8 @@
         let viewportSyncTimer = null;
         let keyboardWasOpen = false;
         let statusTimer = null;
+        let latestChangeDeskData = null;
+        let latestMallCopObservation = null;
 
         function isTouchUi() {
             return Boolean(
@@ -1549,6 +1559,47 @@
             parent.appendChild(section);
         }
 
+        function renderMallCopObservation(parent, observation) {
+            if (!observation?.summary) {
+                return;
+            }
+
+            const { section, body } = changeDeskSection(
+                'Mall Cop: To Observe and Report',
+                observation.success === false ? 'failed' : 'ok',
+                observation.durationMs ? `${Math.round(observation.durationMs / 1000)}s` : 'ready'
+            );
+            body.appendChild(changeDeskElement('div', 'change-desk-observation', observation.summary));
+            if (observation.packetPath) {
+                appendChangeDeskLine(body, 'Packet', observation.packetPath);
+            }
+            if (observation.truncated) {
+                body.appendChild(changeDeskElement('div', 'change-desk-muted', 'Summary was truncated by the add-on size limit.'));
+            }
+            parent.appendChild(section);
+        }
+
+        function renderChangeDeskConditions(parent, monitor) {
+            const conditions = monitor?.conditions || [];
+            const { section, body } = changeDeskSection('Chronic Conditions', conditions.length ? 'warn' : 'ok', `${conditions.length}`);
+
+            if (!conditions.length) {
+                body.appendChild(changeDeskElement('div', 'change-desk-muted', 'No grouped chronic conditions yet.'));
+                parent.appendChild(section);
+                return;
+            }
+
+            appendChangeDeskList(
+                body,
+                conditions.slice(0, 6).map((condition) => {
+                    const actionability = condition.codexActionability ? `; ${condition.codexActionability}` : '';
+                    return `${condition.label}: ${condition.trajectory}, ${condition.activeCount}/${condition.issueCount} active, ${condition.totalRuns} runs${actionability}`;
+                }),
+                'No grouped chronic conditions yet.'
+            );
+            parent.appendChild(section);
+        }
+
         function changeDeskPlainText(data) {
             const mallCop = getMallCopStatus(data.monitor);
             const lines = [
@@ -1572,6 +1623,34 @@
             if (data.recommendations?.length) {
                 lines.push('', 'Recommendations:');
                 data.recommendations.forEach((item) => lines.push(`  - ${item}`));
+            }
+
+            if (latestMallCopObservation?.summary) {
+                lines.push('', 'Mall Cop: To Observe and Report:', latestMallCopObservation.summary);
+            }
+
+            if (data.monitor?.history) {
+                const history = data.monitor.history;
+                lines.push(
+                    '',
+                    'Monitor history:',
+                    `  - samples: ${history.samples || 0}`,
+                    `  - status counts: ${Object.entries(history.statusCounts || {}).map(([key, value]) => `${key}:${value}`).join(', ') || 'none'}`,
+                    `  - posture counts: ${Object.entries(history.postureCounts || {}).map(([key, value]) => `${key}:${value}`).join(', ') || 'none'}`,
+                    `  - current issue direction: ${history.currentIssueDirection || 'unknown'}`,
+                    `  - persistent issue direction: ${history.persistentIssueDirection || 'unknown'}`
+                );
+            }
+
+            if (data.monitor?.conditions?.length) {
+                lines.push('', 'Chronic condition ledger:');
+                data.monitor.conditions.forEach((condition) => {
+                    lines.push(
+                        `  - ${condition.label}: ${condition.trajectory}; ` +
+                        `${condition.activeCount}/${condition.issueCount} active; ` +
+                        `${condition.totalRuns} runs; actionability=${condition.codexActionability || 'unknown'}`
+                    );
+                });
             }
 
             if (data.monitor?.dispatch?.delta?.summaryLines?.length) {
@@ -1638,6 +1717,7 @@
         }
 
         function renderChangeDesk(data) {
+            latestChangeDeskData = data;
             const generatedAt = data.generatedAt ? new Date(data.generatedAt) : null;
             changeDeskGenerated.textContent = generatedAt
                 ? `${generatedAt.toLocaleString()} · ${data.durationMs || 0}ms`
@@ -1674,7 +1754,9 @@
             );
 
             const fragment = document.createDocumentFragment();
+            renderMallCopObservation(fragment, latestMallCopObservation);
             renderChangeDeskRecommendations(fragment, data.recommendations || []);
+            renderChangeDeskConditions(fragment, data.monitor);
             renderChangeDeskAudit(fragment, data.audit);
             renderChangeDeskCoreCheck(fragment, data.coreCheck);
             renderChangeDeskMonitor(fragment, data.monitor);
@@ -1691,12 +1773,15 @@
             );
             changeDeskContent.replaceChildren(changeDeskElement('div', 'change-desk-muted', message || 'Change Desk failed.'));
             latestChangeDeskSummary = '';
+            latestChangeDeskData = null;
         }
 
         async function loadChangeDesk() {
             changeDeskPanel.classList.add('active');
             changeDeskRefresh.disabled = true;
+            changeDeskPrompt.disabled = true;
             changeDeskBtn.classList.add('active');
+            latestMallCopObservation = null;
             setChangeDeskLoading();
             setStatus('Collecting Change Desk snapshot...', 'success', false);
 
@@ -1715,6 +1800,7 @@
                 setStatus('Change Desk failed', 'error', false);
             } finally {
                 changeDeskRefresh.disabled = false;
+                changeDeskPrompt.disabled = false;
             }
         }
 
@@ -1789,6 +1875,53 @@
                 focusTerminal(true);
             } else {
                 showManualCopy(prompt, 'Could not insert the report path. Copy this into Codex.');
+            }
+        }
+
+        async function askMallCop() {
+            if (!latestChangeDeskData) {
+                setStatus('Refresh Change Desk first', 'error', false);
+                return;
+            }
+
+            changeDeskPrompt.disabled = true;
+            changeDeskRefresh.disabled = true;
+            setStatus('Asking Mall Cop to observe and report...', 'success', false);
+
+            try {
+                const response = await fetch(ingressPath('change-desk/mall-cop'), {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({})
+                });
+                const result = await response.json().catch(() => ({}));
+                if (!response.ok || !result.success || !result.observation?.summary) {
+                    throw new Error(result.error || 'Mall Cop did not return a summary');
+                }
+
+                latestMallCopObservation = {
+                    ...result.observation,
+                    packetPath: result.packetPath,
+                    packetTruncated: result.packetTruncated
+                };
+                if (result.snapshot) {
+                    renderChangeDesk(result.snapshot);
+                } else {
+                    renderChangeDesk(latestChangeDeskData);
+                }
+                setStatus('Mall Cop report ready', 'success', false);
+            } catch (err) {
+                console.log('Mall Cop observation failed:', err);
+                setStatus('Mall Cop report failed', 'error', false);
+                const fallback = latestChangeDeskSummary || '';
+                if (fallback) {
+                    showManualCopy(fallback, `${err.message}. Copy this Change Desk summary into Codex.`);
+                }
+            } finally {
+                changeDeskPrompt.disabled = false;
+                changeDeskRefresh.disabled = false;
             }
         }
 
@@ -3412,7 +3545,7 @@
 
         changeDeskCopy.addEventListener('click', copyChangeDeskSummary);
 
-        changeDeskPrompt.addEventListener('click', insertChangeDeskPrompt);
+        changeDeskPrompt.addEventListener('click', askMallCop);
 
         changeDeskClose.addEventListener('click', () => {
             changeDeskPanel.classList.remove('active');

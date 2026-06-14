@@ -23,11 +23,11 @@ You are running inside the Codex Terminal Pro Home Assistant add-on.
 - Use `ha-monitor status` to read the add-on's bounded observer summary before
   broad Home Assistant triage. It is read-only: it records logs, unavailable
   state samples, and MCP status under `/data/monitor` but does not reload,
-  restart, edit files, run bespoke tasks, or call an LLM in this release.
+  restart, edit files, run bespoke tasks, or call an LLM by itself.
 - Use `/data/monitor/change-desk-dispatch.json` as the prepared Change Desk
   packet when present. It contains deterministic deltas, triage labels, and
   reasoning budget gates; high reasoning should happen only from explicit human
-  action.
+  action such as Change Desk's Ask Mall Cop button.
 - Treat monitor findings labeled localized connectivity noise as device,
   Modbus, Wi-Fi, socket, or reachability trouble first, not proof of broken
   Home Assistant configuration. Confirm whether the entity is safety, security,

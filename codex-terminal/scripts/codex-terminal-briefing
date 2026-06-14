@@ -54,7 +54,8 @@ Treat this file as the local map of the room.
 - `ha-monitor`: bounded read-only observer for HA logs, unavailable state
   samples, MCP status, and persistent issue fingerprints under `/data/monitor`.
   It also writes `/data/monitor/change-desk-dispatch.json`, a compact delta
-  packet with reasoning budget gates. It does not call an LLM by itself.
+  packet with reasoning budget gates. It does not call an LLM by itself; Change
+  Desk's Ask Mall Cop action is the explicit model call path.
 - `ha-site-memory`: read-only Home Assistant site memory generator that maps
   house-specific phrases, integrations, areas, and likely entity IDs under
   `/data/monitor/ha-site-memory.md`.
@@ -89,7 +90,7 @@ Treat this file as the local map of the room.
   expands the capability.
 - Treat Change Desk dispatch as the mall-cop notebook: local facts, deltas, and
   budget gates first. Use stronger reasoning only when the human asks or presses
-  Send Report.
+  Ask Mall Cop.
 - Treat monitor findings labeled localized connectivity noise as device,
   Modbus, Wi-Fi, socket, or reachability trouble first, not proof of broken
   Home Assistant configuration. Confirm whether the entity is safety, security,
