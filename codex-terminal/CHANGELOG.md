@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.5.4
+
+- Clean up the Change Desk Mall Cop report display: avoid repeating the
+  **Mall Cop: To Observe and Report** title and render basic Markdown emphasis
+  and inline code styling in the panel.
+- Ask the on-demand Mall Cop prompt to return section content only, since the
+  UI already labels the report.
+
 ## 2.5.3
 
 - Add an on-demand **Mall Cop: To Observe and Report** flow in Change Desk.

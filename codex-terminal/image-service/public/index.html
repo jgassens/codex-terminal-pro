@@ -680,11 +680,31 @@
         }
 
         .change-desk-observation {
-            white-space: pre-wrap;
+            display: grid;
+            gap: 10px;
             overflow-wrap: anywhere;
             color: var(--text);
             font-size: 13px;
             line-height: 1.5;
+        }
+
+        .change-desk-observation p {
+            margin: 0;
+        }
+
+        .change-desk-observation-heading {
+            margin-top: 2px;
+            color: var(--text);
+            font-weight: 750;
+        }
+
+        .change-desk-observation code {
+            border: 1px solid rgba(198, 208, 245, 0.16);
+            border-radius: 5px;
+            background: rgba(198, 208, 245, 0.08);
+            color: #d6e4ff;
+            padding: 0 4px;
+            font: 0.92em/1.35 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
         }
 
         #change-desk-footer {
@@ -1559,6 +1579,93 @@
             parent.appendChild(section);
         }
 
+        function normalizeMallCopSummary(summary) {
+            const lines = String(summary || '').replace(/\r\n?/g, '\n').trim().split('\n');
+            while (lines.length && !lines[0].trim()) {
+                lines.shift();
+            }
+
+            const firstLine = lines[0] || '';
+            const cleanedFirstLine = firstLine
+                .trim()
+                .replace(/^#+\s*/, '')
+                .replace(/\*\*/g, '')
+                .replace(/`/g, '')
+                .replace(/:$/, '')
+                .trim();
+            if (/^Mall Cop:\s*To Observe and Report$/i.test(cleanedFirstLine)) {
+                lines.shift();
+                while (lines.length && !lines[0].trim()) {
+                    lines.shift();
+                }
+            }
+
+            return lines.join('\n').trim();
+        }
+
+        function appendObservationInlineMarkdown(parent, text) {
+            const pattern = /(\*\*[^*\n]+?\*\*|`[^`\n]+?`)/g;
+            let cursor = 0;
+            let match;
+
+            while ((match = pattern.exec(text)) !== null) {
+                if (match.index > cursor) {
+                    parent.appendChild(document.createTextNode(text.slice(cursor, match.index)));
+                }
+
+                const token = match[0];
+                if (token.startsWith('**') && token.endsWith('**')) {
+                    parent.appendChild(changeDeskElement('strong', '', token.slice(2, -2)));
+                } else if (token.startsWith('`') && token.endsWith('`')) {
+                    parent.appendChild(changeDeskElement('code', '', token.slice(1, -1)));
+                } else {
+                    parent.appendChild(document.createTextNode(token));
+                }
+                cursor = pattern.lastIndex;
+            }
+
+            if (cursor < text.length) {
+                parent.appendChild(document.createTextNode(text.slice(cursor)));
+            }
+        }
+
+        function renderObservationBlock(container, block) {
+            const lines = block.split('\n').filter((line) => line.trim());
+            if (!lines.length) {
+                return;
+            }
+
+            const heading = lines.length === 1
+                ? lines[0].match(/^(\d+\.)\s+\*\*(.+?)\*\*$/)
+                : null;
+            if (heading) {
+                container.appendChild(changeDeskElement('div', 'change-desk-observation-heading', `${heading[1]} ${heading[2]}`));
+                return;
+            }
+
+            const paragraph = changeDeskElement('p');
+            lines.forEach((line, index) => {
+                if (index > 0) {
+                    paragraph.appendChild(document.createElement('br'));
+                }
+                appendObservationInlineMarkdown(paragraph, line);
+            });
+            container.appendChild(paragraph);
+        }
+
+        function renderObservationSummary(summary) {
+            const container = changeDeskElement('div', 'change-desk-observation');
+            const normalized = normalizeMallCopSummary(summary);
+            if (!normalized) {
+                return container;
+            }
+
+            normalized.split(/\n{2,}/).forEach((block) => {
+                renderObservationBlock(container, block);
+            });
+            return container;
+        }
+
         function renderMallCopObservation(parent, observation) {
             if (!observation?.summary) {
                 return;
@@ -1569,7 +1676,7 @@
                 observation.success === false ? 'failed' : 'ok',
                 observation.durationMs ? `${Math.round(observation.durationMs / 1000)}s` : 'ready'
             );
-            body.appendChild(changeDeskElement('div', 'change-desk-observation', observation.summary));
+            body.appendChild(renderObservationSummary(observation.summary));
             if (observation.packetPath) {
                 appendChangeDeskLine(body, 'Packet', observation.packetPath);
             }
@@ -1626,7 +1733,7 @@
             }
 
             if (latestMallCopObservation?.summary) {
-                lines.push('', 'Mall Cop: To Observe and Report:', latestMallCopObservation.summary);
+                lines.push('', 'Mall Cop: To Observe and Report:', normalizeMallCopSummary(latestMallCopObservation.summary));
             }
 
             if (data.monitor?.history) {
