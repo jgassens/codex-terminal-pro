@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.5.2
+
+- Repair cached HeyGen skill metadata during startup so persisted plugin
+  descriptions that exceed Codex CLI limits do not keep producing skill-loader
+  warnings.
+
 ## 2.5.1
 
 - Put Change Desk recommendations directly under the summary metrics so the
