@@ -41,23 +41,23 @@ Treat this file as the local map of the room.
 ## Home Assistant SSH Access
 
 - Codex Terminal Pro does not run its own SSH server.
-- If the human is already in a Home Assistant SSH shell with `/config` and
-  Docker access, they can run `/config/codex-terminal-pro-attach` to attach to
-  this add-on's live `codex-terminal` tmux session.
+- If the human is already in a Home Assistant SSH shell with `/config` access,
+  they can run `/config/codex-terminal-pro-attach`.
 - Useful host-shell commands are `/config/codex-terminal-pro-attach status`,
-  `/config/codex-terminal-pro-attach shell`,
   `/config/codex-terminal-pro-attach send "say hello"`,
   `/config/codex-terminal-pro-attach capture 120`,
   `/config/codex-terminal-pro-attach transcript 120`,
   `ask-file` with an output path under `/config`,
-  `/config/codex-terminal-pro-attach logs`, and
-  `/config/codex-terminal-pro-attach container`.
+  and `/config/codex-terminal-pro-attach logs`.
+- These commands work from the ordinary Home Assistant SSH add-on without
+  Docker by using the `/config` mailbox bridge.
 - `capture` and `transcript` are useful visibility aids; `ask-file` is the
   reliable SSH-side request/response path because it asks Codex to write the
   answer under `/config` where the SSH shell can read it.
-- If that SSH shell cannot run `docker`, the human needs the Home Assistant OS
-  host shell or an SSH add-on/session with host container access. From the raw
-  HA OS host shell, use the Home Assistant config directory path, commonly
+- Interactive `attach`, direct `shell`, and `container` discovery still need
+  Docker or a Home Assistant OS host shell because they require another
+  container's TTY. From the raw HA OS host shell, use the Home Assistant config
+  directory path, commonly
   `/mnt/data/supervisor/homeassistant/codex-terminal-pro-attach`.
 
 ## Home Assistant Tools

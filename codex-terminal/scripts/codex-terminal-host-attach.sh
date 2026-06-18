@@ -6,20 +6,20 @@ usage() {
     cat <<'USAGE'
 Usage: codex-terminal-pro-attach [command] [args...]
 
-Run this from a Home Assistant SSH shell that has /config and Docker access.
-From the raw HA OS host shell, run the same file from Home Assistant's config
-directory path instead.
+Run this from a Home Assistant SSH shell with /config access. Docker access is
+used when available for interactive attach/shell. Without Docker, status, send,
+capture, transcript, logs, and ask-file use the /config mailbox bridge.
 
 Commands:
-  attach     Attach to the live Codex Terminal Pro tmux session. Default.
-  shell      Open a /config shell inside the Codex Terminal Pro add-on.
+  attach     Attach to the live tmux session. Requires Docker/host access.
+  shell      Open a /config shell inside the add-on. Requires Docker/host access.
   send       Send text to the Codex tmux pane and press Enter.
   ask-file   Ask Codex to write an answer to a file under /config.
   capture    Print recent visible tmux pane output. Default: 200 lines.
   transcript Print recent internal transcript lines. Default: 200 lines.
-  logs       Follow /data/logs/codex-terminal.log inside the add-on.
+  logs       Follow transcript with Docker, or print recent lines via bridge.
   status     Show the discovered container and tmux session status.
-  container  Print the discovered Codex Terminal Pro container name.
+  container  Print the container name. Requires Docker/host access.
 
 Examples:
   codex-terminal-pro-attach send "say hello"
@@ -28,6 +28,7 @@ Examples:
   codex-terminal-pro-attach ask-file /config/codex-ssh-reply.txt "write a one-line status"
 
 Override discovery with CODEX_TERMINAL_PRO_CONTAINER=<container-name>.
+Override bridge wait time with CODEX_TERMINAL_PRO_BRIDGE_TIMEOUT=<seconds>.
 USAGE
 }
 
@@ -37,23 +38,9 @@ find_container() {
         return 0
     fi
 
-    docker ps --format '{{.Names}}' \
+    docker ps --format '{{.Names}}' 2>/dev/null \
         | grep -E '^addon_.*_codex_terminal_pro$' \
         | head -n 1
-}
-
-require_docker() {
-    if command -v docker >/dev/null 2>&1; then
-        return 0
-    fi
-
-    cat >&2 <<'ERROR'
-docker is not available in this shell.
-
-Use a Home Assistant OS host shell, or an SSH add-on/session with host container
-access. Codex Terminal Pro itself does not need to expose a separate SSH server.
-ERROR
-    exit 1
 }
 
 docker_exec_interactive() {
@@ -80,6 +67,138 @@ validate_line_count() {
             exit 2
             ;;
     esac
+}
+
+bridge_request() {
+    command_name="$1"
+    input_file="$2"
+    shift 2
+
+    bridge_root="${CODEX_TERMINAL_PRO_BRIDGE_DIR:-/config/.codex-terminal-pro/ssh-bridge}"
+    request_root="${bridge_root}/requests"
+    timeout="${CODEX_TERMINAL_PRO_BRIDGE_TIMEOUT:-30}"
+
+    case "$timeout" in
+        ''|*[!0-9]*)
+            timeout=30
+            ;;
+    esac
+
+    if ! mkdir -p "$request_root"; then
+        printf 'Could not create bridge request directory: %s\n' "$request_root" >&2
+        exit 1
+    fi
+
+    request_dir="$(mktemp -d "${request_root}/request.XXXXXX")"
+    printf '%s\n' "$command_name" > "${request_dir}/command"
+    if [ -n "$input_file" ]; then
+        cp "$input_file" "${request_dir}/stdin"
+    else
+        : > "${request_dir}/stdin"
+    fi
+
+    arg_index=1
+    for arg in "$@"; do
+        printf '%s\n' "$arg" > "${request_dir}/arg${arg_index}"
+        arg_index=$((arg_index + 1))
+    done
+
+    touch "${request_dir}/ready"
+
+    elapsed=0
+    while [ "$elapsed" -lt "$timeout" ]; do
+        if [ -f "${request_dir}/done" ]; then
+            if [ -s "${request_dir}/stderr" ]; then
+                cat "${request_dir}/stderr" >&2
+            fi
+            if [ -f "${request_dir}/response" ]; then
+                cat "${request_dir}/response"
+            fi
+            if [ -f "${request_dir}/exit_code" ]; then
+                exit_code="$(cat "${request_dir}/exit_code")"
+            else
+                exit_code=1
+            fi
+            exit "$exit_code"
+        fi
+
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+
+    printf 'Timed out waiting for Codex Terminal Pro SSH bridge after %s seconds.\n' "$timeout" >&2
+    printf 'The add-on may need to be updated/restarted so the bridge daemon starts.\n' >&2
+    exit 1
+}
+
+send_bridge_text_command() {
+    tmp_file="$(mktemp)"
+    trap 'rm -f "$tmp_file"' EXIT
+
+    if [ "$#" -gt 0 ]; then
+        printf '%s' "$*" > "$tmp_file"
+    else
+        if [ -t 0 ]; then
+            printf 'Usage: codex-terminal-pro-attach send "prompt text"\n' >&2
+            printf 'Or pipe prompt text on stdin.\n' >&2
+            exit 2
+        fi
+        cat > "$tmp_file"
+    fi
+
+    bridge_request send "$tmp_file"
+}
+
+ask_bridge_file_command() {
+    if [ "$#" -lt 1 ]; then
+        printf 'Usage: codex-terminal-pro-attach ask-file /config/path.txt [prompt]\n' >&2
+        exit 2
+    fi
+
+    output_path="$1"
+    shift
+
+    case "$output_path" in
+        /config/*)
+            ;;
+        *)
+            printf 'ask-file output path must be under /config, got: %s\n' "$output_path" >&2
+            exit 2
+            ;;
+    esac
+
+    tmp_file="$(mktemp)"
+    trap 'rm -f "$tmp_file"' EXIT
+
+    if [ "$#" -gt 0 ]; then
+        printf '%s' "$*" > "$tmp_file"
+    else
+        if [ -t 0 ]; then
+            printf 'Usage: codex-terminal-pro-attach ask-file /config/path.txt "prompt text"\n' >&2
+            printf 'Or pipe prompt text on stdin after the output path.\n' >&2
+            exit 2
+        fi
+        cat > "$tmp_file"
+    fi
+
+    bridge_request ask-file "$tmp_file" "$output_path"
+}
+
+docker_unavailable() {
+    cat >&2 <<'ERROR'
+Interactive attach, shell, and container discovery need Docker access.
+
+This SSH shell can still use the mailbox bridge for:
+  /config/codex-terminal-pro-attach status
+  /config/codex-terminal-pro-attach capture 120
+  /config/codex-terminal-pro-attach transcript 120
+  /config/codex-terminal-pro-attach send "prompt text"
+  /config/codex-terminal-pro-attach ask-file /config/codex-ssh-reply.txt "prompt text"
+
+If bridge commands time out, update/restart Codex Terminal Pro so the bridge
+daemon starts inside that add-on.
+ERROR
+    exit 1
 }
 
 send_stdin_to_codex() {
@@ -234,17 +353,34 @@ main() {
         exit 0
     fi
 
-    require_docker
-    container="$(find_container || true)"
+    container=""
+    if command -v docker >/dev/null 2>&1; then
+        container="$(find_container || true)"
+    fi
 
     if [ -z "$container" ]; then
-        cat >&2 <<'ERROR'
-Could not find a running Codex Terminal Pro add-on container.
-
-Start the add-on first, then retry. If this is a non-standard install, set
-CODEX_TERMINAL_PRO_CONTAINER to the container name from `docker ps`.
-ERROR
-        exit 1
+        case "$command_name" in
+            status)
+                bridge_request status ""
+                ;;
+            logs|transcript)
+                validate_line_count "${1:-200}"
+                bridge_request transcript "" "${1:-200}"
+                ;;
+            capture)
+                validate_line_count "${1:-200}"
+                bridge_request capture "" "${1:-200}"
+                ;;
+            send)
+                send_bridge_text_command "$@"
+                ;;
+            ask-file)
+                ask_bridge_file_command "$@"
+                ;;
+            attach|shell|container)
+                docker_unavailable
+                ;;
+        esac
     fi
 
     case "$command_name" in

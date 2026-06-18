@@ -94,36 +94,44 @@ to offer updates.
 ## Home Assistant SSH Access
 
 Codex Terminal Pro does not run its own SSH server. If you already SSH into
-Home Assistant and that shell has `/config` plus Docker access, the add-on
-writes a helper into `/config`:
+Home Assistant and that shell can see `/config`, the add-on writes a helper
+there:
 
 ```bash
 /config/codex-terminal-pro-attach
 ```
 
-The default command attaches to the live `codex-terminal` tmux session inside
-the running add-on container. Additional commands:
+With Docker access, the default command can attach to the live `codex-terminal`
+tmux session inside the running add-on container. Without Docker access, the
+ordinary Home Assistant SSH add-on still supports these mailbox-backed commands:
 
 ```bash
 /config/codex-terminal-pro-attach status
-/config/codex-terminal-pro-attach shell
 /config/codex-terminal-pro-attach send "say hello"
 /config/codex-terminal-pro-attach capture 120
 /config/codex-terminal-pro-attach transcript 120
 /config/codex-terminal-pro-attach ask-file /config/codex-ssh-reply.txt "write a one-line status"
 /config/codex-terminal-pro-attach logs
-/config/codex-terminal-pro-attach container
 ```
 
 `capture` prints recent visible tmux pane output, while `transcript` prints the
-tail of the add-on's internal `/data/logs/codex-terminal.log` through Docker.
-For reliable SSH-side request/response checks, use `ask-file`; it sends Codex a
-file-backed request and tells you which `/config` file to `cat`.
+tail of the add-on's internal `/data/logs/codex-terminal.log` through the Codex
+Terminal Pro bridge. For reliable SSH-side request/response checks, use
+`ask-file`; it sends Codex a file-backed request and tells you which `/config`
+file to `cat`.
 
-The helper discovers GitHub and local install container names automatically. If
-your SSH shell cannot run `docker`, use the Home Assistant OS host shell or an
-SSH add-on/session with host container access. From the raw HA OS host shell,
-run the same helper from the Home Assistant config directory path, commonly
+Interactive `attach`, direct `shell`, and `container` discovery still need
+Docker or a Home Assistant OS host shell because they require another
+container's TTY:
+
+```bash
+/config/codex-terminal-pro-attach
+/config/codex-terminal-pro-attach shell
+/config/codex-terminal-pro-attach container
+```
+
+From the raw HA OS host shell, run the same helper from the Home Assistant
+config directory path, commonly
 `/mnt/data/supervisor/homeassistant/codex-terminal-pro-attach`.
 
 ## First Login

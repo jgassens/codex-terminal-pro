@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.5.7
+
+- Add a `/config` mailbox bridge so the ordinary Home Assistant SSH add-on can
+  run `codex-terminal-pro-attach status`, `send`, `capture`, `transcript`,
+  `logs`, and `ask-file` without Docker access.
+- Keep Docker/host access only for true interactive attach, direct shell, and
+  container-name discovery.
+
 ## 2.5.6
 
 - Remove the persisted HeyGen Codex plugin cache during startup instead of

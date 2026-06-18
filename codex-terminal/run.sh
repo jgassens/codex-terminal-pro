@@ -303,7 +303,7 @@ install_tools() {
 
 log_startup_diagnostics() {
     local app_name="${APP_NAME:-${ADDON_NAME:-Codex Terminal Pro}}"
-    local app_version="${BUILD_VERSION:-${APP_VERSION:-2.5.6}}"
+    local app_version="${BUILD_VERSION:-${APP_VERSION:-2.5.7}}"
 
     bashio::log.info "Startup diagnostics:"
     bashio::log.info "  - Date: $(date)"
@@ -547,13 +547,14 @@ write_codex_terminal_agents_block() {
   packet when present. It contains deterministic deltas, triage labels, and
   reasoning budget gates; high reasoning should happen only from explicit human
   action such as Change Desk's Ask Mall Cop button.
-- From a Home Assistant SSH shell with `/config` and Docker access, run
-  `/config/codex-terminal-pro-attach` to attach to this add-on's live tmux
-  session. From the raw HA OS host shell, use the Home Assistant config
-  directory path instead. It discovers the GitHub or local add-on container name
-  automatically. For SSH-side readback, `capture` and `transcript` can show
-  recent output; `ask-file` is the reliable path because it asks Codex to write
-  the answer under `/config`.
+- From a Home Assistant SSH shell with `/config` access, run
+  `/config/codex-terminal-pro-attach`. In the ordinary Home Assistant SSH
+  add-on, `status`, `send`, `capture`, `transcript`, `logs`, and `ask-file`
+  work through the `/config` mailbox bridge without Docker access. Interactive
+  `attach`, direct `shell`, and `container` discovery still need Docker or the
+  Home Assistant OS host shell. For SSH-side readback, `capture` and
+  `transcript` can show recent output; `ask-file` is the reliable path because
+  it asks Codex to write the answer under `/config`.
 - Treat monitor findings labeled localized connectivity noise as device,
   Modbus, Wi-Fi, socket, or reachability trouble first, not proof of broken
   Home Assistant configuration. Confirm whether the entity is safety, security,
@@ -925,6 +926,23 @@ start_image_service() {
     fi
 }
 
+start_ssh_bridge() {
+    local bridge_bin="/opt/scripts/codex-terminal-ssh-bridge.sh"
+
+    if [ ! -x "${bridge_bin}" ]; then
+        bashio::log.warning "Home Assistant SSH bridge helper is not available at ${bridge_bin}"
+        return 0
+    fi
+
+    bashio::log.info "Starting Home Assistant SSH bridge..."
+    (
+        "${bridge_bin}" 2>&1 | while IFS= read -r line; do
+            bashio::log.info "[SSH Bridge] ${line}"
+        done
+    ) &
+    bashio::log.info "Home Assistant SSH bridge background PID: $!"
+}
+
 start_web_terminal() {
     local port=7681
     local launch_command
@@ -962,6 +980,7 @@ start_web_terminal() {
     start_image_service
     prepare_tmux_session "${tmux_session}" "${tmux_launcher}" "${tmux_config}" "${transcript}" \
         "${transcript_enabled}" "${transcript_max_bytes}" "${transcript_backups}" "${terminal_history_limit}"
+    start_ssh_bridge
 
     bashio::log.info "Final ttyd command: ttyd --port ${port} --interface 127.0.0.1 --writable --ping-interval 30 --client-option reconnect=5 --client-option macOptionClickForcesSelection=true --client-option rightClickSelectsWord=true tmux -f ${tmux_config} attach-session -t ${tmux_session}"
 
