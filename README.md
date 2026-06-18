@@ -12,65 +12,42 @@ This is an MVP fork. It is not an official OpenAI add-on.
 
 ## Features
 
-- Home Assistant ingress web terminal powered by ttyd.
-- Sidebar panel entry for admin users via Home Assistant ingress.
-- Polished Codex-focused web wrapper with image paste/drop support and a
-  read-only Change Desk review panel.
-- Persistent `tmux` session so browser reconnects do not kill Codex.
-- Host-SSH helper written to `/config/codex-terminal-pro-attach`, with
-  mailbox-backed status, send, capture, transcript, logs, and ask-file commands
-  for the ordinary Home Assistant SSH add-on.
-- Switchable Codex/Shell modes, with Shell mode backed by a real interactive
-  `/config` tmux shell window.
-- Touch-friendly terminal text selection mode for phones and tablets.
-- Paste button with clipboard-text/image support and manual mobile fallback.
-- Mobile command bar with native typing, shortcut keys, tmux scrollback, and
-  return-to-prompt controls.
-- `,,` shell dispatch from the Codex prompt, so commands such as
-  `,,ha store reload` run in the Shell pane instead of being sent to Codex.
-- Hidden Shell dispatch output capture for completed commands, with copy and
-  dismiss controls in the Codex view.
-- Change Desk snapshot for Home Assistant YAML audit, `ha core check`, recent
-  log issues, persistent HA monitor findings, prepared dispatch deltas, live REST
-  config reachability, and MCP Server status before reloads or restarts.
-- Bounded `ha-monitor` observer that fingerprints recent HA log issues, samples
-  unavailable/unknown states, records MCP status, and stores safe summaries under
-  `/data/monitor`.
-- Deterministic Change Desk dispatch packets under `/data/monitor` with compact
-  deltas, config-change fingerprints, localized-connectivity triage, and
-  reasoning budget gates; no autonomous model calls are made by the monitor.
-- Read-only `ha-site-memory` helper that builds a compact house dictionary under
-  `/data/monitor/ha-site-memory.md` so phrases like "Ring lights" resolve to
-  likely integrations, areas, and entity IDs before Codex starts troubleshooting.
-- Trusted human Shell lane for commands typed in Shell mode or dispatched with
-  `,,`, while Codex/non-interactive Home Assistant operations remain guarded.
-- Codex CLI pinned and installed in the add-on image with
-  `npm install -g @openai/codex@0.134.0`.
-- Starts in `/config` so Codex can inspect Home Assistant YAML and storage.
-- Persistent Codex state under `/data/.codex`.
-- Upstream Codex CLI startup update prompts are disabled so add-on updates stay
-  controlled by Codex Terminal Pro image releases.
-- Supported Codex TUI defaults for theme colors, model, Fast mode, context, and
-  rolling usage limits.
-- Device-code login helper for headless add-on use.
-- Image paste and drag-drop upload support with files saved in `/data/images`
-  and paths inserted into the prompt.
-- Persistent APK and Python package helpers under `/data/packages`.
-- Home Assistant CLI (`ha`), `ha-toolbox`, `ha-api`, `ha-ws`,
-  `ha-mcp-status`, `ha-monitor`, `ha-site-memory`, and GitHub CLI (`gh`)
-  included.
-- Read-only Home Assistant REST/WebSocket helpers for exact live entity
-  snapshots, service schemas, entity registry discovery, target expansion,
-  exposed-entity checks, and automation snippet validation.
-- Home Assistant field guide at `/opt/home-assistant/HA.md` plus common admin
-  utilities including `sqlite3`, MQTT clients, DNS/network tools, OpenSSL,
-  OpenSSH client, and `rsync`.
-- Solar commissioning toolbox with `solar-toolbox` for site intake, read-only
-  gateway discovery, Home Assistant energy/entity audits, protocol/vendor
-  recognition, and pre-change restore planning.
-- Read-only Modbus toolbox with `modbus-read`, `modbus-scan`, `ncat`,
-  `socat`, `tcpdump`, `libmodbus`, `pymodbus`, `minimalmodbus`, and
-  `pyserial`.
+- Safer Home Assistant edits: Codex starts in `/config`, can inspect YAML and
+  storage directly, and Change Desk gathers `ha core check`, recent logs, live
+  API reachability, MCP status, and monitor findings before you reload or
+  restart.
+- Better troubleshooting context: bundled read-only REST/WebSocket helpers,
+  `ha-toolbox`, and `/opt/home-assistant/HA.md` give Codex exact entity states,
+  service schemas, registry matches, exposed entities, and automation validation
+  instead of forcing it to guess from stale config snippets.
+- Faster repeat-issue triage: `ha-monitor` records bounded log fingerprints,
+  unavailable/unknown state samples, MCP status, and compact deltas under
+  `/data/monitor`, so recurring device or config problems do not have to be
+  rediscovered from scratch every session.
+- House-aware help: `ha-site-memory` builds a local map of areas, integrations,
+  and likely entity IDs, so natural phrases like "Ring lights" can resolve to
+  the right Home Assistant surfaces before Codex proposes a change.
+- Human-controlled operations: risky Home Assistant management commands stay
+  behind the Supervisor broker, while commands you type in Shell mode or send
+  with `,,` stay in a trusted human lane for deliberate reloads, restarts, and
+  update work.
+- Reliable access from more places: the ingress sidebar, persistent `tmux`
+  session, mobile command bar, paste fallbacks, and `/config/codex-terminal-pro-attach`
+  SSH helper keep the same Codex session reachable across browser refreshes,
+  phones, tablets, and ordinary Home Assistant SSH shells.
+- Easier evidence sharing: paste or drop screenshots and photos into the prompt,
+  keep uploads under `/data/images`, and use transcript/capture helpers when
+  you need to recover terminal output that scrolled away.
+- Practical field tooling for real homes: solar and Modbus helpers support
+  read-only gateway discovery, Home Assistant Energy audits, register reads,
+  MQTT/DNS/network checks, and pre-change restore planning before touching live
+  inverter, meter, or automation settings.
+- Durable add-on state: Codex auth/config, GitHub CLI config, uploaded images,
+  terminal transcripts, monitor summaries, and persistent APK/Python packages
+  live under `/data`, so updates do not wipe the working environment.
+- Headless-friendly setup and updates: device-code login support and pinned
+  bundled Codex CLI releases keep authentication and CLI upgrades manageable
+  from Home Assistant rather than from an interactive desktop.
 
 ## Installation
 
