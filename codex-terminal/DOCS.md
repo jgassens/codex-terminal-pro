@@ -214,11 +214,11 @@ warns about. `auto-review`, `permissions`, and `approval-mode` are valid Codex
 permission concepts, but this pinned CLI does not accept those strings as
 footer item IDs.
 
-Startup also repairs the known HeyGen plugin cache issue where the persisted
-`/data/.codex/plugins/cache/openai-curated-remote/heygen/*/skills/*/SKILL.md`
-metadata uses descriptions longer than Codex CLI accepts. The repair shortens
-only those cached skill descriptions and does not read or modify
-`/data/.codex/auth.json`.
+Startup removes the persisted HeyGen Codex plugin cache when it is present at
+`/data/.codex/plugins/cache/openai-curated-remote/heygen`. HeyGen is not part
+of the Home Assistant add-on workflow, and removing the stale cache prevents
+repeated Codex skill-loader warnings about oversized HeyGen skill descriptions.
+This cleanup does not read or modify `/data/.codex/auth.json`.
 
 ## Configuration
 

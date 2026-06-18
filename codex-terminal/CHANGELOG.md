@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.5.6
+
+- Remove the persisted HeyGen Codex plugin cache during startup instead of
+  trying to repair its oversized skill descriptions. HeyGen is not part of the
+  Home Assistant add-on workflow, and removing that cache prevents repeated
+  Codex skill-loader warnings.
+
 ## 2.5.5
 
 - Write `/config/codex-terminal-pro-attach` on startup so a Home Assistant SSH

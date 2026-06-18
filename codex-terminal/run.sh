@@ -56,7 +56,7 @@ init_environment() {
     ensure_codex_file_credentials
     ensure_codex_update_prompt_disabled
     ensure_codex_tui_defaults
-    repair_codex_cached_skill_descriptions
+    remove_heygen_cached_plugin
 
     if [ -f "$CODEX_HOME/auth.json" ]; then
         chmod 600 "$CODEX_HOME/auth.json"
@@ -246,97 +246,28 @@ status_line = ["run-state", "model-with-reasoning", "fast-mode", "context-remain
 TUI_EOF
 }
 
-repair_codex_cached_skill_descriptions() {
+remove_heygen_cached_plugin() {
     local heygen_cache="$CODEX_HOME/plugins/cache/openai-curated-remote/heygen"
-    local repair_output
 
-    if [ ! -d "$heygen_cache" ]; then
+    case "$heygen_cache" in
+        /data/.codex/plugins/cache/openai-curated-remote/heygen)
+            ;;
+        *)
+            bashio::log.warning "Refusing to remove unexpected HeyGen cache path: ${heygen_cache}"
+            return 0
+            ;;
+    esac
+
+    if [ ! -e "$heygen_cache" ] && [ ! -L "$heygen_cache" ]; then
         return 0
     fi
 
-    if ! repair_output="$(python3 - "$heygen_cache" <<'PY' 2>&1
-from pathlib import Path
-import re
-import sys
-
-root = Path(sys.argv[1])
-descriptions = {
-    "heygen-avatar": (
-        "Create persistent HeyGen avatars, digital twins, or named presenter "
-        "identities with reusable face and voice metadata. Use before video "
-        "generation when the user needs a new avatar, wants to appear in "
-        "videos, or asks to design a character presenter."
-    ),
-    "heygen-video": (
-        "Generate HeyGen presenter videos with the v3 Video Agent pipeline. "
-        "Use for presenter-led videos, personalized video messages, "
-        "explainers, tutorials, product demos, and talking-head requests. "
-        "For requests that also need a new avatar or photo-based identity "
-        "setup, create the avatar first."
-    ),
-}
-
-def yaml_quote(value: str) -> str:
-    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
-
-def replace_description(frontmatter: str, description: str) -> tuple[str, bool]:
-    lines = frontmatter.splitlines()
-    updated = []
-    index = 0
-    changed = False
-
-    while index < len(lines):
-        line = lines[index]
-        if re.match(r"^description\s*:", line):
-            updated.append(f"description: {yaml_quote(description)}")
-            index += 1
-            while index < len(lines):
-                next_line = lines[index]
-                if re.match(r"^[A-Za-z0-9_-]+\s*:", next_line):
-                    break
-                if next_line and not next_line[0].isspace():
-                    break
-                index += 1
-            changed = True
-            continue
-
-        updated.append(line)
-        index += 1
-
-    return "\n".join(updated), changed
-
-for path in sorted(root.glob("*/skills/*/SKILL.md")):
-    skill_name = path.parent.name
-    description = descriptions.get(skill_name)
-    if not description:
-        continue
-
-    text = path.read_text(encoding="utf-8")
-    if not text.startswith("---\n"):
-        continue
-
-    end = text.find("\n---", 4)
-    if end == -1:
-        continue
-
-    frontmatter = text[4:end]
-    updated_frontmatter, changed = replace_description(frontmatter, description)
-    if not changed or updated_frontmatter == frontmatter:
-        continue
-
-    path.write_text("---\n" + updated_frontmatter + text[end:], encoding="utf-8")
-    print(f"Repaired Codex skill description: {path.relative_to(root)}")
-PY
-    )"; then
-        bashio::log.warning "Codex cached skill metadata repair failed: ${repair_output}"
+    if rm -rf -- "$heygen_cache"; then
+        bashio::log.info "Removed irrelevant HeyGen Codex plugin cache from ${heygen_cache}"
         return 0
     fi
 
-    if [ -n "$repair_output" ]; then
-        while IFS= read -r line; do
-            bashio::log.info "$line"
-        done <<< "$repair_output"
-    fi
+    bashio::log.warning "Failed to remove HeyGen Codex plugin cache from ${heygen_cache}"
 }
 
 install_tools() {
@@ -372,7 +303,7 @@ install_tools() {
 
 log_startup_diagnostics() {
     local app_name="${APP_NAME:-${ADDON_NAME:-Codex Terminal Pro}}"
-    local app_version="${BUILD_VERSION:-${APP_VERSION:-2.5.5}}"
+    local app_version="${BUILD_VERSION:-${APP_VERSION:-2.5.6}}"
 
     bashio::log.info "Startup diagnostics:"
     bashio::log.info "  - Date: $(date)"
