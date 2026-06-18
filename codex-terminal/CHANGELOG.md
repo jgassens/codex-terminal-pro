@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.5.5
+
+- Write `/config/codex-terminal-pro-attach` on startup so a Home Assistant SSH
+  or host shell with Docker access can attach to the live Codex Terminal Pro
+  tmux session without exposing a second SSH server from the add-on.
+- Add helper subcommands for tmux attach, `/config` shell, direct prompt send,
+  tmux pane capture, transcript tailing, file-backed Codex requests, status, and
+  container-name discovery.
+
 ## 2.5.4
 
 - Clean up the Change Desk Mall Cop report display: avoid repeating the

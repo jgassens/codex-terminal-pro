@@ -48,6 +48,13 @@ You are running inside the Codex Terminal Pro Home Assistant add-on.
   `,,` prompt; the prefix is the human's direct shell-dispatch instruction.
 - If the terminal is in Shell mode, treat it as a real interactive shell, not a
   Codex permission bypass.
+- If the human wants to reach Codex Terminal Pro from Home Assistant SSH, point
+  them to `/config/codex-terminal-pro-attach`. It must be run from a Home
+  Assistant SSH shell with `/config` and Docker access; from the raw HA OS host
+  shell, use the Home Assistant config directory path instead. It attaches to
+  the add-on's live tmux session. For SSH-side readback, `capture` and
+  `transcript` can show recent output; `ask-file` is the reliable path because
+  it asks Codex to write the answer under `/config`.
 - Do not reconstruct or print the Supervisor token.
 - Do not read `/data/.supervisor/token` unless you are maintaining the broker.
 - Never auto-answer a Supervisor broker challenge if one appears. Stop and

@@ -91,6 +91,41 @@ When publishing an update, bump `version` in `config.yaml`, push to GitHub, and
 reload the Home Assistant add-on store. Home Assistant uses that version value
 to offer updates.
 
+## Home Assistant SSH Access
+
+Codex Terminal Pro does not run its own SSH server. If you already SSH into
+Home Assistant and that shell has `/config` plus Docker access, the add-on
+writes a helper into `/config`:
+
+```bash
+/config/codex-terminal-pro-attach
+```
+
+The default command attaches to the live `codex-terminal` tmux session inside
+the running add-on container. Additional commands:
+
+```bash
+/config/codex-terminal-pro-attach status
+/config/codex-terminal-pro-attach shell
+/config/codex-terminal-pro-attach send "say hello"
+/config/codex-terminal-pro-attach capture 120
+/config/codex-terminal-pro-attach transcript 120
+/config/codex-terminal-pro-attach ask-file /config/codex-ssh-reply.txt "write a one-line status"
+/config/codex-terminal-pro-attach logs
+/config/codex-terminal-pro-attach container
+```
+
+`capture` prints recent visible tmux pane output, while `transcript` prints the
+tail of the add-on's internal `/data/logs/codex-terminal.log` through Docker.
+For reliable SSH-side request/response checks, use `ask-file`; it sends Codex a
+file-backed request and tells you which `/config` file to `cat`.
+
+The helper discovers GitHub and local install container names automatically. If
+your SSH shell cannot run `docker`, use the Home Assistant OS host shell or an
+SSH add-on/session with host container access. From the raw HA OS host shell,
+run the same helper from the Home Assistant config directory path, commonly
+`/mnt/data/supervisor/homeassistant/codex-terminal-pro-attach`.
+
 ## First Login
 
 Run:
@@ -144,6 +179,7 @@ When auto-launch is disabled, or after Codex exits, the menu provides:
 - GitHub CLI config: `/data/.config/gh`
 - Uploaded images: `/data/images`
 - Persistent packages: `/data/packages`
+- Host SSH attach helper: `/config/codex-terminal-pro-attach`
 
 Modbus helper docs are installed at `/opt/modbus/MODBUS.md`. Site-specific
 register notes can live under `/config/modbus/` if you want them backed up with
@@ -258,8 +294,8 @@ codex-terminal-briefing
 The briefing covers `,,` shell dispatch, `codex-shell-dispatch`, `ha`,
 `supervisor-api`, `ha-toolbox`, `ha-api`, `ha-ws`, `ha-mcp-status`,
 `ha-monitor`, `ha-site-memory`, Shell mode, mobile command input,
-`solar-toolbox`, `modbus-toolbox`, `modbus-scan`, `modbus-read`, and the
-sensitive files it should avoid.
+the Home Assistant SSH attach helper, `solar-toolbox`, `modbus-toolbox`,
+`modbus-scan`, `modbus-read`, and the sensitive files it should avoid.
 
 ## Home Assistant Toolbox And Live API Helpers
 

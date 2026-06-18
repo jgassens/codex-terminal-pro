@@ -21,6 +21,11 @@ The terminal runs inside a persistent `tmux` session, so browser reconnects and
 Home Assistant ingress websocket drops should reattach instead of restarting
 Codex.
 
+On startup, the add-on writes `/config/codex-terminal-pro-attach`. Run that
+helper from a Home Assistant SSH shell with `/config` plus Docker access to
+attach to the live Codex Terminal Pro tmux session without exposing a second
+SSH server from this add-on.
+
 Mouse wheel scrolling uses tmux scrollback instead of sending history keys to
 Codex. If needed, enter tmux copy mode with `Ctrl-b [` and leave it with `q`.
 Terminal output is also mirrored to `/data/logs/codex-terminal.log`; treat that
@@ -90,6 +95,42 @@ Common update flow from Codex mode:
 ,,ha apps restart 0a381758_codex_terminal_pro
 ,,ha apps info 0a381758_codex_terminal_pro
 ```
+
+## Home Assistant SSH Access
+
+Codex Terminal Pro does not need its own SSH listener. SSH into Home Assistant
+as usual, then run the helper from a Home Assistant SSH shell that has
+`/config` plus Docker access:
+
+```bash
+/config/codex-terminal-pro-attach
+```
+
+Useful subcommands:
+
+```bash
+/config/codex-terminal-pro-attach status
+/config/codex-terminal-pro-attach shell
+/config/codex-terminal-pro-attach send "say hello"
+/config/codex-terminal-pro-attach capture 120
+/config/codex-terminal-pro-attach transcript 120
+/config/codex-terminal-pro-attach ask-file /config/codex-ssh-reply.txt "write a one-line status"
+/config/codex-terminal-pro-attach logs
+/config/codex-terminal-pro-attach container
+```
+
+`capture` prints recent visible tmux pane output, while `transcript` prints the
+tail of the add-on's internal `/data/logs/codex-terminal.log` through Docker.
+When you need a clean SSH-side answer, use `ask-file` and then read the
+requested `/config` file from the SSH shell.
+
+The default command attaches to the running `codex-terminal` tmux session inside
+the add-on container. The helper auto-discovers both GitHub and local install
+container names. If the SSH shell cannot run `docker`, use the Home Assistant OS
+host shell or an SSH add-on/session with host container access. From the raw HA
+OS host shell, run the same helper from the Home Assistant config directory
+path, commonly
+`/mnt/data/supervisor/homeassistant/codex-terminal-pro-attach`.
 
 ## Codex Runtime Guidance
 

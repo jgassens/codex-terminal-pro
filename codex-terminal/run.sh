@@ -372,7 +372,7 @@ install_tools() {
 
 log_startup_diagnostics() {
     local app_name="${APP_NAME:-${ADDON_NAME:-Codex Terminal Pro}}"
-    local app_version="${BUILD_VERSION:-${APP_VERSION:-2.5.4}}"
+    local app_version="${BUILD_VERSION:-${APP_VERSION:-2.5.5}}"
 
     bashio::log.info "Startup diagnostics:"
     bashio::log.info "  - Date: $(date)"
@@ -494,6 +494,22 @@ setup_shell_dispatch_profile() {
     fi
 }
 
+setup_host_ssh_attach_helper() {
+    local source="/opt/scripts/codex-terminal-host-attach.sh"
+    local target="/config/codex-terminal-pro-attach"
+
+    if [ -f "${source}" ]; then
+        if cp "${source}" "${target}"; then
+            chmod 755 "${target}"
+            bashio::log.info "Home Assistant SSH attach helper written to ${target}"
+        else
+            bashio::log.warning "Could not write Home Assistant SSH attach helper to ${target}"
+        fi
+    else
+        bashio::log.warning "Home Assistant SSH attach helper missing: ${source}"
+    fi
+}
+
 setup_persistent_packages() {
     if [ -f "/opt/scripts/persist-install" ]; then
         cp /opt/scripts/persist-install /usr/local/bin/persist-install
@@ -600,6 +616,13 @@ write_codex_terminal_agents_block() {
   packet when present. It contains deterministic deltas, triage labels, and
   reasoning budget gates; high reasoning should happen only from explicit human
   action such as Change Desk's Ask Mall Cop button.
+- From a Home Assistant SSH shell with `/config` and Docker access, run
+  `/config/codex-terminal-pro-attach` to attach to this add-on's live tmux
+  session. From the raw HA OS host shell, use the Home Assistant config
+  directory path instead. It discovers the GitHub or local add-on container name
+  automatically. For SSH-side readback, `capture` and `transcript` can show
+  recent output; `ask-file` is the reliable path because it asks Codex to write
+  the answer under `/config`.
 - Treat monitor findings labeled localized connectivity noise as device,
   Modbus, Wi-Fi, socket, or reachability trouble first, not proof of broken
   Home Assistant configuration. Confirm whether the entity is safety, security,
@@ -1120,6 +1143,7 @@ main() {
     log_startup_diagnostics
     setup_session_picker
     setup_shell_dispatch_profile
+    setup_host_ssh_attach_helper
     setup_persistent_packages
     setup_supervisor_broker
     start_ha_monitor

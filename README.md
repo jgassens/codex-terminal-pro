@@ -17,6 +17,9 @@ This is an MVP fork. It is not an official OpenAI add-on.
 - Polished Codex-focused web wrapper with image paste/drop support and a
   read-only Change Desk review panel.
 - Persistent `tmux` session so browser reconnects do not kill Codex.
+- Host-SSH attach helper written to `/config/codex-terminal-pro-attach` so an
+  existing Home Assistant SSH shell with Docker access can attach to the live
+  Codex Terminal Pro session.
 - Switchable Codex/Shell modes, with Shell mode backed by a real interactive
   `/config` tmux shell window.
 - Touch-friendly terminal text selection mode for phones and tablets.
@@ -105,6 +108,43 @@ compare the installed version with the version in this repository.
 Codex Terminal Pro registers a Home Assistant ingress sidebar panel titled
 **Codex Terminal Pro**. The panel is admin-only by design because the terminal
 has `/config` write access and Home Assistant manager API access.
+
+## Home Assistant SSH Access
+
+Codex Terminal Pro does not run its own SSH server. If you already SSH into
+Home Assistant and that shell has `/config` plus Docker access, use the helper
+that the add-on writes into `/config`:
+
+```bash
+/config/codex-terminal-pro-attach
+```
+
+That attaches to the existing `codex-terminal` tmux session inside the running
+add-on container. Useful variants:
+
+```bash
+/config/codex-terminal-pro-attach status
+/config/codex-terminal-pro-attach shell
+/config/codex-terminal-pro-attach send "say hello"
+/config/codex-terminal-pro-attach capture 120
+/config/codex-terminal-pro-attach transcript 120
+/config/codex-terminal-pro-attach ask-file /config/codex-ssh-reply.txt "write a one-line status"
+/config/codex-terminal-pro-attach logs
+/config/codex-terminal-pro-attach container
+```
+
+`capture` reads the current tmux pane, and `transcript` reads the add-on's
+internal `/data/logs/codex-terminal.log` through Docker. For reliable SSH-side
+request/response tests, `ask-file` tells Codex to write the answer under
+`/config`, then the SSH shell can read it with `cat`.
+
+The helper discovers GitHub and local install container names such as
+`addon_0a381758_codex_terminal_pro` or `addon_local_codex_terminal_pro`. If your
+Home Assistant SSH shell cannot see `docker`, enter the Home Assistant OS host
+shell or use an SSH add-on/session that has host container access. From the raw
+HA OS host shell, run the same helper from the Home Assistant config directory
+path, commonly
+`/mnt/data/supervisor/homeassistant/codex-terminal-pro-attach`.
 
 ## Launch Behavior
 
