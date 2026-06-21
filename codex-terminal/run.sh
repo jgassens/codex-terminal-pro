@@ -53,10 +53,11 @@ init_environment() {
         export PYTHONPATH="/opt/modbus-python:${PYTHONPATH:-}"
     fi
 
+    install_codex_plugin_cache_guard "$guard_bin"
+    remove_heygen_codex_plugin_state
     ensure_codex_file_credentials
     ensure_codex_update_prompt_disabled
     ensure_codex_tui_defaults
-    remove_heygen_cached_plugin
 
     if [ -f "$CODEX_HOME/auth.json" ]; then
         chmod 600 "$CODEX_HOME/auth.json"
@@ -80,6 +81,10 @@ export XDG_STATE_HOME="/data/.local/state"
 export XDG_DATA_HOME="/data/.local/share"
 export CODEX_HOME="/data/.codex"
 export GH_CONFIG_DIR="/data/.config/gh"
+
+if [ -x "/data/packages/guard/bin/codex-terminal-prune-codex-plugins" ]; then
+    /data/packages/guard/bin/codex-terminal-prune-codex-plugins >/dev/null 2>&1 || true
+fi
 
 export PATH="/data/packages/guard/bin:/data/packages/bin:/data/packages/python/venv/bin:$PATH"
 export LD_LIBRARY_PATH="/data/packages/lib:${LD_LIBRARY_PATH:-}"
@@ -246,28 +251,63 @@ status_line = ["run-state", "model-with-reasoning", "fast-mode", "context-remain
 TUI_EOF
 }
 
-remove_heygen_cached_plugin() {
-    local heygen_cache="$CODEX_HOME/plugins/cache/openai-curated-remote/heygen"
+install_codex_plugin_cache_guard() {
+    local guard_bin="$1"
+    local pruner="${guard_bin}/codex-terminal-prune-codex-plugins"
+    local wrapper="${guard_bin}/codex"
 
-    case "$heygen_cache" in
-        /data/.codex/plugins/cache/openai-curated-remote/heygen)
-            ;;
-        *)
-            bashio::log.warning "Refusing to remove unexpected HeyGen cache path: ${heygen_cache}"
-            return 0
-            ;;
-    esac
+    if [ -f "/opt/scripts/codex-prune-plugins" ]; then
+        cp /opt/scripts/codex-prune-plugins "$pruner"
+        chmod 755 "$pruner"
+    else
+        bashio::log.warning "Codex plugin pruner missing: /opt/scripts/codex-prune-plugins"
+    fi
 
-    if [ ! -e "$heygen_cache" ] && [ ! -L "$heygen_cache" ]; then
+    cat > "$wrapper" << 'CODEX_GUARD_EOF'
+#!/usr/bin/env bash
+
+set -uo pipefail
+
+if [ -x "/data/packages/guard/bin/codex-terminal-prune-codex-plugins" ]; then
+    /data/packages/guard/bin/codex-terminal-prune-codex-plugins >/dev/null 2>&1 || true
+fi
+
+self="$(readlink -f "$0" 2>/dev/null || printf '%s\n' "$0")"
+
+for candidate in /usr/local/bin/codex /usr/bin/codex; do
+    if [ ! -x "$candidate" ]; then
+        continue
+    fi
+
+    resolved="$(readlink -f "$candidate" 2>/dev/null || printf '%s\n' "$candidate")"
+    if [ "$resolved" = "$self" ]; then
+        continue
+    fi
+
+    exec "$candidate" "$@"
+done
+
+printf 'Codex Terminal Pro: real codex executable not found.\n' >&2
+exit 127
+CODEX_GUARD_EOF
+
+    chmod 755 "$wrapper"
+    bashio::log.info "Codex plugin cache guard installed at ${wrapper}"
+}
+
+remove_heygen_codex_plugin_state() {
+    local pruner="/data/packages/guard/bin/codex-terminal-prune-codex-plugins"
+
+    if [ ! -x "$pruner" ]; then
         return 0
     fi
 
-    if rm -rf -- "$heygen_cache"; then
-        bashio::log.info "Removed irrelevant HeyGen Codex plugin cache from ${heygen_cache}"
+    if "$pruner"; then
+        bashio::log.info "Pruned irrelevant HeyGen Codex plugin cache and source copies"
         return 0
     fi
 
-    bashio::log.warning "Failed to remove HeyGen Codex plugin cache from ${heygen_cache}"
+    bashio::log.warning "Failed to fully prune HeyGen Codex plugin state"
 }
 
 install_tools() {
@@ -303,7 +343,7 @@ install_tools() {
 
 log_startup_diagnostics() {
     local app_name="${APP_NAME:-${ADDON_NAME:-Codex Terminal Pro}}"
-    local app_version="${BUILD_VERSION:-${APP_VERSION:-2.5.7}}"
+    local app_version="${BUILD_VERSION:-${APP_VERSION:-2.5.8}}"
 
     bashio::log.info "Startup diagnostics:"
     bashio::log.info "  - Date: $(date)"
@@ -340,7 +380,7 @@ log_startup_diagnostics() {
     bashio::log.info "  - which mosquitto_sub: $(which mosquitto_sub 2>/dev/null || true)"
     bashio::log.info "  - which dig: $(which dig 2>/dev/null || true)"
     bashio::log.info "  - which codex: $(which codex 2>/dev/null || true)"
-    bashio::log.info "  - codex version: $(codex --version 2>&1 || true)"
+    bashio::log.info "  - codex version: skipped during startup to avoid plugin cache hydration"
     bashio::log.info "  - which ha: $(which ha 2>/dev/null || true)"
 }
 

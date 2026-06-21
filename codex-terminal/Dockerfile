@@ -1,7 +1,7 @@
 FROM ghcr.io/home-assistant/base:latest
 
 LABEL \
-    io.hass.version="2.5.7" \
+    io.hass.version="2.5.8" \
     io.hass.type="addon" \
     io.hass.arch="aarch64|amd64" \
     org.opencontainers.image.title="Home Assistant Add-on: Codex Terminal Pro" \
@@ -119,6 +119,7 @@ RUN mkdir -p /usr/libexec/codex-terminal \
     && chmod +x /run.sh \
     && chmod +x /opt/scripts/*.sh \
     && chmod +x /opt/scripts/persist-install \
+    && chmod +x /opt/scripts/codex-prune-plugins \
     && chmod +x /opt/scripts/codex-shell-dispatch \
     && chmod +x /opt/scripts/codex-terminal-briefing \
     && chmod +x /opt/scripts/ha-toolbox \

@@ -58,14 +58,8 @@ check_codex() {
         return 1
     fi
 
-    if codex --version >/tmp/codex-version.txt 2>/tmp/codex-version.err; then
-        log_info "Codex version: $(cat /tmp/codex-version.txt)"
-    else
-        log_warning "Codex exists but 'codex --version' failed"
-        if [ -s /tmp/codex-version.err ]; then
-            log_warning "$(head -n 1 /tmp/codex-version.err)"
-        fi
-    fi
+    log_info "Codex CLI path: $(command -v codex)"
+    log_info "Codex version check skipped to avoid plugin cache hydration during health checks"
 }
 
 check_codex_home() {

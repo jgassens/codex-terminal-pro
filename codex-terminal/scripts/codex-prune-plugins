@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+
+set -uo pipefail
+
+codex_home="${CODEX_HOME:-/data/.codex}"
+status=0
+
+case "$codex_home" in
+    /data/.codex)
+        ;;
+    *)
+        exit 0
+        ;;
+esac
+
+remove_heygen_path() {
+    local target="$1"
+
+    case "$target" in
+        "$codex_home"/plugins/cache/*/heygen|"$codex_home"/.tmp/plugins/plugins/heygen|"$codex_home"/plugins/.remote-plugin-install-staging/heygen)
+            ;;
+        *)
+            return 0
+            ;;
+    esac
+
+    if [ ! -e "$target" ] && [ ! -L "$target" ]; then
+        return 0
+    fi
+
+    if ! rm -rf -- "$target"; then
+        status=1
+    fi
+}
+
+for target in \
+    "$codex_home/plugins/cache/openai-curated-remote/heygen" \
+    "$codex_home/plugins/cache/openai-curated/heygen" \
+    "$codex_home/plugins/cache/openai-bundled/heygen" \
+    "$codex_home/plugins/cache/openai-primary-runtime/heygen" \
+    "$codex_home/.tmp/plugins/plugins/heygen" \
+    "$codex_home/plugins/.remote-plugin-install-staging/heygen"
+do
+    remove_heygen_path "$target"
+done
+
+if [ -d "$codex_home/plugins/cache" ]; then
+    while IFS= read -r -d '' target; do
+        remove_heygen_path "$target"
+    done < <(find "$codex_home/plugins/cache" -mindepth 2 -maxdepth 2 \( -type d -o -type l \) -name heygen -print0 2>/dev/null)
+fi
+
+exit "$status"

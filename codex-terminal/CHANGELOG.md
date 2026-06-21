@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.5.8
+
+- Remove persisted HeyGen Codex plugin source mirrors and cache copies before
+  Codex starts, and route Codex launches through a guard wrapper so the broken
+  HeyGen skill metadata cannot keep resurfacing from `/data/.codex`.
+- Stop startup diagnostics and health checks from running `codex --version`,
+  avoiding an unnecessary Codex process that can hydrate plugin cache during
+  add-on startup.
+
 ## 2.5.7
 
 - Add a `/config` mailbox bridge so the ordinary Home Assistant SSH add-on can
