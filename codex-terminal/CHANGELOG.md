@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.5.9
+
+- Persist Mall Cop observations under `/data/monitor/change-desk-mall-cop-memory.json`
+  so new runs can compare current Home Assistant issues with the previous Mall
+  Cop memory and call out new, resolved, changed, and unchanged conditions.
+- Run Mall Cop automatically when Change Desk opens, gated to once every 24
+  hours, while keeping the footer **Ask Mall Cop** button as a manual forced run.
+- Keep the latest Mall Cop summary visible in Change Desk after refresh/open and
+  scroll to the report after a button-triggered run.
+
 ## 2.5.8
 
 - Remove persisted HeyGen Codex plugin source mirrors and cache copies before

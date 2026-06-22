@@ -33,6 +33,7 @@ const HA_MONITOR_STATE_FILE = process.env.HA_MONITOR_STATE_FILE || '/data/monito
 const HA_MONITOR_HISTORY_FILE = process.env.HA_MONITOR_HISTORY_FILE || '/data/monitor/ha-monitor-history.jsonl';
 const CHANGE_DESK_DISPATCH_FILE = process.env.CHANGE_DESK_DISPATCH_FILE || '/data/monitor/change-desk-dispatch.json';
 const CHANGE_DESK_REPORT_DIR = process.env.CHANGE_DESK_REPORT_DIR || '/data/monitor/reports';
+const CHANGE_DESK_MALL_COP_MEMORY_FILE = process.env.CHANGE_DESK_MALL_COP_MEMORY_FILE || '/data/monitor/change-desk-mall-cop-memory.json';
 const CODEX_TMUX_TARGET = process.env.CODEX_TMUX_TARGET || process.env.TMUX_TARGET || 'codex-terminal:0.0';
 const TMUX_SESSION = process.env.TMUX_SESSION || CODEX_TMUX_TARGET.split(':')[0] || 'codex-terminal';
 const RAW_TERMINAL_WINDOW = process.env.RAW_TERMINAL_WINDOW || 'raw-shell';
@@ -50,6 +51,7 @@ const CHANGE_DESK_LOG_LINE_LIMIT = parseNonNegativeInt(process.env.CHANGE_DESK_L
 const CHANGE_DESK_REPORT_MAX_CHARS = parseNonNegativeInt(process.env.CHANGE_DESK_REPORT_MAX_CHARS, 200000);
 const CHANGE_DESK_MALL_COP_TIMEOUT_MS = parseNonNegativeInt(process.env.CHANGE_DESK_MALL_COP_TIMEOUT_MS, 180000);
 const CHANGE_DESK_MALL_COP_MAX_CHARS = parseNonNegativeInt(process.env.CHANGE_DESK_MALL_COP_MAX_CHARS, 18000);
+const CHANGE_DESK_MALL_COP_AUTO_INTERVAL_SECONDS = parseNonNegativeInt(process.env.CHANGE_DESK_MALL_COP_AUTO_INTERVAL_SECONDS, 86400);
 const IMAGE_RETENTION_DAYS = parseNonNegativeInt(process.env.IMAGE_RETENTION_DAYS, 30);
 const IMAGE_RETENTION_MAX_BYTES = parseNonNegativeInt(process.env.IMAGE_RETENTION_MAX_BYTES, 256 * 1024 * 1024);
 const SCROLL_CONTROL_ACTIONS = new Set(['scroll-up', 'scroll-down', 'scroll-bottom']);
@@ -70,6 +72,7 @@ const SUPPORTED_TERMINAL_CONTROL_ACTIONS = new Set([
 ]);
 const TERMINAL_MODES = new Set(['codex', 'raw']);
 let activeTerminalMode = 'codex';
+let mallCopRunInFlight = null;
 const ALLOWED_IMAGE_MIMES = new Set([
     'image/jpeg',
     'image/png',
@@ -595,6 +598,303 @@ function writeChangeDeskReport(report) {
         path: filePath,
         bytes: Buffer.byteLength(content, 'utf8'),
         truncated
+    };
+}
+
+function ensureMallCopMemoryDir() {
+    fs.mkdirSync(path.dirname(CHANGE_DESK_MALL_COP_MEMORY_FILE), { recursive: true, mode: 0o700 });
+}
+
+function loadMallCopMemory() {
+    try {
+        const parsed = JSON.parse(fs.readFileSync(CHANGE_DESK_MALL_COP_MEMORY_FILE, 'utf8'));
+        return parsed && typeof parsed === 'object' ? parsed : null;
+    } catch {
+        return null;
+    }
+}
+
+function saveMallCopMemory(memory) {
+    ensureMallCopMemoryDir();
+    fs.writeFileSync(
+        CHANGE_DESK_MALL_COP_MEMORY_FILE,
+        `${JSON.stringify(memory, null, 2)}\n`,
+        { encoding: 'utf8', mode: 0o600 }
+    );
+}
+
+function mallCopMemoryGeneratedAt(memory) {
+    return memory?.generatedAt || memory?.observation?.generatedAt || '';
+}
+
+function isMallCopAutoDue(memory, nowMs = Date.now()) {
+    if (CHANGE_DESK_MALL_COP_AUTO_INTERVAL_SECONDS <= 0) {
+        return false;
+    }
+
+    const generatedAt = Date.parse(mallCopMemoryGeneratedAt(memory));
+    if (!Number.isFinite(generatedAt)) {
+        return true;
+    }
+
+    return nowMs - generatedAt >= CHANGE_DESK_MALL_COP_AUTO_INTERVAL_SECONDS * 1000;
+}
+
+function mallCopNextRunAt(memory) {
+    const generatedAt = Date.parse(mallCopMemoryGeneratedAt(memory));
+    if (!Number.isFinite(generatedAt) || CHANGE_DESK_MALL_COP_AUTO_INTERVAL_SECONDS <= 0) {
+        return '';
+    }
+
+    return new Date(generatedAt + CHANGE_DESK_MALL_COP_AUTO_INTERVAL_SECONDS * 1000).toISOString();
+}
+
+function mallCopObservationForClient(memory) {
+    const observation = memory?.observation || {};
+    if (!observation.summary) {
+        return null;
+    }
+
+    return {
+        success: true,
+        generatedAt: memory.generatedAt || observation.generatedAt || '',
+        durationMs: Number.isFinite(observation.durationMs) ? observation.durationMs : 0,
+        summary: redactSensitiveText(observation.summary).slice(0, CHANGE_DESK_MALL_COP_MAX_CHARS),
+        packetPath: memory.packetPath || '',
+        packetTruncated: Boolean(memory.packetTruncated || observation.truncated),
+        trigger: memory.trigger || 'unknown',
+        comparison: memory.comparison || null
+    };
+}
+
+function buildMallCopState(memory) {
+    const generatedAt = mallCopMemoryGeneratedAt(memory);
+    const generatedAtMs = Date.parse(generatedAt);
+    const ageSeconds = Number.isFinite(generatedAtMs)
+        ? Math.max(0, Math.round((Date.now() - generatedAtMs) / 1000))
+        : null;
+
+    return {
+        available: Boolean(memory?.observation?.summary),
+        path: CHANGE_DESK_MALL_COP_MEMORY_FILE,
+        generatedAt,
+        ageSeconds,
+        due: isMallCopAutoDue(memory),
+        nextRunAt: mallCopNextRunAt(memory),
+        autoIntervalSeconds: CHANGE_DESK_MALL_COP_AUTO_INTERVAL_SECONDS,
+        latestObservation: mallCopObservationForClient(memory),
+        comparison: memory?.comparison || null
+    };
+}
+
+function issueDigestLabel(issue) {
+    const classification = issue?.classification || {};
+    return classification.label || issue?.sample || issue?.key || 'issue';
+}
+
+function buildMallCopDigest(snapshot) {
+    const monitor = snapshot.monitor || {};
+    const issues = new Map();
+    const addIssue = (issue, kind) => {
+        if (!issue) {
+            return;
+        }
+
+        const key = issue.key || `${issue.source || 'unknown'}:${issue.sample || ''}`.slice(0, 220);
+        const existing = issues.get(key) || {
+            key,
+            label: issueDigestLabel(issue),
+            source: issue.source || 'unknown',
+            severity: issue.severity || 'warning',
+            sample: redactSensitiveText(issue.sample || '').slice(0, 300),
+            runsSeen: Number(issue.runsSeen || 0),
+            occurrences: Number(issue.occurrences || 0),
+            currentCount: Number(issue.currentCount || 0),
+            firstSeen: issue.firstSeen || '',
+            lastSeen: issue.lastSeen || '',
+            category: issue.classification?.category || '',
+            posture: issue.classification?.posture || '',
+            active: false,
+            persistent: false
+        };
+        existing.active = existing.active || kind === 'current';
+        existing.persistent = existing.persistent || kind === 'persistent';
+        existing.runsSeen = Math.max(existing.runsSeen, Number(issue.runsSeen || 0));
+        existing.occurrences = Math.max(existing.occurrences, Number(issue.occurrences || 0));
+        existing.currentCount = Math.max(existing.currentCount, Number(issue.currentCount || 0));
+        existing.firstSeen = earlierIso(existing.firstSeen, issue.firstSeen || '');
+        existing.lastSeen = laterIso(existing.lastSeen, issue.lastSeen || '');
+        issues.set(key, existing);
+    };
+
+    (monitor.currentIssues || []).forEach((issue) => addIssue(issue, 'current'));
+    (monitor.persistentIssues || []).forEach((issue) => addIssue(issue, 'persistent'));
+
+    return {
+        generatedAt: snapshot.generatedAt || '',
+        monitorGeneratedAt: monitor.generatedAt || '',
+        monitorStatus: monitor.status || 'unavailable',
+        dispatchFingerprint: monitor.dispatch?.reasoningGate?.deltaFingerprint || '',
+        configChanged: monitor.dispatch?.delta?.configChanged,
+        currentIssueCount: (monitor.currentIssues || []).length,
+        persistentIssueCount: (monitor.persistentIssues || []).length,
+        issues: [...issues.values()]
+            .sort((a, b) => Number(b.active) - Number(a.active) || Number(b.persistent) - Number(a.persistent) || b.runsSeen - a.runsSeen)
+            .slice(0, 30),
+        conditions: (monitor.conditions || []).slice(0, 12).map((condition) => ({
+            key: condition.key || '',
+            label: condition.label || '',
+            category: condition.category || '',
+            posture: condition.posture || '',
+            trajectory: condition.trajectory || '',
+            activeCount: Number(condition.activeCount || 0),
+            chronicCount: Number(condition.chronicCount || 0),
+            issueCount: Number(condition.issueCount || 0),
+            totalRuns: Number(condition.totalRuns || 0),
+            totalOccurrences: Number(condition.totalOccurrences || 0),
+            lastSeen: condition.lastSeen || ''
+        }))
+    };
+}
+
+function describeMallCopIssueChange(previous, current) {
+    const changes = [];
+    if (previous.active !== current.active) {
+        changes.push(current.active ? 'became active again' : 'went quiet');
+    }
+    if (previous.persistent !== current.persistent) {
+        changes.push(current.persistent ? 'became persistent' : 'no longer marked persistent');
+    }
+    if (previous.severity !== current.severity) {
+        changes.push(`severity ${previous.severity || 'unknown'} -> ${current.severity || 'unknown'}`);
+    }
+    if (previous.posture !== current.posture || previous.category !== current.category) {
+        changes.push(`classification ${previous.category || 'unknown'}/${previous.posture || 'unknown'} -> ${current.category || 'unknown'}/${current.posture || 'unknown'}`);
+    }
+    if (current.currentCount !== previous.currentCount) {
+        changes.push(`current count ${previous.currentCount || 0} -> ${current.currentCount || 0}`);
+    }
+    if (current.runsSeen !== previous.runsSeen) {
+        changes.push(`runs seen ${previous.runsSeen || 0} -> ${current.runsSeen || 0}`);
+    }
+    if (current.occurrences !== previous.occurrences) {
+        changes.push(`occurrences ${previous.occurrences || 0} -> ${current.occurrences || 0}`);
+    }
+    if (previous.sample && current.sample && previous.sample !== current.sample) {
+        changes.push('representative sample changed');
+    }
+
+    return changes.join('; ') || 'no material change';
+}
+
+function buildMallCopMemoryComparison(currentDigest, previousDigest) {
+    const previousIssues = new Map((previousDigest?.issues || []).map((issue) => [issue.key, issue]));
+    const currentIssues = new Map((currentDigest?.issues || []).map((issue) => [issue.key, issue]));
+    const newIssues = [];
+    const resolvedIssues = [];
+    const changedIssues = [];
+    const unchangedIssues = [];
+
+    for (const issue of currentIssues.values()) {
+        const previous = previousIssues.get(issue.key);
+        if (!previous) {
+            newIssues.push(issue);
+            continue;
+        }
+
+        const change = describeMallCopIssueChange(previous, issue);
+        if (change === 'no material change') {
+            unchangedIssues.push(issue);
+        } else {
+            changedIssues.push({ ...issue, change });
+        }
+    }
+
+    for (const issue of previousIssues.values()) {
+        if (!currentIssues.has(issue.key)) {
+            resolvedIssues.push(issue);
+        }
+    }
+
+    return {
+        comparedWith: previousDigest?.generatedAt || '',
+        currentGeneratedAt: currentDigest?.generatedAt || '',
+        newIssues: newIssues.slice(0, 8),
+        resolvedIssues: resolvedIssues.slice(0, 8),
+        changedIssues: changedIssues.slice(0, 8),
+        unchangedIssues: unchangedIssues.slice(0, 8)
+    };
+}
+
+function summarizeMallCopIssue(issue) {
+    const state = [
+        issue.active ? 'active' : 'quiet',
+        issue.persistent ? 'persistent' : 'not persistent',
+        issue.runsSeen ? `${issue.runsSeen} runs` : '',
+        issue.occurrences ? `${issue.occurrences} occurrences` : ''
+    ].filter(Boolean).join(', ');
+    return `${issue.label || issue.key || 'issue'} (${state || issue.source || 'unknown'})`;
+}
+
+function appendMallCopIssueList(lines, label, issues, formatter = summarizeMallCopIssue) {
+    lines.push(`${label}: ${issues.length}`);
+    if (!issues.length) {
+        return;
+    }
+
+    issues.slice(0, 6).forEach((issue) => {
+        lines.push(`- ${formatter(issue)}`);
+    });
+}
+
+function buildMallCopMemoryLines(previousMemory, currentDigest) {
+    const comparison = buildMallCopMemoryComparison(currentDigest, previousMemory?.digest);
+    const lines = [
+        '## Mall Cop Memory',
+        `Memory file: ${CHANGE_DESK_MALL_COP_MEMORY_FILE}`,
+        `Previous Mall Cop run: ${mallCopMemoryGeneratedAt(previousMemory) || 'none'}`,
+        `Next automatic run due: ${mallCopNextRunAt(previousMemory) || 'now'}`,
+        `Compared current snapshot with previous memory: ${comparison.comparedWith || 'no previous memory'}`
+    ];
+
+    appendMallCopIssueList(lines, 'New since previous Mall Cop run', comparison.newIssues);
+    appendMallCopIssueList(lines, 'Resolved since previous Mall Cop run', comparison.resolvedIssues);
+    appendMallCopIssueList(
+        lines,
+        'Persisting with changes',
+        comparison.changedIssues,
+        (issue) => `${summarizeMallCopIssue(issue)}: ${issue.change}`
+    );
+    appendMallCopIssueList(lines, 'Persisting with no material change', comparison.unchangedIssues);
+
+    const previousSummary = previousMemory?.observation?.summary
+        ? redactSensitiveText(previousMemory.observation.summary).slice(0, 1200)
+        : '';
+    if (previousSummary) {
+        lines.push('', 'Previous Mall Cop bottom-line context:', previousSummary);
+    }
+
+    return { lines, comparison };
+}
+
+function buildMallCopMemoryRecord(snapshot, observation, report, previousMemory, trigger) {
+    const digest = buildMallCopDigest(snapshot);
+    return {
+        version: 1,
+        generatedAt: new Date().toISOString(),
+        trigger,
+        packetPath: report.path,
+        packetTruncated: Boolean(report.truncated),
+        previousGeneratedAt: mallCopMemoryGeneratedAt(previousMemory),
+        observation: {
+            generatedAt: new Date().toISOString(),
+            durationMs: Number.isFinite(observation.durationMs) ? observation.durationMs : 0,
+            summary: redactSensitiveText(observation.summary || '').slice(0, CHANGE_DESK_MALL_COP_MAX_CHARS),
+            truncated: Boolean(observation.truncated),
+            exitCode: observation.exitCode
+        },
+        digest,
+        comparison: buildMallCopMemoryComparison(digest, previousMemory?.digest)
     };
 }
 
@@ -1521,6 +1821,7 @@ async function collectChangeDeskSnapshot() {
     };
 
     snapshot.recommendations = buildChangeDeskRecommendations(snapshot);
+    snapshot.mallCop = buildMallCopState(loadMallCopMemory());
     return snapshot;
 }
 
@@ -1531,12 +1832,14 @@ function formatCountMap(counts) {
         .join(', ') || 'none';
 }
 
-function buildMallCopObservationPacket(snapshot) {
+function buildMallCopObservationPacket(snapshot, previousMemory = null) {
     const monitor = snapshot.monitor || {};
     const dispatch = monitor.dispatch || {};
     const gate = dispatch.reasoningGate || {};
     const history = monitor.history || {};
     const conditions = monitor.conditions || [];
+    const currentDigest = buildMallCopDigest(snapshot);
+    const memory = buildMallCopMemoryLines(previousMemory, currentDigest);
     const lines = [
         '# Mall Cop: To Observe and Report',
         '',
@@ -1545,6 +1848,7 @@ function buildMallCopObservationPacket(snapshot) {
         'Rules for this response:',
         '- Return concise advice for a human Change Desk panel.',
         '- Separate acute health from chronic conditions.',
+        '- Use Mall Cop Memory to say what changed, what resolved, and what persisted with no material change since the last Mall Cop run.',
         '- Call out whether each chronic condition looks Codex-fixable, network/device-shaped, auth-shaped, config-shaped, or human-priority-only.',
         '- Treat repeated Modbus, Wi-Fi, timeout, unavailable, and socket noise as localized connectivity unless evidence says it is spreading or critical.',
         '- Do not suggest reload, restart, service calls, config edits, or shell commands as actions unless the packet shows a clear blocker.',
@@ -1576,6 +1880,8 @@ function buildMallCopObservationPacket(snapshot) {
         `Recent current issue counts: ${(history.recentCurrentIssues || []).join(', ') || 'none'} (${history.currentIssueDirection || 'unknown'})`,
         `Recent persistent issue counts: ${(history.recentPersistentIssues || []).join(', ') || 'none'} (${history.persistentIssueDirection || 'unknown'})`,
         `Recent log error direction: ${history.logErrorDirection || 'unknown'}`,
+        '',
+        ...memory.lines,
         '',
         '## Deterministic Triage',
         `Dominant posture: ${monitor.triage?.dominantPosture || 'unknown'}`,
@@ -1713,6 +2019,43 @@ function runCodexMallCopObservation(prompt) {
         });
         child.stdin.end(prompt);
     });
+}
+
+async function runMallCopForSnapshot(snapshot, trigger = 'manual') {
+    if (mallCopRunInFlight) {
+        return mallCopRunInFlight;
+    }
+
+    mallCopRunInFlight = (async () => {
+        const previousMemory = loadMallCopMemory();
+        const packet = buildMallCopObservationPacket(snapshot, previousMemory);
+        const report = writeChangeDeskReport(packet);
+        const observation = await runCodexMallCopObservation(packet);
+
+        if (!observation.success) {
+            return {
+                success: false,
+                report,
+                observation,
+                memory: previousMemory
+            };
+        }
+
+        const memory = buildMallCopMemoryRecord(snapshot, observation, report, previousMemory, trigger);
+        saveMallCopMemory(memory);
+        return {
+            success: true,
+            report,
+            observation: memory.observation,
+            memory
+        };
+    })();
+
+    try {
+        return await mallCopRunInFlight;
+    } finally {
+        mallCopRunInFlight = null;
+    }
 }
 
 function runTerminalControl(action, callback) {
@@ -1949,27 +2292,45 @@ app.post('/change-desk/mall-cop', async (req, res) => {
     }
 
     try {
+        const automatic = req.body?.mode === 'auto';
+        const force = req.body?.force === true || !automatic;
         const snapshot = await collectChangeDeskSnapshot();
-        const packet = buildMallCopObservationPacket(snapshot);
-        const report = writeChangeDeskReport(packet);
-        const observation = await runCodexMallCopObservation(packet);
+        const currentMemory = loadMallCopMemory();
 
-        if (!observation.success) {
-            return res.status(observation.timedOut ? 504 : 502).json({
-                success: false,
-                error: observation.timedOut ? 'Mall Cop summary timed out' : 'Codex did not return a Mall Cop summary',
-                observation,
-                packetPath: report.path,
+        if (!force && !isMallCopAutoDue(currentMemory)) {
+            snapshot.mallCop = buildMallCopState(currentMemory);
+            return res.json({
+                success: true,
+                skipped: true,
+                reason: 'Mall Cop memory is still fresh',
+                generatedAt: new Date().toISOString(),
+                observation: mallCopObservationForClient(currentMemory),
+                memory: snapshot.mallCop,
                 snapshot
             });
         }
 
+        const result = await runMallCopForSnapshot(snapshot, automatic ? 'auto' : 'manual');
+
+        if (!result.success) {
+            return res.status(result.observation.timedOut ? 504 : 502).json({
+                success: false,
+                error: result.observation.timedOut ? 'Mall Cop summary timed out' : 'Codex did not return a Mall Cop summary',
+                observation: result.observation,
+                packetPath: result.report.path,
+                snapshot
+            });
+        }
+
+        snapshot.mallCop = buildMallCopState(result.memory);
+
         res.json({
             success: true,
             generatedAt: new Date().toISOString(),
-            packetPath: report.path,
-            packetTruncated: report.truncated,
-            observation,
+            packetPath: result.report.path,
+            packetTruncated: result.report.truncated,
+            observation: mallCopObservationForClient(result.memory),
+            memory: snapshot.mallCop,
             snapshot
         });
     } catch (err) {

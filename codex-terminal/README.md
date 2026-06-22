@@ -61,11 +61,12 @@ The **Change Desk** button opens a read-only Home Assistant review panel. It
 collects the `ha-toolbox` YAML audit, `ha core check`, recent `ha core logs`
 issues, persistent `ha-monitor` findings, prepared dispatch deltas, live
 `ha-api config` reachability, and `ha-mcp-status` so you can inspect the blast
-radius before a reload or restart. It can copy the summary or run the explicit
-**Ask Mall Cop** action. That action sends a chronic-condition packet to
-`codex exec` in read-only mode and renders the returned **Mall Cop: To Observe
-and Report** summary back in Change Desk. Opening Change Desk still does not
-call a model by itself.
+radius before a reload or restart. It can copy the summary or run Mall Cop.
+Opening Change Desk asks Mall Cop to observe and report at most once every 24
+hours, and the footer **Ask Mall Cop** action forces a fresh run. Mall Cop sends
+a chronic-condition packet to `codex exec` in read-only mode, stores memory
+under `/data/monitor/change-desk-mall-cop-memory.json`, and renders the returned
+**Mall Cop: To Observe and Report** summary back in Change Desk.
 
 ## Shell Mode And `,,` Dispatch
 
@@ -202,8 +203,9 @@ looks safety, security, or otherwise critical. Configuration, auth, and
 system-health patterns remain review findings. It does not call services,
 reload, restart, edit `/config`, execute arbitrary task files, or call an LLM.
 Change Desk separately groups the monitor's persistent/current findings into a
-chronic-condition ledger so the on-demand Mall Cop summary can distinguish acute
-state from recurring, stable, worsening, or quiet conditions.
+chronic-condition ledger. Mall Cop memory compares the current ledger with the
+previous Mall Cop run so the summary can distinguish acute state from recurring,
+stable, worsening, quiet, new, resolved, changed, or unchanged conditions.
 The reserved `/data/monitor/tasks.d` directory is intentionally ignored in this
 release so a future bespoke persistent-task design can be added behind explicit
 guardrails.
@@ -335,7 +337,8 @@ persistent_pip_packages: []
 - `ha_monitor_max_issues`: Maximum current/persistent issue samples retained in
   monitor summaries.
 - `ha_monitor_summary_interval_seconds`: Low-reasoning eligibility interval
-  recorded in dispatch budget gates. The add-on does not call a model by itself.
+  recorded in dispatch budget gates. HA monitor itself does not call a model;
+  Change Desk's Mall Cop path is the gated read-only model call.
 - `ha_monitor_reasoning_cooldown_seconds`: Cooldown metadata for repeated
   dispatch packets with the same underlying fingerprints.
 - `ha_monitor_reasoning_daily_budget`: Scheduled reasoning-call cap recorded in

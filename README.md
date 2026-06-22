@@ -265,8 +265,10 @@ summaries to `/data/monitor/ha-monitor.json` plus dispatch packets to
 `/data/monitor/change-desk-dispatch.json`. It fingerprints deltas between samples
 so Change Desk can say whether anything is new, resolved, persistent, or likely
 unchanged. It does not call services, reload, restart, edit `/config`, execute
-bespoke task files, or call an LLM. Reasoning budget fields are gate metadata for
-future scheduled summaries and explicit Send Report/user-question flows.
+bespoke task files, or call an LLM. Change Desk's Mall Cop path can run
+`codex exec` in read-only mode once every 24 hours on panel open, or immediately
+from the **Ask Mall Cop** button, and stores comparison memory at
+`/data/monitor/change-desk-mall-cop-memory.json`.
 The monitor also triages issues deterministically: Modbus, Wi-Fi, socket,
 timeout, and unavailable-entity noise is labeled as localized connectivity
 trouble with low system-wide risk unless the entity looks safety, security, or

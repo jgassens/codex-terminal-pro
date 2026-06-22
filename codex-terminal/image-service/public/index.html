@@ -1051,6 +1051,7 @@
         let statusTimer = null;
         let latestChangeDeskData = null;
         let latestMallCopObservation = null;
+        let changeDeskAutoMallCopPromise = null;
 
         function isTouchUi() {
             return Boolean(
@@ -1211,6 +1212,7 @@
         const changeDeskBtn = document.getElementById('change-desk-btn');
         const changeDeskPanel = document.getElementById('change-desk-panel');
         const changeDeskGenerated = document.getElementById('change-desk-generated');
+        const changeDeskBody = document.getElementById('change-desk-body');
         const changeDeskSummary = document.getElementById('change-desk-summary');
         const changeDeskContent = document.getElementById('change-desk-content');
         const changeDeskRefresh = document.getElementById('change-desk-refresh');
@@ -1676,14 +1678,61 @@
                 observation.success === false ? 'failed' : 'ok',
                 observation.durationMs ? `${Math.round(observation.durationMs / 1000)}s` : 'ready'
             );
+            section.id = 'change-desk-mall-cop-observation';
             body.appendChild(renderObservationSummary(observation.summary));
             if (observation.packetPath) {
                 appendChangeDeskLine(body, 'Packet', observation.packetPath);
+            }
+            if (observation.generatedAt) {
+                appendChangeDeskLine(body, 'Observed', new Date(observation.generatedAt).toLocaleString());
+            }
+            if (observation.trigger) {
+                appendChangeDeskLine(body, 'Run type', observation.trigger);
             }
             if (observation.truncated) {
                 body.appendChild(changeDeskElement('div', 'change-desk-muted', 'Summary was truncated by the add-on size limit.'));
             }
             parent.appendChild(section);
+        }
+
+        function normalizeMallCopObservationPayload(payload) {
+            if (!payload?.summary) {
+                return null;
+            }
+
+            return {
+                success: payload.success !== false,
+                generatedAt: payload.generatedAt || '',
+                durationMs: Number.isFinite(payload.durationMs) ? payload.durationMs : 0,
+                summary: payload.summary,
+                packetPath: payload.packetPath || '',
+                packetTruncated: Boolean(payload.packetTruncated),
+                truncated: Boolean(payload.truncated || payload.packetTruncated),
+                trigger: payload.trigger || ''
+            };
+        }
+
+        function applyMallCopObservationPayload(payload) {
+            const normalized = normalizeMallCopObservationPayload(payload);
+            if (!normalized) {
+                return null;
+            }
+
+            const currentTime = Date.parse(latestMallCopObservation?.generatedAt || '') || 0;
+            const nextTime = Date.parse(normalized.generatedAt || '') || Date.now();
+            if (!latestMallCopObservation || nextTime >= currentTime) {
+                latestMallCopObservation = normalized;
+            }
+            return latestMallCopObservation;
+        }
+
+        function scrollMallCopObservationIntoView() {
+            requestAnimationFrame(() => {
+                const section = document.getElementById('change-desk-mall-cop-observation');
+                if (section) {
+                    section.scrollIntoView({ block: 'start', behavior: 'smooth' });
+                }
+            });
         }
 
         function renderChangeDeskConditions(parent, monitor) {
@@ -1825,6 +1874,7 @@
 
         function renderChangeDesk(data) {
             latestChangeDeskData = data;
+            applyMallCopObservationPayload(data.mallCop?.latestObservation);
             const generatedAt = data.generatedAt ? new Date(data.generatedAt) : null;
             changeDeskGenerated.textContent = generatedAt
                 ? `${generatedAt.toLocaleString()} · ${data.durationMs || 0}ms`
@@ -1884,11 +1934,12 @@
         }
 
         async function loadChangeDesk() {
+            let shouldAutoRunMallCop = false;
             changeDeskPanel.classList.add('active');
+            changeDeskBody.scrollTop = 0;
             changeDeskRefresh.disabled = true;
             changeDeskPrompt.disabled = true;
             changeDeskBtn.classList.add('active');
-            latestMallCopObservation = null;
             setChangeDeskLoading();
             setStatus('Collecting Change Desk snapshot...', 'success', false);
 
@@ -1900,6 +1951,7 @@
                 }
 
                 renderChangeDesk(data);
+                shouldAutoRunMallCop = data.mallCop?.due === true;
                 setStatus('Change Desk refreshed', 'success', false);
             } catch (err) {
                 console.log('Change Desk failed:', err);
@@ -1908,6 +1960,10 @@
             } finally {
                 changeDeskRefresh.disabled = false;
                 changeDeskPrompt.disabled = false;
+            }
+
+            if (shouldAutoRunMallCop) {
+                runMallCop({ automatic: true });
             }
         }
 
@@ -1985,51 +2041,73 @@
             }
         }
 
-        async function askMallCop() {
+        async function runMallCop({ automatic = false } = {}) {
             if (!latestChangeDeskData) {
                 setStatus('Refresh Change Desk first', 'error', false);
                 return;
             }
 
+            if (automatic && changeDeskAutoMallCopPromise) {
+                return changeDeskAutoMallCopPromise;
+            }
+
             changeDeskPrompt.disabled = true;
             changeDeskRefresh.disabled = true;
-            setStatus('Asking Mall Cop to observe and report...', 'success', false);
+            setStatus(automatic ? 'Mall Cop is checking the daily memory...' : 'Asking Mall Cop to observe and report...', 'success', false);
 
-            try {
+            const request = (async () => {
                 const response = await fetch(ingressPath('change-desk/mall-cop'), {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({})
+                    body: JSON.stringify(automatic ? { mode: 'auto' } : { mode: 'manual', force: true })
                 });
                 const result = await response.json().catch(() => ({}));
-                if (!response.ok || !result.success || !result.observation?.summary) {
+                if (!response.ok || !result.success) {
                     throw new Error(result.error || 'Mall Cop did not return a summary');
                 }
 
-                latestMallCopObservation = {
+                const observation = applyMallCopObservationPayload({
                     ...result.observation,
-                    packetPath: result.packetPath,
-                    packetTruncated: result.packetTruncated
-                };
+                    packetPath: result.packetPath || result.observation?.packetPath,
+                    packetTruncated: result.packetTruncated || result.observation?.packetTruncated
+                });
                 if (result.snapshot) {
                     renderChangeDesk(result.snapshot);
                 } else {
                     renderChangeDesk(latestChangeDeskData);
                 }
-                setStatus('Mall Cop report ready', 'success', false);
+                if (observation?.summary) {
+                    scrollMallCopObservationIntoView();
+                }
+                setStatus(result.skipped ? 'Mall Cop memory is current' : 'Mall Cop report ready', 'success', false);
+            })();
+
+            if (automatic) {
+                changeDeskAutoMallCopPromise = request;
+            }
+
+            try {
+                await request;
             } catch (err) {
                 console.log('Mall Cop observation failed:', err);
-                setStatus('Mall Cop report failed', 'error', false);
+                setStatus(automatic ? 'Mall Cop daily check failed' : 'Mall Cop report failed', 'error', false);
                 const fallback = latestChangeDeskSummary || '';
-                if (fallback) {
+                if (fallback && !automatic) {
                     showManualCopy(fallback, `${err.message}. Copy this Change Desk summary into Codex.`);
                 }
             } finally {
+                if (automatic) {
+                    changeDeskAutoMallCopPromise = null;
+                }
                 changeDeskPrompt.disabled = false;
                 changeDeskRefresh.disabled = false;
             }
+        }
+
+        function askMallCop() {
+            runMallCop({ automatic: false });
         }
 
         function setTerminalModeState(mode, announce = true) {
