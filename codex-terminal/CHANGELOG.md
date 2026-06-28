@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.5.10
+
+- Explicitly disable the known HeyGen Codex plugin IDs in
+  `/data/.codex/config.toml` before Codex starts, so the remote plugin sync
+  cannot rehydrate HeyGen 3.0.0 and trip the skill description validator.
+- Keep the existing HeyGen cache/source pruning in place and run the same
+  disable-and-prune guard before manual Codex launches.
+
 ## 2.5.9
 
 - Persist Mall Cop observations under `/data/monitor/change-desk-mall-cop-memory.json`

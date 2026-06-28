@@ -222,13 +222,14 @@ warns about. `auto-review`, `permissions`, and `approval-mode` are valid Codex
 permission concepts, but this pinned CLI does not accept those strings as
 footer item IDs.
 
-Startup removes persisted HeyGen Codex plugin source and cache copies when they
-are present at `/data/.codex/.tmp/plugins/plugins/heygen` or
+Startup disables the HeyGen Codex plugin IDs in `/data/.codex/config.toml` and
+removes persisted HeyGen plugin source and cache copies when they are present at
+`/data/.codex/.tmp/plugins/plugins/heygen` or
 `/data/.codex/plugins/cache/*/heygen`. HeyGen is not part of the Home Assistant
 add-on workflow. The add-on also places a small `codex` guard wrapper at the
-front of `PATH`, so manual and automatic Codex launches prune those copies
-before the CLI starts. This cleanup does not read or modify
-`/data/.codex/auth.json`.
+front of `PATH`, so manual and automatic Codex launches re-apply the disabled
+plugin entries and prune those copies before the CLI starts. This cleanup does
+not read or modify `/data/.codex/auth.json`.
 
 ## Configuration
 

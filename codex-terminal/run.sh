@@ -54,8 +54,9 @@ init_environment() {
     fi
 
     install_codex_plugin_cache_guard "$guard_bin"
-    remove_heygen_codex_plugin_state
     ensure_codex_file_credentials
+    ensure_heygen_codex_plugin_disabled
+    remove_heygen_codex_plugin_state
     ensure_codex_update_prompt_disabled
     ensure_codex_tui_defaults
 
@@ -125,6 +126,22 @@ ensure_codex_update_prompt_disabled() {
 
     set_codex_top_level_config "$config_file" "check_for_update_on_startup" "false"
     bashio::log.info "Codex CLI startup update prompt disabled; update Codex through add-on releases"
+}
+
+ensure_heygen_codex_plugin_disabled() {
+    local disabler="/data/packages/guard/bin/codex-terminal-disable-heygen-plugin"
+
+    if [ ! -x "$disabler" ]; then
+        bashio::log.warning "HeyGen Codex plugin disabler missing: ${disabler}"
+        return 0
+    fi
+
+    if "$disabler"; then
+        bashio::log.info "Disabled irrelevant HeyGen Codex plugin entries in config.toml"
+        return 0
+    fi
+
+    bashio::log.warning "Failed to disable HeyGen Codex plugin entries in config.toml"
 }
 
 set_codex_top_level_config() {
@@ -254,6 +271,7 @@ TUI_EOF
 install_codex_plugin_cache_guard() {
     local guard_bin="$1"
     local pruner="${guard_bin}/codex-terminal-prune-codex-plugins"
+    local disabler="${guard_bin}/codex-terminal-disable-heygen-plugin"
     local wrapper="${guard_bin}/codex"
 
     if [ -f "/opt/scripts/codex-prune-plugins" ]; then
@@ -263,10 +281,21 @@ install_codex_plugin_cache_guard() {
         bashio::log.warning "Codex plugin pruner missing: /opt/scripts/codex-prune-plugins"
     fi
 
+    if [ -f "/opt/scripts/codex-disable-heygen-plugin" ]; then
+        cp /opt/scripts/codex-disable-heygen-plugin "$disabler"
+        chmod 755 "$disabler"
+    else
+        bashio::log.warning "Codex HeyGen plugin disabler missing: /opt/scripts/codex-disable-heygen-plugin"
+    fi
+
     cat > "$wrapper" << 'CODEX_GUARD_EOF'
 #!/usr/bin/env bash
 
 set -uo pipefail
+
+if [ -x "/data/packages/guard/bin/codex-terminal-disable-heygen-plugin" ]; then
+    /data/packages/guard/bin/codex-terminal-disable-heygen-plugin >/dev/null 2>&1 || true
+fi
 
 if [ -x "/data/packages/guard/bin/codex-terminal-prune-codex-plugins" ]; then
     /data/packages/guard/bin/codex-terminal-prune-codex-plugins >/dev/null 2>&1 || true
@@ -343,7 +372,7 @@ install_tools() {
 
 log_startup_diagnostics() {
     local app_name="${APP_NAME:-${ADDON_NAME:-Codex Terminal Pro}}"
-    local app_version="${BUILD_VERSION:-${APP_VERSION:-2.5.9}}"
+    local app_version="${BUILD_VERSION:-${APP_VERSION:-2.5.10}}"
 
     bashio::log.info "Startup diagnostics:"
     bashio::log.info "  - Date: $(date)"

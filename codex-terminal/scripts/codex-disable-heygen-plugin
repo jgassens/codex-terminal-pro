@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+
+set -uo pipefail
+
+codex_home="${CODEX_HOME:-/data/.codex}"
+
+case "$codex_home" in
+    /data/.codex)
+        ;;
+    *)
+        exit 0
+        ;;
+esac
+
+config_file="$codex_home/config.toml"
+
+mkdir -p "$codex_home" || exit 1
+touch "$config_file" || exit 1
+chmod 644 "$config_file" || exit 1
+
+python3 - "$config_file" << 'PY'
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+plugin_ids = [
+    "heygen@openai-curated-remote",
+    "heygen@openai-curated",
+    "heygen@openai-bundled",
+    "heygen@openai-primary-runtime",
+]
+
+def header_matches_plugin(header: str, plugin_id: str) -> bool:
+    return header in {
+        f'[plugins."{plugin_id}"]',
+        f"[plugins.'{plugin_id}']",
+    }
+
+def disable_plugin(text: str, plugin_id: str) -> str:
+    target_header = f'[plugins."{plugin_id}"]'
+    header_re = re.compile(r'^\s*\[[^\]]+\]\s*(?:#.*)?(?:\r?\n)?$')
+    enabled_re = re.compile(
+        r'^(?P<prefix>[ \t]*enabled[ \t]*=[ \t]*)[^#\r\n]*?(?P<suffix>[ \t]*(?:#.*)?)(?P<nl>\r?\n?)$'
+    )
+
+    lines = text.splitlines(keepends=True)
+    out: list[str] = []
+    found_table = False
+    in_target_table = False
+    saw_enabled = False
+
+    for line in lines:
+        is_header = bool(header_re.match(line))
+        if is_header and in_target_table and not saw_enabled:
+            out.append("enabled = false\n")
+            in_target_table = False
+
+        if is_header:
+            header = line.split("#", 1)[0].strip()
+            in_target_table = header_matches_plugin(header, plugin_id)
+            if in_target_table:
+                found_table = True
+                saw_enabled = False
+
+        if in_target_table:
+            match = enabled_re.match(line)
+            if match:
+                out.append(f'{match.group("prefix")}false{match.group("suffix")}{match.group("nl")}')
+                saw_enabled = True
+                continue
+
+        out.append(line)
+
+    if in_target_table and not saw_enabled:
+        out.append("enabled = false\n")
+
+    updated = "".join(out)
+    if not found_table:
+        if updated and not updated.endswith(("\n", "\r\n")):
+            updated += "\n"
+        if updated:
+            updated += "\n"
+        updated += f'{target_header}\nenabled = false\n'
+
+    return updated
+
+text = path.read_text(encoding="utf-8")
+updated = text
+for plugin_id in plugin_ids:
+    updated = disable_plugin(updated, plugin_id)
+
+if updated != text:
+    path.write_text(updated, encoding="utf-8")
+PY

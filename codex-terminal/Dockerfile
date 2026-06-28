@@ -1,7 +1,7 @@
 FROM ghcr.io/home-assistant/base:latest
 
 LABEL \
-    io.hass.version="2.5.9" \
+    io.hass.version="2.5.10" \
     io.hass.type="addon" \
     io.hass.arch="aarch64|amd64" \
     org.opencontainers.image.title="Home Assistant Add-on: Codex Terminal Pro" \
@@ -118,6 +118,7 @@ RUN mkdir -p /usr/libexec/codex-terminal \
     && chmod +x /usr/bin/ha /usr/libexec/codex-terminal/ha-real \
     && chmod +x /run.sh \
     && chmod +x /opt/scripts/*.sh \
+    && chmod +x /opt/scripts/codex-disable-heygen-plugin \
     && chmod +x /opt/scripts/persist-install \
     && chmod +x /opt/scripts/codex-prune-plugins \
     && chmod +x /opt/scripts/codex-shell-dispatch \
