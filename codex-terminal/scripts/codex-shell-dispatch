@@ -3,14 +3,20 @@
 
 import json
 import os
+import shlex
 import sys
 import urllib.error
 import urllib.request
 
 
 def normalize_command(argv):
-    if argv:
-        command = " ".join(argv)
+    if len(argv) == 1:
+        # One argument is the frontend/profile's intentional raw command text.
+        command = argv[0]
+    elif argv:
+        # Direct CLI callers pass an argv vector; reconstruct it without losing
+        # spaces, JSON quotes, or literal shell metacharacters.
+        command = shlex.join(argv)
     else:
         command = sys.stdin.read()
 
@@ -52,11 +58,17 @@ def main():
         print(output)
 
     if result.get("timedOut"):
+        if result.get("terminated"):
+            print(
+                "codex-shell-dispatch: command timed out and was stopped.",
+                file=sys.stderr,
+            )
+            return 124
         print(
-            "codex-shell-dispatch: command is still running; switched to Shell mode.",
+            "codex-shell-dispatch: command timed out; shell state is uncertain.",
             file=sys.stderr,
         )
-        return 0
+        return 1
 
     exit_code = result.get("exitCode")
     if isinstance(exit_code, int) and 0 <= exit_code <= 255:

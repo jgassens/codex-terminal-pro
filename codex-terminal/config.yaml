@@ -1,7 +1,7 @@
 ---
 name: "Codex Terminal Pro"
 description: "Unofficial OpenAI Codex CLI terminal for Home Assistant with persistent package management, Home Assistant utilities, and image paste support."
-version: "2.5.10"
+version: "2.6.0"
 slug: "codex_terminal_pro"
 init: false
 
@@ -24,14 +24,6 @@ panel_icon: mdi:code-braces-box
 panel_title: "Codex Terminal Pro"
 panel_admin: true
 
-# Port configuration
-ports:
-  7680/tcp: null
-  7681/tcp: null
-ports_description:
-  7680/tcp: "Image upload service and web interface"
-  7681/tcp: "ttyd terminal (embedded in web interface)"
-
 # Add-on configuration options
 options:
   auto_launch_codex: true
@@ -53,7 +45,6 @@ options:
   ha_monitor_dispatch_max_chars: 12000
   supervisor_broker_enabled: true
   supervisor_broker_t1_ttl_seconds: 120
-  supervisor_broker_comma_dispatch_enabled: true
   persistent_apk_packages: []
   persistent_pip_packages: []
 
@@ -77,7 +68,6 @@ schema:
   ha_monitor_dispatch_max_chars: int?
   supervisor_broker_enabled: bool?
   supervisor_broker_t1_ttl_seconds: int?
-  supervisor_broker_comma_dispatch_enabled: bool?
   persistent_apk_packages:
     - str?
   persistent_pip_packages:
@@ -94,6 +84,3 @@ homeassistant_api: true
 
 # Service startup configuration
 startup: services
-
-# Web UI access URL
-webui: http://[HOST]:[PORT:7680]/

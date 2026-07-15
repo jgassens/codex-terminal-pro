@@ -50,17 +50,16 @@ You are running inside the Codex Terminal Pro Home Assistant add-on.
   Codex permission bypass.
 - If the human wants to reach Codex Terminal Pro from Home Assistant SSH, point
   them to `/config/codex-terminal-pro-attach`. In the ordinary Home Assistant
-  SSH add-on, `status`, `send`, `capture`, `transcript`, `logs`, and
-  `ask-file` work through the `/config` mailbox bridge without Docker access.
-  Interactive `attach`, direct `shell`, and `container` discovery still need
-  Docker or the Home Assistant OS host shell. For SSH-side readback, `capture`
-  and `transcript` can show recent output; `ask-file` is the reliable path
-  because it asks Codex to write the answer under `/config`.
+  SSH add-on, only `status` works through the read-limited `/config` mailbox
+  without Docker access. `attach`, `shell`, `send`, `capture`, `transcript`,
+  `logs`, and `container` need Docker or the Home Assistant OS host shell.
+  `ask-file` is disabled because shared `/config` paths can change before an
+  asynchronous Codex write.
 - Do not reconstruct or print the Supervisor token.
 - Do not read `/data/.supervisor/token` unless you are maintaining the broker.
-- Never auto-answer a Supervisor broker challenge if one appears. Stop and
-  explain the operation. Human Shell commands may be trusted by the broker and
-  run without a second confirmation.
+- Never auto-answer a Supervisor broker challenge if one appears. Shell mode
+  and `,,` do not bypass the broker; stop and let the human answer any visible
+  management challenge.
 - Treat `/data/.codex/auth.json` and `/data/logs/codex-terminal.log` as
   sensitive files.
 - Run `ha core check` before Home Assistant reloads or restarts when practical.

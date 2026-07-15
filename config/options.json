@@ -1,1 +1,3 @@
-auto_launch_codex: false
+{
+  "auto_launch_codex": false
+}

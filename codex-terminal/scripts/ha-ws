@@ -17,20 +17,22 @@ VERSION = "2.0"
 WS_URL = "ws://supervisor/core/websocket"
 TOKEN_FILE = Path("/data/.supervisor/token")
 
-ALLOWED_RAW_TYPES = {
-    "ping",
-    "get_config",
-    "get_states",
-    "get_services",
-    "get_panels",
-    "validate_config",
-    "extract_from_target",
-    "get_triggers_for_target",
-    "get_conditions_for_target",
-    "get_services_for_target",
-    "config/entity_registry/list_for_display",
-    "homeassistant/expose_entity/list",
+RAW_PAYLOAD_KEYS: dict[str, frozenset[str]] = {
+    "ping": frozenset(),
+    "get_config": frozenset(),
+    "get_states": frozenset(),
+    "get_services": frozenset(),
+    "get_panels": frozenset(),
+    "validate_config": frozenset({"trigger", "condition", "action"}),
+    "extract_from_target": frozenset({"target", "expand_group"}),
+    "get_triggers_for_target": frozenset({"target", "expand_group"}),
+    "get_conditions_for_target": frozenset({"target", "expand_group"}),
+    "get_services_for_target": frozenset({"target", "expand_group"}),
+    "config/entity_registry/list_for_display": frozenset(),
+    "homeassistant/expose_entity/list": frozenset(),
 }
+ALLOWED_RAW_TYPES = frozenset(RAW_PAYLOAD_KEYS)
+RESERVED_REQUEST_KEYS = frozenset({"id", "type"})
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -124,14 +126,50 @@ async def receive_json(ws: Any, timeout: float = 10) -> Any:
     return message
 
 
+def build_ws_request(command_type: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    request_payload = dict(payload or {})
+    reserved = RESERVED_REQUEST_KEYS.intersection(request_payload)
+    if reserved:
+        names = ", ".join(sorted(reserved))
+        raise RuntimeError(f"payload cannot override reserved request key(s): {names}")
+    return {**request_payload, "id": 1, "type": command_type}
+
+
+def validate_raw_payload(command_type: str, payload: dict[str, Any]) -> dict[str, Any]:
+    allowed_keys = RAW_PAYLOAD_KEYS.get(command_type)
+    if allowed_keys is None:
+        allowed = ", ".join(sorted(ALLOWED_RAW_TYPES))
+        raise RuntimeError(f"raw command type is not on the read-only allowlist. Allowed: {allowed}")
+
+    reserved = RESERVED_REQUEST_KEYS.intersection(payload)
+    if reserved:
+        names = ", ".join(sorted(reserved))
+        raise RuntimeError(f"raw payload cannot set reserved request key(s): {names}")
+
+    unexpected = set(payload).difference(allowed_keys)
+    if unexpected:
+        names = ", ".join(sorted(unexpected))
+        expected = ", ".join(sorted(allowed_keys)) or "no payload keys"
+        raise RuntimeError(
+            f"raw payload key(s) not allowed for {command_type}: {names}. Allowed: {expected}"
+        )
+
+    if "target" in payload and not isinstance(payload["target"], dict):
+        raise RuntimeError("raw target payload must be a JSON object")
+    if "expand_group" in payload and not isinstance(payload["expand_group"], bool):
+        raise RuntimeError("raw expand_group must be true or false")
+
+    return payload
+
+
 async def ws_call(command_type: str, payload: dict[str, Any] | None = None) -> Any:
+    request = build_ws_request(command_type, payload)
     try:
         import aiohttp
     except Exception as exc:  # pragma: no cover - runtime dependency check
         raise RuntimeError(f"aiohttp is not available: {exc}") from exc
 
     token = read_token()
-    payload = dict(payload or {})
 
     async with aiohttp.ClientSession() as session:
         async with session.ws_connect(WS_URL, heartbeat=30) as ws:
@@ -143,8 +181,6 @@ async def ws_call(command_type: str, payload: dict[str, Any] | None = None) -> A
             if auth.get("type") != "auth_ok":
                 raise RuntimeError(f"WebSocket authentication failed: {auth}")
 
-            request = {"id": 1, "type": command_type}
-            request.update(payload)
             await ws.send_json(request)
             while True:
                 response = await receive_json(ws)
@@ -357,12 +393,10 @@ def command_target_info(args: argparse.Namespace) -> int:
 
 
 def command_raw(args: argparse.Namespace) -> int:
-    if args.type not in ALLOWED_RAW_TYPES:
-        allowed = ", ".join(sorted(ALLOWED_RAW_TYPES))
-        raise RuntimeError(f"raw command type is not on the read-only allowlist. Allowed: {allowed}")
     payload = json.loads(args.payload)
     if not isinstance(payload, dict):
         raise RuntimeError("payload must be a JSON object")
+    validate_raw_payload(args.type, payload)
     result = asyncio.run(ws_call(args.type, payload))
     if args.json:
         print_json(result)

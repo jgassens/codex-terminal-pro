@@ -113,12 +113,45 @@ check_network() {
 
 check_home_assistant_tools() {
     log_info "=== Home Assistant Utility Check ==="
+    local status=0
 
     check_command ha false || true
     check_command gh false || true
-    check_command ttyd true
-    check_command node true
-    check_command npm true
+    check_command ttyd true || status=1
+    check_command node true || status=1
+    check_command npm true || status=1
+    return "$status"
+}
+
+check_github_integrations() {
+    local github_mcp_guard="/data/packages/guard/bin/codex-terminal-disable-github-mcp"
+
+    log_info "=== GitHub Integration Check ==="
+
+    if command -v gh >/dev/null 2>&1; then
+        if gh auth status >/dev/null 2>&1; then
+            log_info "GitHub CLI authentication is configured"
+        else
+            log_warning "GitHub CLI is installed but not authenticated; run gh auth login if CLI access is wanted"
+        fi
+    fi
+
+    if [ ! -x "$github_mcp_guard" ]; then
+        log_warning "GitHub MCP readiness guard is unavailable"
+        return 0
+    fi
+
+    if "$github_mcp_guard" --check; then
+        if [ -n "${GITHUB_PAT_TOKEN:-}" ]; then
+            log_info "GitHub MCP PAT is present; transport configuration was left unchanged"
+        else
+            log_info "No unauthenticated legacy GitHub MCP transport is enabled"
+        fi
+        return 0
+    fi
+
+    log_error "Legacy GitHub MCP transport is enabled without GITHUB_PAT_TOKEN"
+    return 1
 }
 
 main() {
@@ -128,6 +161,7 @@ main() {
     check_codex || ((errors++))
     check_codex_home || ((errors++))
     check_home_assistant_tools || ((errors++))
+    check_github_integrations || ((errors++))
     check_network || true
 
     if [ "$errors" -gt 0 ]; then

@@ -3,6 +3,11 @@
 set -e
 set -o pipefail
 
+IMAGE_SERVICE_PID=""
+TTYD_PID=""
+SSH_BRIDGE_PID=""
+HA_MONITOR_PID=""
+
 # Initialize environment for Codex CLI using /data, the persistent Home Assistant
 # add-on storage volume.
 init_environment() {
@@ -19,7 +24,6 @@ init_environment() {
     local guard_bin="$guard_root/bin"
     local guard_libexec="$guard_root/libexec"
     local persist_bin="$persist_root/bin"
-    local persist_lib="$persist_root/lib"
     local persist_python="$persist_root/python"
     local image_dir="/data/images"
     local log_dir="/data/logs"
@@ -29,7 +33,7 @@ init_environment() {
     bashio::log.info "Initializing Codex environment in /data..."
 
     if ! mkdir -p "$data_home" "$config_dir" "$cache_dir" "$local_dir" "$state_dir" "$data_dir" \
-                  "$codex_home" "$gh_config_dir" "$persist_bin" "$persist_lib" \
+                  "$codex_home" "$gh_config_dir" "$persist_bin" \
                   "$persist_python" "$guard_bin" "$guard_libexec" "$image_dir" "$log_dir" \
                   "$monitor_dir/tasks.d" "$supervisor_dir/confirm"; then
         bashio::log.error "Failed to create directories in /data"
@@ -39,7 +43,7 @@ init_environment() {
     chmod 700 "$data_home" "$config_dir" "$cache_dir" "$local_dir" "$state_dir" \
               "$data_dir" "$codex_home" "$gh_config_dir" "$guard_root" "$guard_bin" \
               "$guard_libexec" "$monitor_dir" "$monitor_dir/tasks.d" "$supervisor_dir" "$supervisor_dir/confirm"
-    chmod 755 "$persist_root" "$persist_bin" "$persist_lib" "$persist_python" "$image_dir"
+    chmod 755 "$persist_root" "$persist_bin" "$persist_python" "$image_dir"
     chmod 700 "$log_dir"
 
     export HOME="$data_home"
@@ -56,6 +60,7 @@ init_environment() {
     install_codex_plugin_cache_guard "$guard_bin"
     ensure_codex_file_credentials
     ensure_heygen_codex_plugin_disabled
+    ensure_github_codex_mcp_ready
     remove_heygen_codex_plugin_state
     ensure_codex_update_prompt_disabled
     ensure_codex_tui_defaults
@@ -64,9 +69,12 @@ init_environment() {
         chmod 600 "$CODEX_HOME/auth.json"
     fi
 
-    export PATH="$guard_bin:$persist_bin:$persist_python/venv/bin:$PATH"
-    export LD_LIBRARY_PATH="$persist_lib:${LD_LIBRARY_PATH:-}"
-    export PKG_CONFIG_PATH="$persist_lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+    if ! /opt/scripts/persistent-packages.sh migrate; then
+        bashio::log.error "Failed to quarantine legacy copied package files"
+        exit 1
+    fi
+
+    export PATH="$guard_bin:$PATH:$persist_python/venv/bin:$persist_bin"
 
     if [ -d "$persist_python/venv" ]; then
         export VIRTUAL_ENV="$persist_python/venv"
@@ -83,13 +91,15 @@ export XDG_DATA_HOME="/data/.local/share"
 export CODEX_HOME="/data/.codex"
 export GH_CONFIG_DIR="/data/.config/gh"
 
+if [ -x "/data/packages/guard/bin/codex-terminal-disable-github-mcp" ]; then
+    /data/packages/guard/bin/codex-terminal-disable-github-mcp >/dev/null 2>&1 || true
+fi
+
 if [ -x "/data/packages/guard/bin/codex-terminal-prune-codex-plugins" ]; then
     /data/packages/guard/bin/codex-terminal-prune-codex-plugins >/dev/null 2>&1 || true
 fi
 
-export PATH="/data/packages/guard/bin:/data/packages/bin:/data/packages/python/venv/bin:$PATH"
-export LD_LIBRARY_PATH="/data/packages/lib:${LD_LIBRARY_PATH:-}"
-export PKG_CONFIG_PATH="/data/packages/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+export PATH="/data/packages/guard/bin:/data/packages/python/venv/bin:$PATH:/data/packages/bin"
 if [ -d "/opt/modbus-python" ]; then
     export PYTHONPATH="/opt/modbus-python:${PYTHONPATH:-}"
 fi
@@ -115,17 +125,21 @@ PROFILE_EOF
 ensure_codex_file_credentials() {
     local config_file="$CODEX_HOME/config.toml"
 
-    touch "$config_file"
-    chmod 644 "$config_file"
-
-    set_codex_top_level_config "$config_file" "cli_auth_credentials_store" '"file"'
+    if ! set_codex_top_level_config "$config_file" "cli_auth_credentials_store" '"file"'; then
+        bashio::log.warning "Could not set Codex file credential storage; invalid config.toml was left unchanged"
+    fi
+    return 0
 }
 
 ensure_codex_update_prompt_disabled() {
     local config_file="$CODEX_HOME/config.toml"
 
-    set_codex_top_level_config "$config_file" "check_for_update_on_startup" "false"
-    bashio::log.info "Codex CLI startup update prompt disabled; update Codex through add-on releases"
+    if set_codex_top_level_config "$config_file" "check_for_update_on_startup" "false"; then
+        bashio::log.info "Codex CLI startup update prompt disabled; update Codex through add-on releases"
+    else
+        bashio::log.warning "Could not update Codex startup prompt setting; invalid config.toml was left unchanged"
+    fi
+    return 0
 }
 
 ensure_heygen_codex_plugin_disabled() {
@@ -144,135 +158,60 @@ ensure_heygen_codex_plugin_disabled() {
     bashio::log.warning "Failed to disable HeyGen Codex plugin entries in config.toml"
 }
 
+ensure_github_codex_mcp_ready() {
+    local disabler="/data/packages/guard/bin/codex-terminal-disable-github-mcp"
+
+    if [ ! -x "$disabler" ]; then
+        bashio::log.warning "GitHub Codex MCP readiness guard missing: ${disabler}"
+        return 0
+    fi
+
+    if "$disabler"; then
+        if [ -n "${GITHUB_PAT_TOKEN:-}" ]; then
+            bashio::log.info "GitHub Codex MCP: PAT is present; transport configuration left unchanged"
+        else
+            bashio::log.info "GitHub Codex MCP: disabled legacy PAT-backed transport; GitHub plugin and gh CLI preserved"
+        fi
+        return 0
+    fi
+
+    bashio::log.warning "Failed to apply GitHub Codex MCP readiness policy"
+}
+
 set_codex_top_level_config() {
     local config_file="$1"
     local key="$2"
     local value="$3"
-    local tmp_file="${config_file}.tmp.$$"
+    local setter="${CODEX_CONFIG_SET_BIN:-/opt/scripts/codex-config-set}"
 
-    touch "$config_file"
-    chmod 644 "$config_file"
-
-    awk -v key="$key" -v value="$value" '
-        BEGIN {
-            inserted = 0
-            in_table = 0
-            key_pattern = "^[[:space:]]*" key "[[:space:]]*="
-        }
-        !inserted && !in_table && $0 ~ key_pattern {
-            print key " = " value
-            inserted = 1
-            next
-        }
-        !inserted && $0 ~ /^[[:space:]]*\[/ {
-            print key " = " value
-            print ""
-            inserted = 1
-            in_table = 1
-            print
-            next
-        }
-        {
-            if ($0 ~ /^[[:space:]]*\[/) {
-                in_table = 1
-            }
-            print
-        }
-        END {
-            if (!inserted) {
-                print key " = " value
-            }
-        }
-    ' "$config_file" > "$tmp_file"
-
-    mv "$tmp_file" "$config_file"
-    chmod 644 "$config_file"
+    "$setter" "$config_file" "$key" "$value"
 }
 
 ensure_codex_tui_defaults() {
     local config_file="$CODEX_HOME/config.toml"
+    local tui_setter="${CODEX_CONFIG_TUI_BIN:-/opt/scripts/codex-config-tui}"
 
-    if grep -Eq '^[[:space:]]*status_line[[:space:]]*=' "$config_file"; then
-        sanitize_codex_status_line "$config_file"
-        bashio::log.info "Codex TUI status line already present; preserving user preference"
-        return
+    if "$tui_setter" "$config_file"; then
+        bashio::log.info "Codex TUI defaults verified; supported user status items preserved"
+    else
+        bashio::log.warning "Could not update Codex TUI defaults; invalid config.toml was left unchanged"
     fi
-
-    if grep -Eq '^[[:space:]]*(\[tui\]|tui\.)' "$config_file"; then
-        bashio::log.info "Codex TUI config already present; leaving it unchanged"
-        return
-    fi
-
-    write_codex_tui_defaults "$config_file"
-}
-
-sanitize_codex_status_line() {
-    local config_file="$1"
-
-    python3 - "$config_file" << 'PY'
-from pathlib import Path
-import re
-import sys
-
-path = Path(sys.argv[1])
-text = path.read_text(encoding="utf-8")
-
-# These are valid Codex concepts/settings, but the pinned 0.134.0 CLI does not
-# accept them as [tui].status_line item IDs. Keep every other user-selected
-# footer item intact.
-unsupported_status_line_items = {"auto-review", "permissions", "approval-mode"}
-
-def sanitize(match: re.Match[str]) -> str:
-    prefix = match.group("prefix")
-    body = match.group("body")
-    suffix = match.group("suffix")
-    items = re.findall(r'"([^"]+)"', body)
-    if not items:
-        return match.group(0)
-    kept = [item for item in items if item not in unsupported_status_line_items]
-    if kept == items:
-        return match.group(0)
-    if not kept:
-        kept = [
-            "run-state",
-            "model-with-reasoning",
-            "fast-mode",
-            "context-remaining",
-            "five-hour-limit",
-            "weekly-limit",
-        ]
-    rendered = ", ".join(f'"{item}"' for item in kept)
-    return f"{prefix}[{rendered}]{suffix}"
-
-updated = re.sub(
-    r'(?m)^(?P<prefix>[ \t]*status_line[ \t]*=[ \t]*)\[(?P<body>[^\n\]]*)\](?P<suffix>[ \t]*(?:#.*)?)$',
-    sanitize,
-    text,
-)
-
-if updated != text:
-    path.write_text(updated, encoding="utf-8")
-PY
-}
-
-write_codex_tui_defaults() {
-    local config_file="$1"
-
-    cat >> "$config_file" << 'TUI_EOF'
-
-# Codex Terminal Pro default TUI. Edit or remove this block to customize.
-[tui]
-theme = "catppuccin-mocha"
-status_line_use_colors = true
-status_line = ["run-state", "model-with-reasoning", "fast-mode", "context-remaining", "five-hour-limit", "weekly-limit"]
-TUI_EOF
+    return 0
 }
 
 install_codex_plugin_cache_guard() {
     local guard_bin="$1"
     local pruner="${guard_bin}/codex-terminal-prune-codex-plugins"
-    local disabler="${guard_bin}/codex-terminal-disable-heygen-plugin"
+    local heygen_disabler="${guard_bin}/codex-terminal-disable-heygen-plugin"
+    local github_mcp_disabler="${guard_bin}/codex-terminal-disable-github-mcp"
     local wrapper="${guard_bin}/codex"
+
+    if [ -f "/opt/scripts/codex_config_utils.py" ]; then
+        cp /opt/scripts/codex_config_utils.py "${guard_bin}/codex_config_utils.py"
+        chmod 644 "${guard_bin}/codex_config_utils.py"
+    else
+        bashio::log.warning "Codex config lock helper missing: /opt/scripts/codex_config_utils.py"
+    fi
 
     if [ -f "/opt/scripts/codex-prune-plugins" ]; then
         cp /opt/scripts/codex-prune-plugins "$pruner"
@@ -282,10 +221,17 @@ install_codex_plugin_cache_guard() {
     fi
 
     if [ -f "/opt/scripts/codex-disable-heygen-plugin" ]; then
-        cp /opt/scripts/codex-disable-heygen-plugin "$disabler"
-        chmod 755 "$disabler"
+        cp /opt/scripts/codex-disable-heygen-plugin "$heygen_disabler"
+        chmod 755 "$heygen_disabler"
     else
         bashio::log.warning "Codex HeyGen plugin disabler missing: /opt/scripts/codex-disable-heygen-plugin"
+    fi
+
+    if [ -f "/opt/scripts/codex-disable-github-mcp" ]; then
+        cp /opt/scripts/codex-disable-github-mcp "$github_mcp_disabler"
+        chmod 755 "$github_mcp_disabler"
+    else
+        bashio::log.warning "Codex GitHub MCP disabler missing: /opt/scripts/codex-disable-github-mcp"
     fi
 
     cat > "$wrapper" << 'CODEX_GUARD_EOF'
@@ -295,6 +241,10 @@ set -uo pipefail
 
 if [ -x "/data/packages/guard/bin/codex-terminal-disable-heygen-plugin" ]; then
     /data/packages/guard/bin/codex-terminal-disable-heygen-plugin >/dev/null 2>&1 || true
+fi
+
+if [ -x "/data/packages/guard/bin/codex-terminal-disable-github-mcp" ]; then
+    /data/packages/guard/bin/codex-terminal-disable-github-mcp >/dev/null 2>&1 || true
 fi
 
 if [ -x "/data/packages/guard/bin/codex-terminal-prune-codex-plugins" ]; then
@@ -372,7 +322,7 @@ install_tools() {
 
 log_startup_diagnostics() {
     local app_name="${APP_NAME:-${ADDON_NAME:-Codex Terminal Pro}}"
-    local app_version="${BUILD_VERSION:-${APP_VERSION:-2.5.10}}"
+    local app_version="${BUILD_VERSION:-${APP_VERSION:-2.6.0}}"
 
     bashio::log.info "Startup diagnostics:"
     bashio::log.info "  - Date: $(date)"
@@ -494,13 +444,39 @@ setup_shell_dispatch_profile() {
     fi
 }
 
+managed_config_path() {
+    local config_root="${CODEX_TERMINAL_CONFIG_ROOT:-/config}"
+    local name="$1"
+
+    printf '%s/%s\n' "${config_root%/}" "$name"
+}
+
+safe_publish_config_file() {
+    local source="$1"
+    local name="$2"
+    local mode="$3"
+    local helper="${CODEX_TERMINAL_CONFIG_FILE_HELPER:-/opt/scripts/codex-terminal-config-files.py}"
+
+    "$helper" publish "$source" "$name" "$mode"
+}
+
+safe_snapshot_config_file() {
+    local name="$1"
+    local destination="$2"
+    local helper="${CODEX_TERMINAL_CONFIG_FILE_HELPER:-/opt/scripts/codex-terminal-config-files.py}"
+
+    "$helper" snapshot "$name" "$destination"
+}
+
 setup_host_ssh_attach_helper() {
     local source="/opt/scripts/codex-terminal-host-attach.sh"
-    local target="/config/codex-terminal-pro-attach"
+    local target_name="codex-terminal-pro-attach"
+    local target
+
+    target="$(managed_config_path "$target_name")"
 
     if [ -f "${source}" ]; then
-        if cp "${source}" "${target}"; then
-            chmod 755 "${target}"
+        if safe_publish_config_file "$source" "$target_name" "0755"; then
             bashio::log.info "Home Assistant SSH attach helper written to ${target}"
         else
             bashio::log.warning "Could not write Home Assistant SSH attach helper to ${target}"
@@ -517,12 +493,28 @@ setup_persistent_packages() {
         bashio::log.info "Persistent package manager installed: persist-install"
     fi
 
-    auto_install_packages
+    restore_persisted_apk_packages
+    restore_persisted_python_packages
+    if ! auto_install_packages; then
+        bashio::log.warning "Some configured persistent packages could not be installed"
+    fi
+}
+
+restore_persisted_apk_packages() {
+    if ! /opt/scripts/persistent-packages.sh restore; then
+        bashio::log.warning "Some persisted APK packages could not be restored; all manifest entries were attempted"
+    fi
+}
+
+restore_persisted_python_packages() {
+    if ! /opt/scripts/persistent-packages.sh restore-pip; then
+        bashio::log.warning "Persisted Python requirements could not be restored for the current interpreter"
+    fi
 }
 
 is_safe_package_name() {
     case "$1" in
-        ''|*[!A-Za-z0-9@._:+!=\>\<,\[\]~-]*)
+        ''|-*|*[!A-Za-z0-9@._:+!=\>\<,\[\]~-]*)
             return 1
             ;;
         *)
@@ -534,59 +526,90 @@ is_safe_package_name() {
 auto_install_packages() {
     local apk_packages
     local pip_packages
+    local pkg
+    local status=0
+    local persist_install_bin="${PERSIST_INSTALL_BIN:-/usr/local/bin/persist-install}"
+    local apk_args=()
+    local pip_args=()
 
-    apk_packages=$(bashio::config 'persistent_apk_packages' '[]')
-    pip_packages=$(bashio::config 'persistent_pip_packages' '[]')
-
-    if [ "$apk_packages" != "[]" ] && [ -n "$apk_packages" ]; then
-        bashio::log.info "Auto-installing system packages from config..."
-        echo "$apk_packages" | jq -r '.[]' | while read -r pkg; do
-            if [ -n "$pkg" ]; then
-                if ! is_safe_package_name "$pkg"; then
-                    bashio::log.warning "Skipping invalid system package name: $pkg"
-                    continue
-                fi
-                bashio::log.info "  Installing: $pkg"
-                /usr/local/bin/persist-install "$pkg" || bashio::log.warning "Failed to install: $pkg"
-            fi
-        done
+    if ! apk_packages="$(bashio::config 'persistent_apk_packages' '')"; then
+        bashio::log.error "Could not read persistent_apk_packages configuration"
+        return 1
+    fi
+    if ! pip_packages="$(bashio::config 'persistent_pip_packages' '')"; then
+        bashio::log.error "Could not read persistent_pip_packages configuration"
+        return 1
     fi
 
-    if [ "$pip_packages" != "[]" ] && [ -n "$pip_packages" ]; then
-        bashio::log.info "Auto-installing Python packages from config..."
-        local pip_args=()
-        local pkg
-
+    # bashio emits array values one per line; it does not return JSON here.
+    if [ -n "$apk_packages" ]; then
+        bashio::log.info "Auto-installing system packages from config..."
         while IFS= read -r pkg; do
-            if [ -z "$pkg" ]; then
+            [ -n "$pkg" ] || continue
+            if ! is_safe_package_name "$pkg"; then
+                bashio::log.warning "Rejected invalid system package name: $pkg"
+                status=1
                 continue
             fi
+            apk_args+=("$pkg")
+        done <<< "$apk_packages"
+
+        if [ "${#apk_args[@]}" -gt 0 ]; then
+            bashio::log.info "  Installing: ${apk_args[*]}"
+            "$persist_install_bin" "${apk_args[@]}" || status=$?
+        fi
+    fi
+
+    if [ -n "$pip_packages" ]; then
+        bashio::log.info "Auto-installing Python packages from config..."
+        while IFS= read -r pkg; do
+            [ -n "$pkg" ] || continue
             if ! is_safe_package_name "$pkg"; then
-                bashio::log.warning "Skipping invalid Python package name: $pkg"
+                bashio::log.warning "Rejected invalid Python package name: $pkg"
+                status=1
                 continue
             fi
             pip_args+=("$pkg")
-        done < <(echo "$pip_packages" | jq -r '.[]')
+        done <<< "$pip_packages"
 
         if [ "${#pip_args[@]}" -gt 0 ]; then
             bashio::log.info "  Installing: ${pip_args[*]}"
-            /usr/local/bin/persist-install --python "${pip_args[@]}" || bashio::log.warning "Failed to install Python packages"
+            "$persist_install_bin" --python "${pip_args[@]}" || status=$?
         fi
     fi
+
+    return "$status"
 }
 
 write_codex_terminal_agents_block() {
-    local target_file="$1"
-    local tmp_file
+    local target_name="$1"
+    local fallback_source="$2"
+    local input_file
+    local output_file
+    local snapshot_status=0
 
-    tmp_file="$(mktemp)"
+    input_file="$(mktemp)"
+    output_file="$(mktemp)"
+    if safe_snapshot_config_file "$target_name" "$input_file"; then
+        :
+    else
+        snapshot_status=$?
+        if [ "$snapshot_status" -ne 3 ]; then
+            bashio::log.warning "Unsafe or unreadable $(managed_config_path "$target_name") was not followed; replacing it with managed guidance"
+        fi
+        if ! cp "$fallback_source" "$input_file"; then
+            rm -f "$input_file" "$output_file"
+            return 1
+        fi
+    fi
+
     awk '
         /^<!-- BEGIN CODEX TERMINAL PRO MANAGED GUIDANCE -->$/ { skip = 1; next }
         /^<!-- END CODEX TERMINAL PRO MANAGED GUIDANCE -->$/ { skip = 0; next }
         !skip { print }
-    ' "$target_file" > "$tmp_file"
+    ' "$input_file" > "$output_file"
 
-    cat >> "$tmp_file" <<'AGENTS_BLOCK'
+    cat >> "$output_file" <<'AGENTS_BLOCK'
 
 <!-- BEGIN CODEX TERMINAL PRO MANAGED GUIDANCE -->
 ## Codex Terminal Pro Capabilities
@@ -618,12 +641,11 @@ write_codex_terminal_agents_block() {
   action such as Change Desk's Ask Mall Cop button.
 - From a Home Assistant SSH shell with `/config` access, run
   `/config/codex-terminal-pro-attach`. In the ordinary Home Assistant SSH
-  add-on, `status`, `send`, `capture`, `transcript`, `logs`, and `ask-file`
-  work through the `/config` mailbox bridge without Docker access. Interactive
-  `attach`, direct `shell`, and `container` discovery still need Docker or the
-  Home Assistant OS host shell. For SSH-side readback, `capture` and
-  `transcript` can show recent output; `ask-file` is the reliable path because
-  it asks Codex to write the answer under `/config`.
+  add-on, only `status` works through the read-limited `/config` mailbox without
+  Docker access. `attach`, `shell`, `send`, `capture`, `transcript`, `logs`, and
+  `container` need Docker or the Home Assistant OS host shell. `ask-file` is
+  disabled because shared `/config` paths can change before an asynchronous
+  Codex write.
 - Treat monitor findings labeled localized connectivity noise as device,
   Modbus, Wi-Fi, socket, or reachability trouble first, not proof of broken
   Home Assistant configuration. Confirm whether the entity is safety, security,
@@ -642,9 +664,9 @@ write_codex_terminal_agents_block() {
   `codex-shell-dispatch supervisor-api -X POST /core/api/services/automation/reload`.
 - Do not ask for another confirmation before using `codex-shell-dispatch` for a
   `,,` prompt; the prefix is the human's direct shell-dispatch instruction.
-- Human Shell commands typed in Shell mode or dispatched with `,,` may run
-  without a second broker confirmation. Codex/non-interactive management
-  operations remain broker-guarded.
+- Shell mode and `,,` select the interactive command surface; they do not
+  bypass the broker. Read-only work runs directly, while management operations
+  show a challenge that only the human should answer.
 - Use `/opt/home-assistant/HA.md` as the local Home Assistant field guide.
 - Search current official Home Assistant documentation or inspect live service
   schemas when integration behavior, service payloads, or Supervisor behavior
@@ -659,8 +681,11 @@ write_codex_terminal_agents_block() {
 <!-- END CODEX TERMINAL PRO MANAGED GUIDANCE -->
 AGENTS_BLOCK
 
-    mv "$tmp_file" "$target_file"
-    chmod 644 "$target_file"
+    if ! safe_publish_config_file "$output_file" "$target_name" "0644"; then
+        rm -f "$input_file" "$output_file"
+        return 1
+    fi
+    rm -f "$input_file" "$output_file"
 }
 
 setup_supervisor_broker() {
@@ -668,14 +693,20 @@ setup_supervisor_broker() {
     local supervisor_dir="/data/.supervisor"
     local broker_enabled
     local broker_ttl
-    local broker_comma_dispatch_enabled
-    local target_agents="/config/AGENTS.md"
-    local fallback_agents="/config/AGENTS.codex-terminal-pro.md"
-    local briefing_file="/config/CODEX_TERMINAL_PRO.md"
+    local target_agents_name="AGENTS.md"
+    local fallback_agents_name="AGENTS.codex-terminal-pro.md"
+    local briefing_name="CODEX_TERMINAL_PRO.md"
+    local target_agents
+    local fallback_agents
+    local briefing_file
+    local briefing_tmp
+
+    target_agents="$(managed_config_path "$target_agents_name")"
+    fallback_agents="$(managed_config_path "$fallback_agents_name")"
+    briefing_file="$(managed_config_path "$briefing_name")"
 
     broker_enabled=$(bashio::config 'supervisor_broker_enabled' 'true')
     broker_ttl=$(normalize_nonnegative_int "$(bashio::config 'supervisor_broker_t1_ttl_seconds' '120')" "120")
-    broker_comma_dispatch_enabled=$(bashio::config 'supervisor_broker_comma_dispatch_enabled' 'true')
 
     mkdir -p "$guard_dir" "$supervisor_dir/confirm" "/data/logs"
     chmod 700 "/data/packages/guard" "$guard_dir" "$supervisor_dir" "$supervisor_dir/confirm" "/data/logs"
@@ -690,7 +721,6 @@ setup_supervisor_broker() {
     cat > "$supervisor_dir/broker.conf" << BROKER_CONF
 SUPERVISOR_BROKER_ENABLED="${broker_enabled}"
 SUPERVISOR_BROKER_T1_TTL_SECONDS="${broker_ttl}"
-SUPERVISOR_BROKER_COMMA_DISPATCH_ENABLED="${broker_comma_dispatch_enabled}"
 BROKER_CONF
     chmod 600 "$supervisor_dir/broker.conf"
 
@@ -714,26 +744,32 @@ BROKER_CONF
     if [ -f /opt/scripts/codex-terminal-briefing ]; then
         cp /opt/scripts/codex-terminal-briefing /usr/local/bin/codex-terminal-briefing
         chmod 755 /usr/local/bin/codex-terminal-briefing
-        /usr/local/bin/codex-terminal-briefing > "$briefing_file"
-        chmod 644 "$briefing_file"
+        briefing_tmp="$(mktemp)"
+        if ! /usr/local/bin/codex-terminal-briefing > "$briefing_tmp"; then
+            rm -f "$briefing_tmp"
+            bashio::log.error "Could not generate Codex Terminal Pro briefing"
+            return 1
+        fi
+        if ! safe_publish_config_file "$briefing_tmp" "$briefing_name" "0644"; then
+            rm -f "$briefing_tmp"
+            bashio::log.error "Could not safely write Codex Terminal Pro briefing to $briefing_file"
+            return 1
+        fi
+        rm -f "$briefing_tmp"
         bashio::log.info "Codex Terminal Pro briefing written to $briefing_file"
     fi
 
     if [ -f /opt/scripts/codex-terminal-agents.md ]; then
-        cp /opt/scripts/codex-terminal-agents.md "$fallback_agents"
-        chmod 644 "$fallback_agents"
-        if [ ! -e "$target_agents" ]; then
-            cp "$fallback_agents" "$target_agents"
-            chmod 644 "$target_agents"
-            bashio::log.info "Installed Codex Terminal Pro agent guidance at $target_agents and $fallback_agents"
-        else
-            write_codex_terminal_agents_block "$target_agents"
-            bashio::log.info "Existing /config/AGENTS.md preserved and updated with managed Codex Terminal Pro guidance; full guidance also written to $fallback_agents"
+        if ! safe_publish_config_file /opt/scripts/codex-terminal-agents.md "$fallback_agents_name" "0644"; then
+            bashio::log.error "Could not safely write fallback agent guidance to $fallback_agents"
+            return 1
         fi
+        write_codex_terminal_agents_block "$target_agents_name" /opt/scripts/codex-terminal-agents.md
+        bashio::log.info "Existing regular /config/AGENTS.md content was preserved when safe; managed guidance is installed at $target_agents and $fallback_agents"
     fi
 
     unset SUPERVISOR_TOKEN
-    bashio::log.info "Supervisor broker: enabled=${broker_enabled}, T1 TTL=${broker_ttl}s, comma dispatch=${broker_comma_dispatch_enabled}"
+    bashio::log.info "Supervisor broker: enabled=${broker_enabled}, T1 TTL=${broker_ttl}s"
 }
 
 get_codex_launch_command() {
@@ -810,9 +846,6 @@ export XDG_STATE_HOME="${XDG_STATE_HOME}"
 export XDG_DATA_HOME="${XDG_DATA_HOME}"
 export CODEX_HOME="${CODEX_HOME}"
 export GH_CONFIG_DIR="${GH_CONFIG_DIR}"
-export PATH="${PATH}"
-export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"
-export PKG_CONFIG_PATH="${PKG_CONFIG_PATH:-}"
 export PYTHONPATH="${PYTHONPATH:-}"
 export TMUX_SESSION="${TMUX_SESSION}"
 export TMUX_TARGET="${TMUX_TARGET}"
@@ -876,6 +909,9 @@ function redact(line) {
     gsub(/Bearer[[:space:]]+[A-Za-z0-9._~+\\/=:-]+/, "Bearer [REDACTED]", line)
     gsub(/sk-[A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-]+/, "sk-[REDACTED]", line)
     gsub(/SUPERVISOR_TOKEN=[^[:space:]]+/, "SUPERVISOR_TOKEN=[REDACTED]", line)
+    gsub(/GITHUB_PAT_TOKEN=[^[:space:]]+/, "GITHUB_PAT_TOKEN=[REDACTED]", line)
+    gsub(/gh[pousr]_[A-Za-z0-9_][A-Za-z0-9_][A-Za-z0-9_][A-Za-z0-9_][A-Za-z0-9_][A-Za-z0-9_][A-Za-z0-9_][A-Za-z0-9_][A-Za-z0-9_][A-Za-z0-9_]+/, "github_[REDACTED]", line)
+    gsub(/github_pat_[A-Za-z0-9_][A-Za-z0-9_][A-Za-z0-9_][A-Za-z0-9_][A-Za-z0-9_][A-Za-z0-9_][A-Za-z0-9_][A-Za-z0-9_][A-Za-z0-9_][A-Za-z0-9_]+/, "github_pat_[REDACTED]", line)
     gsub(/eyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+/, "[JWT REDACTED]", line)
     return line
 }
@@ -967,12 +1003,14 @@ start_image_service() {
         return 1
     fi
 
-    node "${server_file}" 2>&1 | while IFS= read -r line; do
-        bashio::log.info "[Image Service] $line"
-    done &
+    node "${server_file}" > >(
+        while IFS= read -r line; do
+            bashio::log.info "[Image Service] $line"
+        done
+    ) 2>&1 &
 
-    local image_service_pid=$!
-    bashio::log.info "Image service started (PID: ${image_service_pid})"
+    IMAGE_SERVICE_PID=$!
+    bashio::log.info "Image service started (PID: ${IMAGE_SERVICE_PID})"
 
     for i in $(seq 1 20); do
         if curl -fsS "http://127.0.0.1:${image_port}/health" >/dev/null 2>&1; then
@@ -980,7 +1018,7 @@ start_image_service() {
             break
         fi
 
-        if ! kill -0 "${image_service_pid}" 2>/dev/null; then
+        if ! kill -0 "${IMAGE_SERVICE_PID}" 2>/dev/null; then
             break
         fi
 
@@ -995,6 +1033,71 @@ start_image_service() {
     fi
 }
 
+stop_web_processes() {
+    local signal="${1:-TERM}"
+    local pid
+
+    for pid in "${TTYD_PID:-}" "${IMAGE_SERVICE_PID:-}" "${SSH_BRIDGE_PID:-}" "${HA_MONITOR_PID:-}"; do
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            kill "-${signal}" "$pid" 2>/dev/null || true
+        fi
+    done
+}
+
+supervise_web_processes() {
+    local wait_status=0
+    local exit_status=0
+    local shutting_down="false"
+    local supervised_pids=("$IMAGE_SERVICE_PID" "$TTYD_PID")
+
+    if [ -n "${SSH_BRIDGE_PID:-}" ]; then
+        supervised_pids+=("$SSH_BRIDGE_PID")
+    fi
+    if [ -n "${HA_MONITOR_PID:-}" ]; then
+        supervised_pids+=("$HA_MONITOR_PID")
+    fi
+
+    trap 'shutting_down="true"; stop_web_processes TERM' TERM INT
+
+    wait -n "${supervised_pids[@]}" || wait_status=$?
+
+    if [ "$shutting_down" = "true" ]; then
+        stop_web_processes TERM
+        wait "$IMAGE_SERVICE_PID" 2>/dev/null || true
+        wait "$TTYD_PID" 2>/dev/null || true
+        wait "$SSH_BRIDGE_PID" 2>/dev/null || true
+        wait "$HA_MONITOR_PID" 2>/dev/null || true
+        trap - TERM INT
+        return 0
+    fi
+
+    if ! kill -0 "$IMAGE_SERVICE_PID" 2>/dev/null; then
+        bashio::log.error "Image service exited; stopping ttyd so Home Assistant can restart the add-on"
+        exit_status=1
+    elif ! kill -0 "$TTYD_PID" 2>/dev/null; then
+        bashio::log.error "ttyd exited; stopping image service so Home Assistant can restart the add-on"
+        exit_status="${wait_status:-1}"
+        [ "$exit_status" -ne 0 ] || exit_status=1
+    elif [ -n "${SSH_BRIDGE_PID:-}" ] && ! kill -0 "$SSH_BRIDGE_PID" 2>/dev/null; then
+        bashio::log.error "SSH bridge exited; stopping web processes so Home Assistant can restart the add-on"
+        exit_status=1
+    elif [ -n "${HA_MONITOR_PID:-}" ] && ! kill -0 "$HA_MONITOR_PID" 2>/dev/null; then
+        bashio::log.error "HA monitor exited; stopping web processes so Home Assistant can restart the add-on"
+        exit_status=1
+    else
+        bashio::log.error "Web process supervisor woke without a child exit"
+        exit_status=1
+    fi
+
+    stop_web_processes TERM
+    wait "$IMAGE_SERVICE_PID" 2>/dev/null || true
+    wait "$TTYD_PID" 2>/dev/null || true
+    wait "$SSH_BRIDGE_PID" 2>/dev/null || true
+    wait "$HA_MONITOR_PID" 2>/dev/null || true
+    trap - TERM INT
+    return "$exit_status"
+}
+
 start_ssh_bridge() {
     local bridge_bin="/opt/scripts/codex-terminal-ssh-bridge.sh"
 
@@ -1004,12 +1107,13 @@ start_ssh_bridge() {
     fi
 
     bashio::log.info "Starting Home Assistant SSH bridge..."
-    (
-        "${bridge_bin}" 2>&1 | while IFS= read -r line; do
+    "${bridge_bin}" > >(
+        while IFS= read -r line; do
             bashio::log.info "[SSH Bridge] ${line}"
         done
-    ) &
-    bashio::log.info "Home Assistant SSH bridge background PID: $!"
+    ) 2>&1 &
+    SSH_BRIDGE_PID=$!
+    bashio::log.info "Home Assistant SSH bridge background PID: ${SSH_BRIDGE_PID}"
 }
 
 start_web_terminal() {
@@ -1053,7 +1157,7 @@ start_web_terminal() {
 
     bashio::log.info "Final ttyd command: ttyd --port ${port} --interface 127.0.0.1 --writable --ping-interval 30 --client-option reconnect=5 --client-option macOptionClickForcesSelection=true --client-option rightClickSelectsWord=true tmux -f ${tmux_config} attach-session -t ${tmux_session}"
 
-    exec ttyd \
+    ttyd \
         --port "${port}" \
         --interface 127.0.0.1 \
         --writable \
@@ -1061,7 +1165,11 @@ start_web_terminal() {
         --client-option reconnect=5 \
         --client-option macOptionClickForcesSelection=true \
         --client-option rightClickSelectsWord=true \
-        tmux -f "${tmux_config}" attach-session -t "${tmux_session}"
+        tmux -f "${tmux_config}" attach-session -t "${tmux_session}" &
+    TTYD_PID=$!
+    bashio::log.info "ttyd started (PID: ${TTYD_PID}); supervising ttyd and image service"
+
+    supervise_web_processes
 }
 
 run_health_check() {
@@ -1099,11 +1207,13 @@ start_ha_monitor() {
 
     monitor_enabled=$(bashio::config 'ha_monitor_enabled' 'true')
     if [ "${monitor_enabled}" != "true" ]; then
+        HA_MONITOR_PID=""
         bashio::log.info "HA monitor disabled"
         return 0
     fi
 
     if [ ! -x "${monitor_bin}" ]; then
+        HA_MONITOR_PID=""
         bashio::log.warning "HA monitor helper is not available at ${monitor_bin}"
         return 0
     fi
@@ -1144,12 +1254,13 @@ start_ha_monitor() {
     fi
 
     bashio::log.info "Starting HA monitor: interval=${monitor_interval}s, log_lines=${monitor_log_lines}, max_issues=${monitor_max_issues}, dispatch=${monitor_dispatch_max_chars} chars"
-    (
-        "${monitor_bin}" "${monitor_args[@]}" daemon 2>&1 | while IFS= read -r line; do
+    "${monitor_bin}" "${monitor_args[@]}" daemon > >(
+        while IFS= read -r line; do
             bashio::log.info "[HA Monitor] ${line}"
         done
-    ) &
-    bashio::log.info "HA monitor background PID: $!"
+    ) 2>&1 &
+    HA_MONITOR_PID=$!
+    bashio::log.info "HA monitor background PID: ${HA_MONITOR_PID}"
 }
 
 main() {
@@ -1170,4 +1281,6 @@ main() {
     start_web_terminal
 }
 
-main "$@"
+if [ "${CODEX_TERMINAL_RUN_LIBRARY_ONLY:-false}" != "true" ]; then
+    main "$@"
+fi

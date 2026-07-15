@@ -34,8 +34,9 @@ Treat this file as the local map of the room.
 - The web wrapper has Codex mode and Shell mode.
 - Codex mode shows the Codex TUI.
 - Shell mode is a real `/config` shell in a separate tmux window.
-- Commands typed in Shell mode, or dispatched with `,,`, are treated as human
-  shell commands by the broker.
+- Shell mode and `,,` select the interactive command surface; they do not
+  bypass the broker. Read-only work runs directly, while management operations
+  show a challenge that only the human should answer.
 - Mobile uses a native command bar; the ttyd iframe remains the live display.
 
 ## Home Assistant SSH Access
@@ -43,21 +44,15 @@ Treat this file as the local map of the room.
 - Codex Terminal Pro does not run its own SSH server.
 - If the human is already in a Home Assistant SSH shell with `/config` access,
   they can run `/config/codex-terminal-pro-attach`.
-- Useful host-shell commands are `/config/codex-terminal-pro-attach status`,
-  `/config/codex-terminal-pro-attach send "say hello"`,
-  `/config/codex-terminal-pro-attach capture 120`,
-  `/config/codex-terminal-pro-attach transcript 120`,
-  `ask-file` with an output path under `/config`,
-  and `/config/codex-terminal-pro-attach logs`.
-- These commands work from the ordinary Home Assistant SSH add-on without
-  Docker by using the `/config` mailbox bridge.
-- `capture` and `transcript` are useful visibility aids; `ask-file` is the
-  reliable SSH-side request/response path because it asks Codex to write the
-  answer under `/config` where the SSH shell can read it.
-- Interactive `attach`, direct `shell`, and `container` discovery still need
-  Docker or a Home Assistant OS host shell because they require another
-  container's TTY. From the raw HA OS host shell, use the Home Assistant config
-  directory path, commonly
+- Without Docker, only `/config/codex-terminal-pro-attach status` works through
+  the read-limited `/config` mailbox. Shared `/config` is not an authenticated
+  prompt or transcript channel.
+- `attach`, `shell`, `send`, `capture`, `transcript`, `logs`, and `container`
+  need Docker or a Home Assistant OS host shell because they access the running
+  add-on container directly. `ask-file` is disabled because a shared `/config`
+  path can change before an asynchronous Codex write.
+- From the raw HA OS host shell, use the Home Assistant config directory path,
+  commonly
   `/mnt/data/supervisor/homeassistant/codex-terminal-pro-attach`.
 
 ## Home Assistant Tools

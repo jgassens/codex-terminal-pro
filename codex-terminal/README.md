@@ -36,8 +36,8 @@ Highlighted terminal text is copied to the browser clipboard when the selection
 finishes. tmux mouse selections are forwarded to the browser clipboard through
 OSC 52 support. On touch devices, use **Select Text** in the terminal toolbar,
 then drag across the terminal text to select it. Mobile browser clipboard APIs
-are best-effort, so the selection remains visible even when the browser blocks
-automatic copy.
+are best-effort, so a failed automatic copy opens an explicit **Copy selection**
+panel containing the exact selected text.
 
 Dropped or pasted images are uploaded to `/data/images`, and the saved image
 path is inserted directly into the Codex prompt. Paste is captured inside the
@@ -66,7 +66,9 @@ Opening Change Desk asks Mall Cop to observe and report at most once every 24
 hours, and the footer **Ask Mall Cop** action forces a fresh run. Mall Cop sends
 a chronic-condition packet to `codex exec` in read-only mode, stores memory
 under `/data/monitor/change-desk-mall-cop-memory.json`, and renders the returned
-**Mall Cop: To Observe and Report** summary back in Change Desk.
+**Mall Cop: To Observe and Report** summary back in Change Desk. The subprocess
+runs as an unprivileged user inside a minimal filesystem jail with no `/config`
+or `/data` tree.
 
 ## Shell Mode And `,,` Dispatch
 
@@ -78,10 +80,10 @@ example `,, ha store reload` or `,,ha store reload`. Completed commands stay in
 Codex mode and return their output in the Codex view. Long-running commands
 switch to Shell mode so they can be controlled interactively.
 
-Commands typed directly in Shell mode, or dispatched from Codex with `,,`, are
-treated as human shell commands and do not require a second broker confirmation.
-Codex/non-interactive `ha` and `supervisor-api` operations still use the broker
-guardrail.
+The `,,` prefix authorizes dispatch to the Shell pane; it does not authorize a
+Home Assistant management operation. Read-only commands run immediately.
+Routine and high-risk `ha` or `supervisor-api` commands still show the broker's
+typed challenge in the Shell pane, where only the human should answer it.
 
 If browser interception ever misses a `,,` line and Codex sees it as a prompt,
 the shipped `codex-shell-dispatch` helper is the fallback path Codex should use
@@ -107,30 +109,29 @@ as usual, then run the helper from a Home Assistant SSH shell that can see
 ```
 
 With Docker access, the default command can attach to the live tmux session.
-Without Docker access, the ordinary Home Assistant SSH add-on still supports
-these mailbox-backed commands:
+Without Docker access, the ordinary Home Assistant SSH add-on can use only the
+read-limited mailbox status check:
 
 ```bash
 /config/codex-terminal-pro-attach status
-/config/codex-terminal-pro-attach send "say hello"
-/config/codex-terminal-pro-attach capture 120
-/config/codex-terminal-pro-attach transcript 120
-/config/codex-terminal-pro-attach ask-file /config/codex-ssh-reply.txt "write a one-line status"
-/config/codex-terminal-pro-attach logs
 ```
 
-`capture` prints recent visible tmux pane output, while `transcript` prints the
-tail of the add-on's internal `/data/logs/codex-terminal.log` through the Codex
-Terminal Pro bridge. When you need a clean SSH-side answer, use `ask-file` and
-then read the requested `/config` file from the SSH shell.
+Shared `/config` is not an authenticated command channel, so mailbox-backed
+prompt injection, pane capture, transcript access, and asynchronous file writes
+are intentionally disabled. `ask-file` is disabled even with Docker because a
+shared `/config` path can change before Codex writes to it.
 
-Interactive `attach`, direct `shell`, and `container` discovery still need
-Docker or a Home Assistant OS host shell because they require another
-container's TTY:
+Interactive `attach`, direct `shell`, `send`, `capture`, `transcript`, `logs`,
+and `container` discovery need Docker or a Home Assistant OS host shell because
+they access the running add-on container directly:
 
 ```bash
 /config/codex-terminal-pro-attach
 /config/codex-terminal-pro-attach shell
+/config/codex-terminal-pro-attach send "say hello"
+/config/codex-terminal-pro-attach capture 120
+/config/codex-terminal-pro-attach transcript 120
+/config/codex-terminal-pro-attach logs
 /config/codex-terminal-pro-attach container
 ```
 
@@ -252,7 +253,7 @@ context remaining, 5-hour limit, and weekly limit. Existing user-customized
 Codex TUI config and status-line preferences are left untouched.
 
 The bundled Codex CLI is pinned in the Docker build. This release installs
-`@openai/codex@0.134.0`; future CLI updates should bump that Dockerfile value
+`@openai/codex@0.144.4`; future CLI updates should bump that Dockerfile value
 and the add-on version together.
 
 ![Codex Terminal Pro screenshot](screenshot.png)
@@ -283,9 +284,12 @@ Assistant add-on store to receive updates from GitHub. A local `/addons`
 install, usually shown with a `local_` slug, is only for development testing and
 does not track GitHub.
 
-When a new version is pushed, reload the Home Assistant add-on store and update
-the add-on from the UI. Version detection comes from `config.yaml`; bundled
-Codex CLI updates come from the Dockerfile `CODEX_CLI_VERSION`.
+When publishing a release, use the same release number in `config.yaml`, the
+Dockerfile `io.hass.version` label, the `run.sh` fallback `APP_VERSION`, and a
+new `CHANGELOG.md` heading. Change the Dockerfile `CODEX_CLI_VERSION` only when
+the bundled Codex CLI is also changing. After the release is pushed, reload the
+Home Assistant add-on store and update from the UI; version detection comes
+from `config.yaml`.
 
 ## Configuration
 
@@ -309,7 +313,6 @@ ha_monitor_reasoning_daily_budget: 8
 ha_monitor_dispatch_max_chars: 12000
 supervisor_broker_enabled: true
 supervisor_broker_t1_ttl_seconds: 120
-supervisor_broker_comma_dispatch_enabled: true
 persistent_apk_packages: []
 persistent_pip_packages: []
 ```
@@ -345,13 +348,11 @@ persistent_pip_packages: []
   the budget gate for future or explicit workflows.
 - `ha_monitor_dispatch_max_chars`: Maximum prepared dispatch packet text size.
 - `supervisor_broker_enabled`: Require confirmation for risky Home Assistant
-  management operations outside the trusted human Shell pane.
+  management operations from every command surface.
 - `supervisor_broker_t1_ttl_seconds`: Short reuse window for routine
   management confirmations.
-- `supervisor_broker_comma_dispatch_enabled`: Let the broker accept a recent
-  exact `,,ha ...` or `,, supervisor-api ...` prompt as human dispatch intent if
-  browser interception misses it.
-- `persistent_apk_packages`: APK packages to reinstall into persistent storage.
+- `persistent_apk_packages`: APK package names to keep in the persistent
+  manifest and reinstall as complete system packages at startup.
 - `persistent_pip_packages`: Python packages to install into the persistent
   virtual environment.
 
@@ -378,6 +379,12 @@ access tokens.
 ChatGPT subscriptions are used through Codex account auth. API-key auth would
 use OpenAI API billing and is not part of the MVP add-on configuration.
 
+GitHub CLI authentication is separate: use `gh auth login` for the bundled
+CLI. If `GITHUB_PAT_TOKEN` is absent, the Codex launch guard disables only
+known legacy PAT-backed GitHub MCP subserver entries that would otherwise fail
+at startup. It preserves the GitHub plugin, leaves unrelated custom MCP servers
+alone, and does not synthesize or copy a token.
+
 ## Safety
 
 - Back up Home Assistant before edits.
@@ -391,9 +398,9 @@ commands such as info, logs, stats, and checks run normally. Routine management
 commands such as restart, reload, start, stop, update, rebuild, and options ask
 for a typed confirmation. High-risk host, OS, backup, install, uninstall, and
 delete operations require a fresh nonce and a reason.
-Codex/non-interactive operations still use that guardrail. Commands typed in the
-Shell pane or sent from Codex with `,,` are treated as human shell commands and
-run directly, with broker decisions audited as trusted shell activity.
+Commands typed in the Shell pane or sent from Codex with `,,` use that same
+guardrail. Read-only work runs directly; management operations require the
+human to answer the visible broker challenge.
 
 This prevents many accidental agent-driven operations during normal use. It
 does not prevent a determined root process from bypassing the wrapper, reading

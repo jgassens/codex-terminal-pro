@@ -8,8 +8,10 @@ log_file="${CODEX_TERMINAL_SSH_BRIDGE_LOG:-/data/logs/ssh-bridge.log}"
 tmux_config="${CODEX_TERMINAL_TMUX_CONFIG:-/data/.tmux.conf}"
 tmux_session="${TMUX_SESSION:-codex-terminal}"
 tmux_target="${CODEX_TMUX_TARGET:-${TMUX_TARGET:-codex-terminal:0.0}}"
-transcript_file="${CODEX_TERMINAL_TRANSCRIPT:-/data/logs/codex-terminal.log}"
 lock_dir="/tmp/codex-terminal-ssh-bridge.lock"
+request_done_ttl="${CODEX_TERMINAL_SSH_DONE_TTL:-300}"
+request_abandoned_ttl="${CODEX_TERMINAL_SSH_ABANDONED_TTL:-3600}"
+mailbox_helper="${CODEX_TERMINAL_SSH_MAILBOX_HELPER:-/opt/scripts/codex-terminal-ssh-mailbox.py}"
 
 log() {
     local message="$1"
@@ -18,38 +20,9 @@ log() {
     printf '%s\n' "$message"
 }
 
-validate_line_count() {
-    local value="$1"
-
-    case "$value" in
-        ''|*[!0-9]*)
-            printf 'Line count must be a positive integer, got: %s\n' "$value" >&2
-            return 2
-            ;;
-        0)
-            printf 'Line count must be greater than zero.\n' >&2
-            return 2
-            ;;
-    esac
-}
-
-ensure_tmux_session() {
-    if tmux -f "$tmux_config" has-session -t "$tmux_session" 2>/dev/null; then
-        return 0
-    fi
-
-    printf 'Codex Terminal Pro tmux session is not running.\n' >&2
-    return 1
-}
-
-send_file_to_codex() {
-    local input_file="$1"
-    local buffer_name="codex-terminal-ssh-bridge-$$-$(date +%s 2>/dev/null || printf now)"
-
-    ensure_tmux_session
-    tmux -f "$tmux_config" load-buffer -b "$buffer_name" "$input_file"
-    tmux -f "$tmux_config" paste-buffer -p -d -b "$buffer_name" -t "$tmux_target"
-    tmux -f "$tmux_config" send-keys -t "$tmux_target" Enter
+cleanup_stale_requests() {
+    python3 "$mailbox_helper" cleanup \
+        "$request_root" "$(date +%s)" "$request_done_ttl" "$request_abandoned_ttl"
 }
 
 command_status() {
@@ -65,105 +38,40 @@ command_status() {
     printf 'Config dir: /config\n'
 }
 
-command_capture() {
-    local lines="$1"
-
-    validate_line_count "$lines"
-    ensure_tmux_session
-    tmux -f "$tmux_config" capture-pane -p -J -t "$tmux_target" -S "-${lines}"
-}
-
-command_transcript() {
-    local lines="$1"
-
-    validate_line_count "$lines"
-    if [ ! -f "$transcript_file" ]; then
-        printf 'Transcript not found at %s.\n' "$transcript_file" >&2
-        printf 'It may be disabled with terminal_transcript_enabled: false.\n' >&2
-        return 1
-    fi
-    tail -n "$lines" "$transcript_file"
-}
-
-command_send() {
-    local input_file="$1"
-
-    if [ ! -s "$input_file" ]; then
-        printf 'send request did not include prompt text.\n' >&2
-        return 2
-    fi
-    send_file_to_codex "$input_file"
-    printf 'Sent prompt to Codex Terminal Pro.\n'
-}
-
-command_ask_file() {
-    local output_path="$1"
-    local request_file="$2"
-    local prompt_file
-
-    case "$output_path" in
-        /config/*)
-            ;;
-        *)
-            printf 'ask-file output path must be under /config, got: %s\n' "$output_path" >&2
-            return 2
-            ;;
-    esac
-
-    if [ ! -s "$request_file" ]; then
-        printf 'ask-file request did not include prompt text.\n' >&2
-        return 2
-    fi
-
-    prompt_file="$(mktemp)"
-    {
-        printf 'Please answer this Codex Terminal Pro SSH-side request by writing your answer to `%s`.\n' "$output_path"
-        printf 'Keep the file concise and do not read, print, or copy secrets. '
-        printf 'After writing the file, say only that `%s` is ready.\n\n' "$output_path"
-        printf 'Request:\n'
-        cat "$request_file"
-        printf '\n'
-    } > "$prompt_file"
-
-    set +e
-    send_file_to_codex "$prompt_file"
-    local exit_code=$?
-    set -e
-    if [ "$exit_code" -ne 0 ]; then
-        rm -f "$prompt_file"
-        return "$exit_code"
-    fi
-    rm -f "$prompt_file"
-    printf 'Sent request to Codex. Read the answer from SSH with:\n'
-    printf '  cat %s\n' "$output_path"
-}
-
-write_result() {
-    local request_dir="$1"
-    local exit_code="$2"
-
-    printf '%s\n' "$exit_code" > "${request_dir}/exit_code"
-    touch "${request_dir}/done"
-}
-
 process_request() {
     local request_dir="$1"
-    local command_file="${request_dir}/command"
-    local stdin_file="${request_dir}/stdin"
-    local response_file="${request_dir}/response"
-    local stderr_file="${request_dir}/stderr"
+    local work_dir command_file response_file stderr_file
     local command_name
     local exit_code=0
-    local arg1
+    local snapshot_exit=0
 
-    [ -f "${request_dir}/ready" ] || return 0
-    [ ! -f "${request_dir}/done" ] || return 0
-    [ -f "$command_file" ] || return 0
+    umask 077
+    work_dir="$(mktemp -d /tmp/codex-terminal-ssh-request.XXXXXX)"
+    command_file="${work_dir}/command"
+    response_file="${work_dir}/response"
+    stderr_file="${work_dir}/stderr"
+
+    if python3 "$mailbox_helper" snapshot "$request_root" "$request_dir" "$work_dir"; then
+        snapshot_exit=0
+    else
+        snapshot_exit=$?
+    fi
+    if [ "$snapshot_exit" -eq 3 ]; then
+        rm -rf "$work_dir"
+        return 0
+    fi
+    if [ "$snapshot_exit" -ne 0 ]; then
+        : > "$response_file"
+        printf 'Unsafe SSH mailbox request rejected.\n' > "$stderr_file"
+        python3 "$mailbox_helper" publish \
+            "$request_root" "$request_dir" "$response_file" "$stderr_file" 2 || true
+        rm -rf "$work_dir"
+        return 0
+    fi
 
     command_name="$(cat "$command_file")"
     : > "$response_file"
     : > "$stderr_file"
-    [ -f "$stdin_file" ] || : > "$stdin_file"
 
     set +e
     case "$command_name" in
@@ -171,33 +79,20 @@ process_request() {
             command_status > "$response_file" 2> "$stderr_file"
             exit_code=$?
             ;;
-        capture)
-            arg1="$(cat "${request_dir}/arg1" 2>/dev/null || printf '200')"
-            command_capture "$arg1" > "$response_file" 2> "$stderr_file"
-            exit_code=$?
-            ;;
-        transcript|logs)
-            arg1="$(cat "${request_dir}/arg1" 2>/dev/null || printf '200')"
-            command_transcript "$arg1" > "$response_file" 2> "$stderr_file"
-            exit_code=$?
-            ;;
-        send)
-            command_send "$stdin_file" > "$response_file" 2> "$stderr_file"
-            exit_code=$?
-            ;;
-        ask-file)
-            arg1="$(cat "${request_dir}/arg1" 2>/dev/null)"
-            command_ask_file "$arg1" "$stdin_file" > "$response_file" 2> "$stderr_file"
-            exit_code=$?
-            ;;
         *)
-            printf 'Unsupported bridge command: %s\n' "$command_name" > "$stderr_file"
+            printf 'The shared /config mailbox permits status only; this command requires Docker attach access.\n' > "$stderr_file"
             exit_code=2
             ;;
     esac
     set -e
 
-    write_result "$request_dir" "$exit_code"
+    if python3 "$mailbox_helper" publish \
+        "$request_root" "$request_dir" "$response_file" "$stderr_file" "$exit_code"; then
+        rm -rf "$work_dir"
+        return 0
+    fi
+    rm -rf "$work_dir"
+    return 1
 }
 
 main() {
@@ -213,8 +108,24 @@ main() {
 
     log "SSH bridge listening in ${request_root}"
 
+    case "$request_done_ttl" in
+        ''|*[!0-9]*) request_done_ttl=300 ;;
+    esac
+    case "$request_abandoned_ttl" in
+        ''|*[!0-9]*) request_abandoned_ttl=3600 ;;
+    esac
+
+    local last_cleanup=0 now
     while true; do
+        now="$(date +%s)"
+        if [ $((now - last_cleanup)) -ge 60 ]; then
+            if ! cleanup_stale_requests; then
+                log "SSH bridge cleanup failed safely; will retry"
+            fi
+            last_cleanup="$now"
+        fi
         for request_dir in "$request_root"/*; do
+            [ ! -L "$request_dir" ] || continue
             [ -d "$request_dir" ] || continue
             process_request "$request_dir" || log "Failed to process bridge request: ${request_dir}"
         done
@@ -222,4 +133,6 @@ main() {
     done
 }
 
-main "$@"
+if [[ "${CODEX_TERMINAL_SSH_BRIDGE_LIBRARY_ONLY:-false}" != "true" ]]; then
+    main "$@"
+fi

@@ -1,5 +1,57 @@
 # Changelog
 
+## 2.6.0
+
+- Upgrade the bundled Codex CLI from `0.134.0` to `0.144.4`, keep the image
+  build pinned to that exact package version, and assert the same version in
+  the jailed container smoke test.
+- Stop the unauthenticated legacy GitHub MCP transport from starting when
+  `GITHUB_PAT_TOKEN` is absent, while preserving the GitHub plugin and the
+  independently authenticated `gh` CLI. Re-apply that policy before every
+  Codex launch and redact GitHub token shapes from terminal transcripts.
+- Repair terminal selection copying across mouse, touch, Unicode, wrapped text,
+  OSC 52, delayed ttyd initialization, and blocked clipboard APIs. Failed
+  automatic copies now expose an explicit manual **Copy selection** fallback.
+- Restrict the web service to Home Assistant's authenticated ingress peer,
+  require same-origin browser requests and WebSocket upgrades, remove direct
+  host port publication, and reject uploads before multipart parsing.
+- Bound upload size/count, randomize stored filenames, serialize raw-shell
+  commands, recover timed-out tmux panes before advancing the queue, and make
+  monitor history tolerant of individual malformed records.
+- Run Mall Cop as an ephemeral, optional-tool-disabled, config-free summary
+  process under an unprivileged UID in a minimal chroot jail that contains
+  neither `/config` nor `/data`. Keep its environment scrubbed, quote untrusted
+  Home Assistant observations, and persist memory atomically with private modes.
+- Close Supervisor and WebSocket guardrail bypasses: callers can no longer
+  override curl URLs/options or WebSocket request identity, and service/state
+  writes now require the human authorization lane.
+- Remove the spoofable Shell/`,,` broker bypass. The prefix still dispatches to
+  the interactive Shell pane, but management commands now require the visible
+  broker challenge from every surface.
+- Supervise ttyd, the image service, the SSH status bridge, and `ha-monitor`
+  from PID 1 so any required-child failure causes a clean add-on restart instead
+  of leaving a half-working interface.
+- Restore persistent APK packages from a validated manifest with complete
+  Alpine dependency metadata; preserve requested Python requirements across
+  interpreter/ABI rebuilds; reject option-shaped package input; and keep
+  persistent executables behind the guarded Home Assistant CLI on `PATH`.
+- Deduplicate unchanged `ha-monitor` log tails, fix health-check aggregation,
+  serialize the monitor's full read/build/save cycle, and recursively redact
+  GitHub PAT/JWT values before state, history, or dispatch publication.
+- Restrict the shared `/config` SSH mailbox to read-limited status only, and
+  use dirfd/`O_NOFOLLOW` plus atomic replacement for managed `/config` files so
+  pre-created symlinks cannot redirect startup writes.
+- Parse Change Desk command JSON before redacting human-facing output, bound
+  Supervisor connect/overall timeouts, cap Modbus requests at protocol limits,
+  and serialize all Codex TOML mutators under one validated atomic lock.
+- Pin the Home Assistant base image, Home Assistant CLI, and GitHub CLI to
+  explicit versions and SHA-256 checksums; add immutable-action GitHub CI for
+  syntax, tests, audits, and amd64/arm64 container builds.
+- Fix overly broad solar `ct` matching and redact credential-bearing audit
+  lines; reject mismatched Modicon reference types and out-of-range read spans.
+- Stop tracking local Claude worktrees, ignore generated Python bytecode, and
+  repair the example add-on options file as valid JSON.
+
 ## 2.5.10
 
 - Explicitly disable the known HeyGen Codex plugin IDs in

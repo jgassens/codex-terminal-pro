@@ -91,6 +91,9 @@ register map.
 `modbus-read` always returns raw registers or bits. For register reads, it also
 prints common 16-bit and 32-bit interpretations:
 
+Each request is limited to the Modbus protocol maximum: 125 holding/input
+registers or 2000 coils/discrete inputs.
+
 - `uint16`, `int16`, and `hex16`
 - paired `uint32`, `int32`, `float32`, and `hex32`
 - a lossy ASCII view

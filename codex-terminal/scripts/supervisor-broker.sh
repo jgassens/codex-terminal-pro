@@ -8,7 +8,6 @@ AUDIT_LOG="/data/logs/supervisor-broker.log"
 
 SUPERVISOR_BROKER_ENABLED="true"
 SUPERVISOR_BROKER_T1_TTL_SECONDS="120"
-SUPERVISOR_BROKER_COMMA_DISPATCH_ENABLED="true"
 
 if [ -f "$CONF_FILE" ]; then
     # shellcheck disable=SC1090
@@ -35,90 +34,6 @@ sha_key() {
 
 is_interactive() {
     [ -t 0 ] && [ -t 1 ]
-}
-
-is_trusted_human_shell() {
-    [ "${CODEX_TERMINAL_HUMAN_SHELL:-}" = "1" ] && [ -t 0 ]
-}
-
-normalize_command_text() {
-    printf '%s' "$1" | tr -s '[:space:]' ' ' | sed 's/^ //; s/ $//'
-}
-
-command_matches_any() {
-    local candidate="$1"
-    shift
-    local expected
-
-    for expected in "$@"; do
-        if [ "$candidate" = "$(normalize_command_text "$expected")" ]; then
-            return 0
-        fi
-    done
-
-    return 1
-}
-
-recent_comma_dispatch_prompt_authorizes() {
-    local source="$1"
-    local op="$2"
-    shift 2
-    local target="${CODEX_TMUX_TARGET:-${TMUX_TARGET:-${TMUX_SESSION:-codex-terminal}:0.0}}"
-    local capture
-    local line
-    local normalized_line
-    local prefix
-    local candidate
-    local -a expected_commands=()
-
-    if [ "${SUPERVISOR_BROKER_COMMA_DISPATCH_ENABLED:-true}" != "true" ]; then
-        return 1
-    fi
-
-    command -v tmux >/dev/null 2>&1 || return 1
-    capture="$(tmux capture-pane -p -J -t "$target" -S -80 2>/dev/null || true)"
-    [ -n "$capture" ] || return 1
-
-    expected_commands+=("$op")
-    if [ "$source" = "rest" ]; then
-        local method="${1:-GET}"
-        local path="${2:-/}"
-        local method_upper
-        local method_lower
-
-        method_upper="$(printf '%s' "$method" | tr '[:lower:]' '[:upper:]')"
-        method_lower="$(printf '%s' "$method" | tr '[:upper:]' '[:lower:]')"
-        expected_commands+=(
-            "supervisor-api -X $method_upper $path"
-            "supervisor-api -X $method_lower $path"
-            "supervisor-api --request $method_upper $path"
-            "supervisor-api --request $method_lower $path"
-            "supervisor-api $method_upper $path"
-            "supervisor-api $method_lower $path"
-        )
-    fi
-
-    while IFS= read -r line; do
-        normalized_line="$(normalize_command_text "$line")"
-        case "$normalized_line" in
-            *,,*) ;;
-            *) continue ;;
-        esac
-
-        # Only trust prompt-like lines. This avoids examples or docs later in
-        # the pane granting unrelated broker approval.
-        prefix="${normalized_line%%,,*}"
-        [ "${#prefix}" -le 4 ] || continue
-
-        candidate="$(normalize_command_text "${normalized_line#*,,}")"
-        if command_matches_any "$candidate" "${expected_commands[@]}"; then
-            return 0
-        fi
-    done <<EOF
-$capture
-EOF
-
-    return 1
 }
 
 strip_global_flags() {
@@ -157,14 +72,65 @@ classify_ha() {
     local parsed=()
     local noun=""
     local verb=""
+    local action=""
 
     strip_global_flags parsed "${args[@]}"
 
     noun="${parsed[0]:-}"
     verb="${parsed[1]:-}"
+    action="${parsed[2]:-}"
 
     case "$noun" in
-        ""|--help|-h|--version|version|help)
+        app|ad|addon|add-on|addons|add-ons) noun="apps" ;;
+        backup|back|bk|snapshots|snapshot|snap|shot|sn) noun="backups" ;;
+        hassos) noun="os" ;;
+        ho) noun="host" ;;
+        super|su) noun="supervisor" ;;
+        shop|stor) noun="store" ;;
+    esac
+
+    case "$noun" in
+        apps)
+            case "$verb" in
+                i|inst) verb="install" ;;
+                remove|delete|del|rem|un|uninst) verb="uninstall" ;;
+            esac
+            ;;
+        backups)
+            case "$verb" in
+                delete|del|rem|rm) verb="remove" ;;
+            esac
+            ;;
+        os)
+            case "$verb" in
+                boot) verb="boot-slot" ;;
+                data) verb="datadisk" ;;
+                upgrade|downgrade|up|down) verb="update" ;;
+            esac
+            ;;
+        host)
+            case "$verb" in
+                restart|rb) verb="reboot" ;;
+                sh) verb="shutdown" ;;
+                update) verb="reload" ;;
+            esac
+            ;;
+        supervisor)
+            case "$verb" in
+                upgrade|up) verb="update" ;;
+            esac
+            ;;
+    esac
+
+    case "$verb" in
+        in|inf) verb="info" ;;
+        log|lg) verb="logs" ;;
+        status|stat|st) verb="stats" ;;
+        validate|chk|ch) verb="check" ;;
+    esac
+
+    case "$noun" in
+        ""|--help|-h|--version|version|help|info|in|inf|available-updates)
             echo "T0"
             return
             ;;
@@ -187,11 +153,28 @@ classify_ha() {
             echo "T1"
             return
             ;;
-        host:reboot|host:shutdown|host:update|os:update|os:datadisk|supervisor:update|apps:install|apps:uninstall|addons:install|addons:uninstall|backups:restore|backups:remove|backups:delete)
+        host:reboot|host:shutdown|os:update|os:datadisk|os:boot-slot|supervisor:update|apps:install|apps:uninstall|backups:restore|backups:remove|backups:delete)
             echo "T2"
             return
             ;;
     esac
+
+    if [ "$noun" = "store" ]; then
+        case "$verb" in
+            app|apps|ad|addon|add-on|addons|add-ons)
+                case "$action" in
+                    i|inst) action="install" ;;
+                    remove|delete|del|rem|un|uninst) action="uninstall" ;;
+                esac
+                case "$action" in
+                    install|uninstall|remove|delete)
+                        echo "T2"
+                        return
+                        ;;
+                esac
+                ;;
+        esac
+    fi
 
     echo "T1"
 }
@@ -223,13 +206,45 @@ classify_rest_from_ha() {
     classify_rest "$method" "$path"
 }
 
+normalize_supervisor_path() {
+    local candidate="${1:-}"
+    local route
+    local lowered
+
+    candidate="${candidate#http://supervisor/}"
+    candidate="/${candidate#/}"
+    route="${candidate%%\?*}"
+    route="${route%%\#*}"
+
+    case "$candidate" in
+        *'#'*) return 1 ;;
+    esac
+    case "$route" in
+        *\\*|*//*|*/.|*/..) return 1 ;;
+        */) [ "$route" = "/" ] || return 1 ;;
+    esac
+    case "/${route#/}/" in
+        */./*|*/../*) return 1 ;;
+    esac
+    lowered="$(printf '%s' "$route" | tr '[:upper:]' '[:lower:]')"
+    case "$lowered" in
+        *%2e*|*%2f*|*%5c*|*%25*) return 1 ;;
+    esac
+
+    printf '%s\n' "$route"
+}
+
 classify_rest() {
     local method="${1:-GET}"
-    local path="${2:-}"
+    local path
 
     method="$(printf '%s' "$method" | tr '[:lower:]' '[:upper:]')"
-    path="/${path#http://supervisor/}"
-    path="/${path#/}"
+    if ! path="$(normalize_supervisor_path "${2:-}")"; then
+        # Fail closed. Invalid or ambiguously normalized routes must never use
+        # a cached T1 authorization for a different endpoint.
+        echo "T2"
+        return
+    fi
 
     if [ "$method" = "GET" ]; then
         echo "T0"
@@ -242,14 +257,6 @@ classify_rest() {
     fi
 
     case "$path" in
-        /core/api/services/*|/core/api/states/*)
-            case "$method" in
-                POST|PUT|PATCH)
-                    echo "T0"
-                    return
-                    ;;
-            esac
-            ;;
         /host/reboot|/host/shutdown|/os/*|/backups/*/restore|/addons/*/uninstall|/store/addons/*/install|/supervisor/update)
             echo "T2"
             return
@@ -319,16 +326,16 @@ authorize_t1() {
     local op_class="$3"
     local answer=""
 
-    if check_t1_ttl "$op_class"; then
-        audit "$op" "T1" "allow" "ttl"
-        return 0
-    fi
-
     if ! is_interactive; then
         echo "Refusing non-interactive Home Assistant management operation: $op" >&2
         echo "Ask the human to re-run it interactively if this is intended." >&2
         audit "$op" "T1" "deny" "non-interactive"
         return 1
+    fi
+
+    if check_t1_ttl "$op_class"; then
+        audit "$op" "T1" "allow" "ttl"
+        return 0
     fi
 
     explain_tier "T1" "$op" >&2
@@ -418,16 +425,6 @@ authorize() {
             phrase="confirm operation"
             ;;
     esac
-
-    if [ "$tier" != "T0" ] && is_trusted_human_shell; then
-        audit "$op" "$tier" "allow" "trusted-human-shell"
-        return 0
-    fi
-
-    if [ "$tier" != "T0" ] && recent_comma_dispatch_prompt_authorizes "$source" "$op" "$@"; then
-        audit "$op" "$tier" "allow" "recent-comma-dispatch-prompt"
-        return 0
-    fi
 
     case "$tier" in
         T0)

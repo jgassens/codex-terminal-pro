@@ -1,95 +1,169 @@
-#!/usr/bin/env bash
+#!/usr/bin/env python3
+"""Disable irrelevant HeyGen plugins without corrupting user TOML."""
 
-set -uo pipefail
+from __future__ import annotations
 
-codex_home="${CODEX_HOME:-/data/.codex}"
-
-case "$codex_home" in
-    /data/.codex)
-        ;;
-    *)
-        exit 0
-        ;;
-esac
-
-config_file="$codex_home/config.toml"
-
-mkdir -p "$codex_home" || exit 1
-touch "$config_file" || exit 1
-chmod 644 "$config_file" || exit 1
-
-python3 - "$config_file" << 'PY'
-from pathlib import Path
+import argparse
+import os
 import re
 import sys
+from pathlib import Path
 
-path = Path(sys.argv[1])
-plugin_ids = [
+from codex_config_utils import locked_config, read_config, validate_toml, write_atomic_validated
+
+
+PLUGIN_IDS = (
     "heygen@openai-curated-remote",
     "heygen@openai-curated",
     "heygen@openai-bundled",
     "heygen@openai-primary-runtime",
-]
+)
+TABLE_RE = re.compile(r"^\s*\[(?P<name>[^\]]+)]\s*(?:#.*)?$")
+ENABLED_RE = re.compile(
+    r"^(?P<prefix>[ \t]*enabled[ \t]*=[ \t]*)(?:true|false)(?P<suffix>[ \t]*(?:#.*)?)(?P<nl>\r?\n?)$"
+)
 
-def header_matches_plugin(header: str, plugin_id: str) -> bool:
-    return header in {
-        f'[plugins."{plugin_id}"]',
-        f"[plugins.'{plugin_id}']",
-    }
 
-def disable_plugin(text: str, plugin_id: str) -> str:
-    target_header = f'[plugins."{plugin_id}"]'
-    header_re = re.compile(r'^\s*\[[^\]]+\]\s*(?:#.*)?(?:\r?\n)?$')
-    enabled_re = re.compile(
-        r'^(?P<prefix>[ \t]*enabled[ \t]*=[ \t]*)[^#\r\n]*?(?P<suffix>[ \t]*(?:#.*)?)(?P<nl>\r?\n?)$'
+def table_name(line: str) -> str | None:
+    match = TABLE_RE.match(line.rstrip("\r\n"))
+    return match.group("name").strip() if match else None
+
+
+def plugin_table_names(plugin_id: str) -> set[str]:
+    return {f'plugins."{plugin_id}"', f"plugins.'{plugin_id}'"}
+
+
+def dotted_plugin_pattern(plugin_id: str) -> str:
+    double = re.escape(f'plugins."{plugin_id}"')
+    single = re.escape(f"plugins.'{plugin_id}'")
+    return rf"(?:{double}|{single})"
+
+
+def replace_enabled(line: str, key_pattern: str = "enabled") -> tuple[str, bool]:
+    match = re.match(
+        rf"^(?P<prefix>[ \t]*{key_pattern}[ \t]*=[ \t]*)(?:true|false)(?P<suffix>[ \t]*(?:#.*)?)(?P<nl>\r?\n?)$",
+        line,
     )
+    if not match:
+        return line, False
+    return f'{match.group("prefix")}false{match.group("suffix")}{match.group("nl")}', True
 
+
+def split_tables(text: str) -> list[list[str]]:
+    blocks: list[list[str]] = []
+    current: list[str] = []
+    for line in text.splitlines(keepends=True):
+        if table_name(line) is not None and current:
+            blocks.append(current)
+            current = []
+        current.append(line)
+    if current:
+        blocks.append(current)
+    return blocks
+
+
+def disable_table(block: list[str]) -> list[str]:
+    output: list[str] = []
+    replaced = False
+    for line in block:
+        updated, matched = replace_enabled(line)
+        if matched and not replaced:
+            output.append(updated)
+            replaced = True
+        else:
+            output.append(line)
+    if not replaced:
+        newline = "\r\n" if output and output[0].endswith("\r\n") else "\n"
+        output.insert(1, f"enabled = false{newline}")
+    return output
+
+
+def insert_before_first_table(text: str, additions: list[str]) -> str:
+    if not additions:
+        return text
     lines = text.splitlines(keepends=True)
-    out: list[str] = []
-    found_table = False
-    in_target_table = False
-    saw_enabled = False
+    index = next((i for i, line in enumerate(lines) if table_name(line) is not None), len(lines))
+    rendered = "".join(f"{line}\n" for line in additions)
+    if index > 0 and lines[index - 1].strip():
+        rendered += "\n"
+    lines.insert(index, rendered)
+    return "".join(lines)
 
-    for line in lines:
-        is_header = bool(header_re.match(line))
-        if is_header and in_target_table and not saw_enabled:
-            out.append("enabled = false\n")
-            in_target_table = False
 
-        if is_header:
-            header = line.split("#", 1)[0].strip()
-            in_target_table = header_matches_plugin(header, plugin_id)
-            if in_target_table:
-                found_table = True
-                saw_enabled = False
+def disable_heygen_plugins(text: str) -> str:
+    dotted_present: set[str] = set()
+    dotted_enabled: set[str] = set()
+    lines: list[str] = []
+    in_table = False
+    for line in text.splitlines(keepends=True):
+        if table_name(line) is not None:
+            in_table = True
+        updated = line
+        if not in_table:
+            for plugin_id in PLUGIN_IDS:
+                plugin = dotted_plugin_pattern(plugin_id)
+                if re.match(rf"^[ \t]*{plugin}\.", updated):
+                    dotted_present.add(plugin_id)
+                updated, replaced = replace_enabled(updated, rf"{plugin}\.enabled")
+                if replaced:
+                    dotted_enabled.add(plugin_id)
+                    break
+        lines.append(updated)
 
-        if in_target_table:
-            match = enabled_re.match(line)
-            if match:
-                out.append(f'{match.group("prefix")}false{match.group("suffix")}{match.group("nl")}')
-                saw_enabled = True
-                continue
+    blocks = split_tables("".join(lines))
+    explicit_present: set[str] = set()
+    lookup = {name: plugin_id for plugin_id in PLUGIN_IDS for name in plugin_table_names(plugin_id)}
+    output: list[str] = []
+    for block in blocks:
+        name = table_name(block[0]) if block else None
+        if name in lookup:
+            plugin_id = lookup[name]
+            explicit_present.add(plugin_id)
+            block = disable_table(block)
+        output.extend(block)
 
-        out.append(line)
-
-    if in_target_table and not saw_enabled:
-        out.append("enabled = false\n")
-
-    updated = "".join(out)
-    if not found_table:
+    updated = "".join(output)
+    updated = insert_before_first_table(
+        updated,
+        [
+            f'plugins."{plugin_id}".enabled = false'
+            for plugin_id in PLUGIN_IDS
+            if plugin_id in dotted_present and plugin_id not in dotted_enabled
+        ],
+    )
+    for plugin_id in PLUGIN_IDS:
+        if plugin_id in explicit_present or plugin_id in dotted_present:
+            continue
         if updated and not updated.endswith(("\n", "\r\n")):
             updated += "\n"
-        if updated:
+        if updated and not updated.endswith("\n\n"):
             updated += "\n"
-        updated += f'{target_header}\nenabled = false\n'
-
+        updated += f'[plugins."{plugin_id}"]\nenabled = false\n'
     return updated
 
-text = path.read_text(encoding="utf-8")
-updated = text
-for plugin_id in plugin_ids:
-    updated = disable_plugin(updated, plugin_id)
 
-if updated != text:
-    path.write_text(updated, encoding="utf-8")
-PY
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", type=Path)
+    args = parser.parse_args()
+    codex_home = Path(os.environ.get("CODEX_HOME", "/data/.codex"))
+    if args.config is None and codex_home != Path("/data/.codex"):
+        return 0
+    config = args.config or codex_home / "config.toml"
+
+    try:
+        with locked_config(config):
+            original = read_config(config)
+            validate_toml(original)
+            updated = disable_heygen_plugins(original)
+            validate_toml(updated)
+            if updated != original:
+                write_atomic_validated(config, updated)
+        return 0
+    except Exception as exc:
+        print(f"HeyGen config was left unchanged: {exc}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

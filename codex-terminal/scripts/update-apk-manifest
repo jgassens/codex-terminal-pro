@@ -1,0 +1,147 @@
+#!/usr/bin/env python3
+"""Atomically merge validated package requests into a persistent manifest."""
+
+from __future__ import annotations
+
+import fcntl
+import os
+import re
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+
+SAFE_PACKAGE = re.compile(r"[A-Za-z0-9@._:+!=><,\[\]~-]+\Z")
+PIP_REQUIREMENT = re.compile(
+    r"(?P<name>[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)"
+    r"(?:\[[A-Za-z0-9._-]+(?:,[A-Za-z0-9._-]+)*\])?"
+    r"(?:(?:===|==|!=|~=|<=|>=|<|>)[A-Za-z0-9.*+!_-]+"
+    r"(?:,(?:===|==|!=|~=|<=|>=|<|>)[A-Za-z0-9.*+!_-]+)*)?\Z"
+)
+
+
+def is_safe_package(package: str) -> bool:
+    return not package.startswith("-") and SAFE_PACKAGE.fullmatch(package) is not None
+
+
+def package_key(package: str, kind: str) -> str | None:
+    if kind == "pip":
+        match = PIP_REQUIREMENT.fullmatch(package)
+        if match is None:
+            return None
+        return re.sub(r"[-_.]+", "-", match.group("name")).lower()
+
+    if not is_safe_package(package):
+        return None
+    boundaries = [package.find(character, 1) for character in "@=<>~"]
+    positions = [position for position in boundaries if position >= 0]
+    name = package[: min(positions)] if positions else package
+    return name.lower() if name else None
+
+
+def hold_lock(lock_path: Path, timeout_seconds: float) -> int:
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+", encoding="utf-8") as lock_handle:
+        os.chmod(lock_path, 0o600)
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            try:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    print("update-apk-manifest: timed out waiting for lock", file=sys.stderr)
+                    return 75
+                time.sleep(0.1)
+
+        print("locked", flush=True)
+        sys.stdin.buffer.read()
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+    return 0
+
+
+def main() -> int:
+    arguments = sys.argv[1:]
+    if arguments[:1] == ["--hold-lock"]:
+        if len(arguments) != 3:
+            print("usage: update-apk-manifest --hold-lock LOCK TIMEOUT_SECONDS", file=sys.stderr)
+            return 2
+        try:
+            timeout_seconds = float(arguments[2])
+        except ValueError:
+            return 2
+        if not 0 <= timeout_seconds <= 300:
+            return 2
+        return hold_lock(Path(arguments[1]), timeout_seconds)
+
+    kind = "apk"
+    if arguments[:1] == ["--kind"]:
+        if len(arguments) < 3 or arguments[1] not in {"apk", "pip"}:
+            print("usage: update-apk-manifest [--kind apk|pip] MANIFEST [PACKAGE...]", file=sys.stderr)
+            return 2
+        kind = arguments[1]
+        arguments = arguments[2:]
+
+    if not arguments:
+        print("usage: update-apk-manifest [--kind apk|pip] MANIFEST [PACKAGE...]", file=sys.stderr)
+        return 2
+
+    manifest = Path(arguments[0])
+    requested = arguments[1:]
+    if any(package_key(package, kind) is None for package in requested):
+        print("update-apk-manifest: invalid package name", file=sys.stderr)
+        return 2
+
+    if not requested and not manifest.exists():
+        return 0
+
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = manifest.with_suffix(manifest.suffix + ".lock")
+    with lock_path.open("a+", encoding="utf-8") as lock_handle:
+        os.chmod(lock_path, 0o600)
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        merged: dict[str, str] = {}
+        try:
+            lines = [line.strip() for line in manifest.read_text(encoding="utf-8").splitlines()]
+            invalid = [line for line in lines if line and package_key(line, kind) is None]
+            if invalid:
+                print("update-apk-manifest: existing manifest contains an invalid package name", file=sys.stderr)
+                return 2
+            for line in lines:
+                if line:
+                    merged[package_key(line, kind)] = line
+        except FileNotFoundError:
+            pass
+
+        for package in requested:
+            merged[package_key(package, kind)] = package
+
+        descriptor, temp_name = tempfile.mkstemp(
+            prefix=".apk-packages.",
+            dir=manifest.parent,
+            text=True,
+        )
+        temp_path = Path(temp_name)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                for _, package in sorted(merged.items()):
+                    handle.write(f"{package}\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.chmod(temp_path, 0o600)
+            os.replace(temp_path, manifest)
+            directory_fd = os.open(manifest.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        finally:
+            temp_path.unlink(missing_ok=True)
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

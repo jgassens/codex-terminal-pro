@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Iterable
 
 
-VERSION = "0.1.32"
+VERSION = "0.1.33"
 
 SOLAR_KEYWORDS = (
     "solar",
@@ -97,6 +97,25 @@ CONFIG_FILES = (
     ".storage/core.device_registry",
     ".storage/lovelace.dashboard_home",
     ".storage/energy",
+)
+
+SOLAR_PATTERN = re.compile(
+    "|".join(
+        rf"(?<![A-Za-z0-9]){re.escape(keyword)}(?![A-Za-z0-9])"
+        for keyword in sorted(SOLAR_KEYWORDS, key=len, reverse=True)
+    ),
+    re.IGNORECASE,
+)
+SECRET_ASSIGNMENT_PATTERN = re.compile(
+    r"(?i)(?P<quote>[\"']?)(?P<key>(?:access[_-]?)?token|api[_-]?key|password|passwd|secret|"
+    r"authorization|bearer|client[_-]?secret|private[_-]?key)(?P=quote)"
+    r"(?P<separator>\s*[:=]\s*)(?P<value>.*)$"
+)
+INLINE_CREDENTIAL_PATTERN = re.compile(
+    r"(?i)(?:bearer\s+\S+|github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9_]+|sk-[A-Za-z0-9_-]{12,})"
+)
+URI_CREDENTIAL_PATTERN = re.compile(
+    r"(?i)(?P<prefix>[a-z][a-z0-9+.-]{0,31}://)(?P<userinfo>[^\s/@:]+):(?P<password>[^\s/@]+)@"
 )
 
 
@@ -329,8 +348,18 @@ def run_discover(args: argparse.Namespace) -> int:
 
 
 def text_matches_keywords(value: object) -> bool:
-    haystack = str(value or "").lower()
-    return any(keyword in haystack for keyword in SOLAR_KEYWORDS)
+    return bool(SOLAR_PATTERN.search(str(value or "")))
+
+
+def redact_config_line(line: str) -> str:
+    """Return useful match context without printing credential values."""
+    redacted = re.sub(r"(?i)!secret\s+\S+", "!secret <redacted>", line)
+    redacted = URI_CREDENTIAL_PATTERN.sub(r"\g<prefix><redacted>:<redacted>@", redacted)
+
+    assignment = SECRET_ASSIGNMENT_PATTERN.search(redacted)
+    if assignment:
+        redacted = redacted[: assignment.start("value")] + "<redacted>"
+    return INLINE_CREDENTIAL_PATTERN.sub("<redacted>", redacted)
 
 
 def load_json(path: Path) -> dict[str, object] | None:
@@ -355,7 +384,6 @@ def iter_config_paths(config_dir: Path) -> Iterable[Path]:
 
 
 def scan_text_files(config_dir: Path, max_matches: int) -> list[dict[str, object]]:
-    pattern = re.compile("|".join(re.escape(keyword) for keyword in SOLAR_KEYWORDS), re.IGNORECASE)
     matches: list[dict[str, object]] = []
 
     for path in iter_config_paths(config_dir):
@@ -366,11 +394,11 @@ def scan_text_files(config_dir: Path, max_matches: int) -> list[dict[str, object
         except OSError:
             continue
         for line_number, line in enumerate(lines, start=1):
-            if pattern.search(line):
+            if SOLAR_PATTERN.search(line):
                 matches.append({
                     "path": str(path.relative_to(config_dir)),
                     "line": line_number,
-                    "text": line.strip()[:220],
+                    "text": redact_config_line(line.strip())[:220],
                 })
                 if len(matches) >= max_matches:
                     break

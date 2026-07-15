@@ -4,15 +4,22 @@
   "description": "Lightweight image upload service for Codex Terminal Pro",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node --test"
   },
-  "keywords": ["codex", "terminal", "image", "upload", "home-assistant"],
+  "keywords": [
+    "codex",
+    "terminal",
+    "image",
+    "upload",
+    "home-assistant"
+  ],
   "author": "Javier Santos",
   "license": "MIT",
   "dependencies": {
     "express": "4.22.2",
-    "multer": "2.1.1",
-    "http-proxy-middleware": "2.0.9"
+    "http-proxy-middleware": "2.0.10",
+    "multer": "2.2.0"
   },
   "overrides": {
     "path-to-regexp": "0.1.13"

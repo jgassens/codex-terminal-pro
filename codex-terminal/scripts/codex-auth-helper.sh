@@ -13,14 +13,7 @@ ensure_codex_home() {
     touch "$CONFIG_FILE"
     chmod 644 "$CONFIG_FILE"
 
-    if grep -q '^cli_auth_credentials_store[[:space:]]*=' "$CONFIG_FILE"; then
-        sed -i 's/^cli_auth_credentials_store[[:space:]]*=.*/cli_auth_credentials_store = "file"/' "$CONFIG_FILE"
-    else
-        if [ -s "$CONFIG_FILE" ]; then
-            printf '\n' >> "$CONFIG_FILE"
-        fi
-        printf 'cli_auth_credentials_store = "file"\n' >> "$CONFIG_FILE"
-    fi
+    /opt/scripts/codex-config-set "$CONFIG_FILE" cli_auth_credentials_store '"file"'
 }
 
 auth_mode() {
@@ -117,16 +110,13 @@ show_import_instructions() {
     echo "Use this when device-code login falls back to a localhost callback."
     echo ""
     echo "On a trusted local machine with a browser:"
-    echo "  1. Ensure local Codex uses file credential storage:"
-    echo "       mkdir -p ~/.codex"
-    echo "       grep -q '^cli_auth_credentials_store' ~/.codex/config.toml 2>/dev/null || printf 'cli_auth_credentials_store = \"file\"\\n' >> ~/.codex/config.toml"
-    echo "  2. Run:"
-    echo "       codex login"
-    echo "  3. Confirm this file exists:"
+    echo "  1. Run login with an explicit file-credential override:"
+    echo "       codex -c 'cli_auth_credentials_store=\"file\"' login"
+    echo "  2. Confirm this file exists:"
     echo "       ~/.codex/auth.json"
-    echo "  4. Copy that file into this add-on's Codex home:"
+    echo "  3. Copy that file into this add-on's Codex home:"
     echo "       $AUTH_FILE"
-    echo "  5. In this helper, choose the permissions fix option."
+    echo "  4. In this helper, choose the permissions fix option."
     echo ""
     echo "Do not print, paste, commit, or share auth.json. It contains access tokens."
 }

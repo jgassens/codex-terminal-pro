@@ -24,8 +24,8 @@ clipboard through OSC 52 support.
 
 On iOS and other restricted mobile browsers, clipboard APIs may require HTTPS.
 Use the Nabu Casa/HTTPS URL for best results. Over plain HTTP LAN access, the
-visible selection handles and manual paste/copy panels are the reliable
-fallback.
+visible selection handles and explicit **Copy selection** panel are the
+reliable fallback.
 
 Dropped or pasted images are uploaded to `/data/images`, and the saved path is
 inserted directly into the Codex prompt through the persistent tmux session.
@@ -87,9 +87,11 @@ produce a pre-change restore checklist. See `/opt/solar/SOLAR.md`.
 To receive updates from GitHub, install Codex Terminal Pro from the custom
 repository URL above. A local `/addons` copy is not GitHub-managed.
 
-When publishing an update, bump `version` in `config.yaml`, push to GitHub, and
-reload the Home Assistant add-on store. Home Assistant uses that version value
-to offer updates.
+When publishing an update, use the same release number in `config.yaml`, the
+Dockerfile `io.hass.version` label, the `run.sh` fallback `APP_VERSION`, and a
+new `CHANGELOG.md` heading. Change `CODEX_CLI_VERSION` only when the bundled
+Codex CLI is also changing. Then push to GitHub and reload the Home Assistant
+add-on store. Home Assistant uses the `config.yaml` version to offer updates.
 
 ## Home Assistant SSH Access
 
@@ -103,30 +105,29 @@ there:
 
 With Docker access, the default command can attach to the live `codex-terminal`
 tmux session inside the running add-on container. Without Docker access, the
-ordinary Home Assistant SSH add-on still supports these mailbox-backed commands:
+ordinary Home Assistant SSH add-on can use only the read-limited mailbox status
+check:
 
 ```bash
 /config/codex-terminal-pro-attach status
-/config/codex-terminal-pro-attach send "say hello"
-/config/codex-terminal-pro-attach capture 120
-/config/codex-terminal-pro-attach transcript 120
-/config/codex-terminal-pro-attach ask-file /config/codex-ssh-reply.txt "write a one-line status"
-/config/codex-terminal-pro-attach logs
 ```
 
-`capture` prints recent visible tmux pane output, while `transcript` prints the
-tail of the add-on's internal `/data/logs/codex-terminal.log` through the Codex
-Terminal Pro bridge. For reliable SSH-side request/response checks, use
-`ask-file`; it sends Codex a file-backed request and tells you which `/config`
-file to `cat`.
+Shared `/config` is not an authenticated command channel, so mailbox-backed
+prompt injection, pane capture, transcript access, and asynchronous file writes
+are intentionally disabled. `ask-file` is disabled even with Docker because a
+shared `/config` path can change before Codex writes to it.
 
-Interactive `attach`, direct `shell`, and `container` discovery still need
-Docker or a Home Assistant OS host shell because they require another
-container's TTY:
+Interactive `attach`, direct `shell`, `send`, `capture`, `transcript`, `logs`,
+and `container` discovery need Docker or a Home Assistant OS host shell because
+they access the running add-on container directly:
 
 ```bash
 /config/codex-terminal-pro-attach
 /config/codex-terminal-pro-attach shell
+/config/codex-terminal-pro-attach send "say hello"
+/config/codex-terminal-pro-attach capture 120
+/config/codex-terminal-pro-attach transcript 120
+/config/codex-terminal-pro-attach logs
 /config/codex-terminal-pro-attach container
 ```
 
@@ -189,6 +190,8 @@ When auto-launch is disabled, or after Codex exits, the menu provides:
 - Persistent packages: `/data/packages`
 - Host SSH attach helper: `/config/codex-terminal-pro-attach`
 
+GitHub CLI authentication is configured independently with `gh auth login`.
+
 Modbus helper docs are installed at `/opt/modbus/MODBUS.md`. Site-specific
 register notes can live under `/config/modbus/` if you want them backed up with
 Home Assistant configuration.
@@ -206,7 +209,7 @@ check_for_update_on_startup = false
 ```
 
 Use Home Assistant add-on updates to pick up new bundled Codex CLI versions.
-This release pins the bundled CLI package to `@openai/codex@0.134.0` during
+This release pins the bundled CLI package to `@openai/codex@0.144.4` during
 the Docker build.
 
 Managed Codex Terminal Pro TUI defaults use this footer:
@@ -217,7 +220,7 @@ status_line = ["run-state", "model-with-reasoning", "fast-mode", "context-remain
 ```
 
 When a status line is already present, the add-on preserves it. Startup only
-removes unsupported `[tui].status_line` item IDs that Codex CLI `0.134.0`
+removes unsupported `[tui].status_line` item IDs that Codex CLI `0.144.4`
 warns about. `auto-review`, `permissions`, and `approval-mode` are valid Codex
 permission concepts, but this pinned CLI does not accept those strings as
 footer item IDs.
@@ -230,6 +233,11 @@ add-on workflow. The add-on also places a small `codex` guard wrapper at the
 front of `PATH`, so manual and automatic Codex launches re-apply the disabled
 plugin entries and prune those copies before the CLI starts. This cleanup does
 not read or modify `/data/.codex/auth.json`.
+
+When `GITHUB_PAT_TOKEN` is absent, startup disables only known legacy
+PAT-backed GitHub MCP subserver entries so they cannot produce a missing-token
+warning. The GitHub plugin remains enabled, and unrelated custom MCP servers
+are not changed.
 
 ## Configuration
 
@@ -253,7 +261,6 @@ ha_monitor_reasoning_daily_budget: 8
 ha_monitor_dispatch_max_chars: 12000
 supervisor_broker_enabled: true
 supervisor_broker_t1_ttl_seconds: 120
-supervisor_broker_comma_dispatch_enabled: true
 persistent_apk_packages: []
 persistent_pip_packages: []
 ```
@@ -281,9 +288,10 @@ arbitrary user task files, or call an LLM. Change Desk can run Mall Cop through
 once every 24 hours, and the footer **Ask Mall Cop** action forces a fresh run.
 Mall Cop memory is stored at `/data/monitor/change-desk-mall-cop-memory.json`
 so each run can compare current conditions with the prior observation and call
-out new, resolved, changed, and unchanged issues. `/data/monitor/tasks.d` is
-reserved for a future explicit task-manifest design and is ignored by this
-release.
+out new, resolved, changed, and unchanged issues. Its subprocess runs as an
+unprivileged user inside a minimal filesystem jail that contains neither
+`/config` nor `/data`. `/data/monitor/tasks.d` is reserved for a future explicit
+task-manifest design and is ignored by this release.
 
 ## Safe Home Assistant Workflow
 
@@ -384,13 +392,9 @@ confirmation broker.
 - Non-interactive risky operations are refused.
 - Direct Supervisor calls should use `supervisor-api`, which applies the same
   broker policy.
-- Commands typed in the Shell pane or sent from Codex with `,,` are treated as
-  human shell commands and run directly. Codex/non-interactive operations still
-  use the broker guardrail.
-- `supervisor_broker_comma_dispatch_enabled` also lets the broker accept a
-  recent exact `,,ha ...` or `,, supervisor-api ...` line visible in the Codex
-  pane as human dispatch intent if the browser shortcut or Codex guidance misses
-  it.
+- The `,,` prefix dispatches into the Shell pane but does not bypass the broker.
+  Read-only work runs directly; management operations still require the human
+  to answer the visible challenge.
 
 The broker writes decisions to `/data/logs/supervisor-broker.log`. This log is
 for accountability and troubleshooting, not tamper-proof audit. A determined

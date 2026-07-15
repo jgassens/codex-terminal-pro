@@ -17,16 +17,42 @@
 const express = require('express');
 const http = require('http');
 const { execFile, spawn } = require('child_process');
+const crypto = require('crypto');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { createProxyMiddleware } = require('http-proxy-middleware');
 const { normalizeShellCommandForDispatch } = require('./shell-command-normalizer');
+const {
+    buildRequestSecurityPolicy,
+    isAllowedRequestSource,
+    isAuthorizedWebSocketRequest,
+    isLoopbackAddress,
+    isSameOriginBrowserRequest,
+    requestRemoteAddress
+} = require('./request-security');
+const { parseJsonLinesTail, writeFileAtomic } = require('./persistence-utils');
+const { createSerialTaskQueue } = require('./serial-task-queue');
+const { buildMarkedShellCommand } = require('./raw-shell-wrapper');
+const { endChildStdin } = require('./child-stdin');
+const { loadTmuxPasteBuffer } = require('./tmux-paste-buffer');
+const {
+    JAIL_GID,
+    JAIL_ROOT,
+    JAIL_UID,
+    SANDBOX_WORK_ROOT,
+    buildMallCopCodexArgs,
+    buildMallCopCodexEnvironment,
+    buildMallCopJailLauncherArgs,
+    prepareMallCopSandbox,
+    refreshMallCopJailRuntimeFiles,
+    protectMallCopPrompt
+} = require('./mall-cop-isolation');
 
 const app = express();
-const PORT = process.env.IMAGE_SERVICE_PORT || 7680;
-const TTYD_PORT = process.env.TTYD_PORT || 7681;
+const PORT = parsePort(process.env.IMAGE_SERVICE_PORT, 7680);
+const TTYD_PORT = parsePort(process.env.TTYD_PORT, 7681);
 const UPLOAD_DIR = process.env.UPLOAD_DIR || '/data/images';
 const CONFIG_ROOT = process.env.HA_CONFIG_DIR || '/config';
 const HA_MONITOR_STATE_FILE = process.env.HA_MONITOR_STATE_FILE || '/data/monitor/ha-monitor.json';
@@ -41,8 +67,11 @@ const RAW_TMUX_TARGET = `${TMUX_SESSION}:${RAW_TERMINAL_WINDOW}.0`;
 const UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
 const RAW_SHELL_COMMAND_MAX_LENGTH = 4096;
 const RAW_SHELL_COMMAND_TIMEOUT_MS = parseNonNegativeInt(process.env.RAW_SHELL_COMMAND_TIMEOUT_MS, 45000);
+const RAW_SHELL_TERMINATION_GRACE_MS = parseNonNegativeInt(process.env.RAW_SHELL_TERMINATION_GRACE_MS, 1500);
 const RAW_SHELL_CAPTURE_LINES = parseNonNegativeInt(process.env.RAW_SHELL_CAPTURE_LINES, 4000);
 const RAW_SHELL_OUTPUT_MAX_CHARS = parseNonNegativeInt(process.env.RAW_SHELL_OUTPUT_MAX_CHARS, 20000);
+const RAW_SHELL_MAX_PENDING_COMMANDS = parseNonNegativeInt(process.env.RAW_SHELL_MAX_PENDING_COMMANDS, 8);
+const RAW_SHELL_QUEUE_WAIT_TIMEOUT_MS = parseNonNegativeInt(process.env.RAW_SHELL_QUEUE_WAIT_TIMEOUT_MS, 5000);
 const CHANGE_DESK_COMMAND_TIMEOUT_MS = parseNonNegativeInt(process.env.CHANGE_DESK_COMMAND_TIMEOUT_MS, 45000);
 const CHANGE_DESK_FAST_COMMAND_TIMEOUT_MS = parseNonNegativeInt(process.env.CHANGE_DESK_FAST_COMMAND_TIMEOUT_MS, 12000);
 const CHANGE_DESK_OUTPUT_MAX_CHARS = parseNonNegativeInt(process.env.CHANGE_DESK_OUTPUT_MAX_CHARS, 12000);
@@ -52,6 +81,7 @@ const CHANGE_DESK_REPORT_MAX_CHARS = parseNonNegativeInt(process.env.CHANGE_DESK
 const CHANGE_DESK_MALL_COP_TIMEOUT_MS = parseNonNegativeInt(process.env.CHANGE_DESK_MALL_COP_TIMEOUT_MS, 180000);
 const CHANGE_DESK_MALL_COP_MAX_CHARS = parseNonNegativeInt(process.env.CHANGE_DESK_MALL_COP_MAX_CHARS, 18000);
 const CHANGE_DESK_MALL_COP_AUTO_INTERVAL_SECONDS = parseNonNegativeInt(process.env.CHANGE_DESK_MALL_COP_AUTO_INTERVAL_SECONDS, 86400);
+const HA_MONITOR_HISTORY_READ_MAX_BYTES = parseNonNegativeInt(process.env.HA_MONITOR_HISTORY_READ_MAX_BYTES, 2 * 1024 * 1024);
 const IMAGE_RETENTION_DAYS = parseNonNegativeInt(process.env.IMAGE_RETENTION_DAYS, 30);
 const IMAGE_RETENTION_MAX_BYTES = parseNonNegativeInt(process.env.IMAGE_RETENTION_MAX_BYTES, 256 * 1024 * 1024);
 const SCROLL_CONTROL_ACTIONS = new Set(['scroll-up', 'scroll-down', 'scroll-bottom']);
@@ -73,6 +103,11 @@ const SUPPORTED_TERMINAL_CONTROL_ACTIONS = new Set([
 const TERMINAL_MODES = new Set(['codex', 'raw']);
 let activeTerminalMode = 'codex';
 let mallCopRunInFlight = null;
+const requestSecurityPolicy = buildRequestSecurityPolicy();
+const rawShellCommandQueue = createSerialTaskQueue({
+    maxPending: RAW_SHELL_MAX_PENDING_COMMANDS,
+    maxWaitMs: RAW_SHELL_QUEUE_WAIT_TIMEOUT_MS
+});
 const ALLOWED_IMAGE_MIMES = new Set([
     'image/jpeg',
     'image/png',
@@ -89,6 +124,11 @@ const ALLOWED_IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.web
 function parseNonNegativeInt(value, fallback) {
     const parsed = Number.parseInt(value, 10);
     return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+function parsePort(value, fallback) {
+    const parsed = Number.parseInt(value, 10);
+    return Number.isInteger(parsed) && parsed >= 1 && parsed <= 65535 ? parsed : fallback;
 }
 
 function extensionForMime(mimetype) {
@@ -117,26 +157,6 @@ function extensionForMime(mimetype) {
 function isAllowedImage(file) {
     const ext = path.extname(file.originalname || '').toLowerCase();
     return ALLOWED_IMAGE_MIMES.has(file.mimetype) || ALLOWED_IMAGE_EXTENSIONS.has(ext);
-}
-
-function requestHeaderMatchesHost(req, headerName) {
-    const value = req.get(headerName);
-    const host = req.get('host');
-
-    if (!value || !host) {
-        return true;
-    }
-
-    try {
-        const parsed = new URL(value);
-        return parsed.host === host;
-    } catch {
-        return false;
-    }
-}
-
-function isSameOriginBrowserRequest(req) {
-    return requestHeaderMatchesHost(req, 'origin') && requestHeaderMatchesHost(req, 'referer');
 }
 
 function hasControlCharacters(value) {
@@ -262,38 +282,14 @@ function pasteTextToTarget(text, target, logContext, callback) {
             return;
         }
 
-        const bufferName = `codex-terminal-paste-${Date.now()}`;
-        const loader = spawn('tmux', ['load-buffer', '-b', bufferName, '-'], {
-            stdio: ['pipe', 'ignore', 'pipe']
-        });
-        let stderr = '';
-        let responded = false;
-
-        loader.stderr.on('data', (chunk) => {
-            stderr += chunk.toString();
-        });
-
-        loader.on('error', (err) => {
-            console.error(`Failed to load tmux paste buffer for ${logContext}:`, err.message);
-            responded = true;
-            callback(err);
-        });
-
-        loader.on('close', (code) => {
-            if (responded) {
-                return;
-            }
-
-            if (code !== 0) {
-                const err = new Error(stderr.trim() || 'tmux load-buffer failed');
+        loadTmuxPasteBuffer(text, {}, (err, bufferName) => {
+            if (err) {
+                console.error(`Failed to load tmux paste buffer for ${logContext}:`, err.message);
                 callback(err);
                 return;
             }
-
             runTmux(['paste-buffer', '-p', '-d', '-b', bufferName, '-t', target], callback);
         });
-
-        loader.stdin.end(text);
     }, target);
 }
 
@@ -322,6 +318,19 @@ function truncateShellOutput(output) {
     };
 }
 
+function truncateShellOutputTail(output) {
+    if (output.length <= RAW_SHELL_OUTPUT_MAX_CHARS) {
+        return { output, truncated: false };
+    }
+
+    const notice = '...[earlier output truncated]\n';
+    const keep = Math.max(0, RAW_SHELL_OUTPUT_MAX_CHARS - notice.length);
+    return {
+        output: `${notice}${output.slice(-keep)}`,
+        truncated: true
+    };
+}
+
 function parseMarkedShellOutput(captured, startMarker, endMarker) {
     const lines = String(captured || '').replace(/\r/g, '').split('\n');
     const endPrefix = `${endMarker}:`;
@@ -331,27 +340,55 @@ function parseMarkedShellOutput(captured, startMarker, endMarker) {
 
     for (let i = 0; i < lines.length; i += 1) {
         const line = lines[i].trim();
-        if (startIndex === -1) {
-            if (line === startMarker) {
-                startIndex = i;
-            }
-            continue;
-        }
-
         if (line.startsWith(endPrefix)) {
             endIndex = i;
             const parsed = Number.parseInt(line.slice(endPrefix.length), 10);
             exitCode = Number.isFinite(parsed) ? parsed : null;
             break;
         }
+        if (startIndex === -1) {
+            if (line === startMarker) {
+                startIndex = i;
+            }
+            continue;
+        }
     }
 
     if (startIndex === -1) {
+        if (endIndex !== -1) {
+            // The unique end marker proves this command completed even when a
+            // very chatty command pushed its start marker out of capture-pane.
+            const rawOutput = lines
+                .slice(0, endIndex)
+                .join('\n')
+                .replace(/^\n+/, '')
+                .replace(/\n+$/, '');
+            const truncated = truncateShellOutputTail(rawOutput);
+            return {
+                started: true,
+                complete: true,
+                output: truncated.output,
+                exitCode,
+                truncated: true
+            };
+        }
         return { started: false, complete: false, output: '', exitCode: null, truncated: false };
     }
 
     if (endIndex === -1) {
-        return { started: true, complete: false, output: '', exitCode: null, truncated: false };
+        const partialOutput = lines
+            .slice(startIndex + 1)
+            .join('\n')
+            .replace(/^\n+/, '')
+            .replace(/\n+$/, '');
+        const truncated = truncateShellOutput(partialOutput);
+        return {
+            started: true,
+            complete: false,
+            output: truncated.output,
+            exitCode: null,
+            truncated: truncated.truncated
+        };
     }
 
     const rawOutput = lines
@@ -369,8 +406,8 @@ function parseMarkedShellOutput(captured, startMarker, endMarker) {
     };
 }
 
-function waitForMarkedShellOutput(startMarker, endMarker, callback) {
-    const deadline = Date.now() + RAW_SHELL_COMMAND_TIMEOUT_MS;
+function waitForMarkedShellOutput(startMarker, endMarker, timeoutMs, callback) {
+    const deadline = Date.now() + timeoutMs;
 
     const poll = () => {
         capturePaneText(RAW_TMUX_TARGET, (captureErr, stdout) => {
@@ -395,6 +432,101 @@ function waitForMarkedShellOutput(startMarker, endMarker, callback) {
     };
 
     poll();
+}
+
+function rawShellRespawnArgs() {
+    return [
+        'respawn-pane',
+        '-k',
+        '-t',
+        RAW_TMUX_TARGET,
+        '-c',
+        '/config',
+        'env CODEX_TERMINAL_HUMAN_SHELL=1 /bin/bash -l'
+    ];
+}
+
+function rawShellIsolationFailure(precedingError, respawnError) {
+    const error = new Error('Raw shell isolation failed; restarting the image service');
+    error.code = 'RAW_SHELL_ISOLATION_FAILED';
+    error.poisonQueue = true;
+    error.cause = respawnError || precedingError;
+    console.error(
+        'Unable to replace the raw shell after an ambiguous command state:',
+        respawnError?.message || 'unknown respawn failure',
+        precedingError ? `(preceding error: ${precedingError.message})` : ''
+    );
+    const restartTimer = setTimeout(() => process.exit(1), 250);
+    restartTimer.unref();
+    return error;
+}
+
+function resetRawShellAfterAmbiguousDispatch(precedingError, callback) {
+    // Once text may have reached the pane, an observation error means the
+    // command may still be running. Replace the pane before the serial queue is
+    // allowed to dispatch anything else.
+    runTmux(rawShellRespawnArgs(), (respawnError) => {
+        if (respawnError) {
+            callback(rawShellIsolationFailure(precedingError, respawnError));
+            return;
+        }
+
+        const error = new Error('Raw shell command state became ambiguous; the shell was reset');
+        error.code = 'RAW_SHELL_STATE_AMBIGUOUS';
+        error.cause = precedingError;
+        callback(error);
+    });
+}
+
+function terminateTimedOutRawShell(startMarker, endMarker, timedOutResult, callback) {
+    const hardRespawn = (partialResult, precedingError) => {
+        // Replacing the pane is the hard isolation boundary: no queued command
+        // may be pasted until the timed-out process is certainly gone.
+        runTmux(rawShellRespawnArgs(), (respawnErr) => {
+            if (respawnErr) {
+                callback(rawShellIsolationFailure(precedingError, respawnErr));
+                return;
+            }
+
+            callback(null, {
+                ...timedOutResult,
+                output: partialResult?.output || timedOutResult.output || '',
+                truncated: Boolean(partialResult?.truncated || timedOutResult.truncated),
+                timedOut: true,
+                terminated: true
+            });
+        });
+    };
+
+    runTmux(['send-keys', '-t', RAW_TMUX_TARGET, 'C-c'], (interruptErr) => {
+        if (interruptErr) {
+            hardRespawn(timedOutResult, interruptErr);
+            return;
+        }
+
+        waitForMarkedShellOutput(
+            startMarker,
+            endMarker,
+            RAW_SHELL_TERMINATION_GRACE_MS,
+            (graceErr, graceResult) => {
+                if (graceErr) {
+                    hardRespawn(timedOutResult, graceErr);
+                    return;
+                }
+
+                if (graceResult.complete) {
+                    callback(null, {
+                        ...graceResult,
+                        timedOut: true,
+                        terminated: true
+                    });
+                    return;
+                }
+
+                hardRespawn(graceResult, null);
+            }
+        );
+    });
 }
 
 function ensureRawTerminal(callback) {
@@ -468,6 +600,19 @@ function selectTerminalMode(mode, callback) {
 }
 
 function dispatchRawShellCommand(command, callback) {
+    const previousMode = activeTerminalMode;
+    const finish = (result) => {
+        selectTerminalMode(previousMode, (restoreErr) => {
+            if (restoreErr) {
+                console.error(`Unable to restore terminal mode ${previousMode}:`, restoreErr.message);
+            }
+            callback(null, {
+                ...result,
+                mode: activeTerminalMode
+            });
+        });
+    };
+
     ensureRawTerminal((ensureErr) => {
         if (ensureErr) {
             callback(ensureErr);
@@ -477,7 +622,7 @@ function dispatchRawShellCommand(command, callback) {
         const markerSuffix = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
         const startMarker = `__CTP_SHELL_START_${markerSuffix}__`;
         const endMarker = `__CTP_SHELL_END_${markerSuffix}__`;
-        const wrappedCommand = `printf '\\n${startMarker}\\n'; ${command}; __ctp_status=$?; printf '\\n${endMarker}:%s\\n' "$__ctp_status"`;
+        const wrappedCommand = buildMarkedShellCommand(command, startMarker, endMarker);
 
         cancelCopyModeIfNeeded((modeErr) => {
             if (modeErr) {
@@ -493,40 +638,44 @@ function dispatchRawShellCommand(command, callback) {
 
                 pasteTextToTarget(wrappedCommand, RAW_TMUX_TARGET, RAW_TMUX_TARGET, (pasteErr) => {
                     if (pasteErr) {
-                        callback(pasteErr);
+                        resetRawShellAfterAmbiguousDispatch(pasteErr, callback);
                         return;
                     }
 
-                    runTmux(['send-keys', '-t', RAW_TMUX_TARGET, 'Enter'], (enterErr) => {
-                        if (enterErr) {
-                            callback(enterErr);
+                    // Make prompts from guarded shell commands visible before
+                    // pressing Enter so the human can answer them in the raw
+                    // terminal instead of waiting on a hidden pane.
+                    selectTerminalMode('raw', (selectErr) => {
+                        if (selectErr) {
+                            resetRawShellAfterAmbiguousDispatch(selectErr, callback);
                             return;
                         }
 
-                        waitForMarkedShellOutput(startMarker, endMarker, (waitErr, result) => {
-                            if (waitErr) {
-                                callback(waitErr);
+                        runTmux(['send-keys', '-t', RAW_TMUX_TARGET, 'Enter'], (enterErr) => {
+                            if (enterErr) {
+                                resetRawShellAfterAmbiguousDispatch(enterErr, callback);
                                 return;
                             }
 
-                            if (result.timedOut) {
-                                selectTerminalMode('raw', (selectErr) => {
-                                    if (selectErr) {
-                                        callback(selectErr);
-                                        return;
-                                    }
+                            waitForMarkedShellOutput(startMarker, endMarker, RAW_SHELL_COMMAND_TIMEOUT_MS, (waitErr, result) => {
+                                if (waitErr) {
+                                    resetRawShellAfterAmbiguousDispatch(waitErr, callback);
+                                    return;
+                                }
 
-                                    callback(null, {
-                                        ...result,
-                                        mode: activeTerminalMode
+                                if (result.timedOut) {
+                                    terminateTimedOutRawShell(startMarker, endMarker, result, (terminateErr, terminatedResult) => {
+                                        if (terminateErr) {
+                                            callback(terminateErr);
+                                            return;
+                                        }
+
+                                        finish(terminatedResult);
                                     });
-                                });
-                                return;
-                            }
+                                    return;
+                                }
 
-                            callback(null, {
-                                ...result,
-                                mode: activeTerminalMode
+                                finish(result);
                             });
                         });
                     });
@@ -534,6 +683,14 @@ function dispatchRawShellCommand(command, callback) {
             });
         }, RAW_TMUX_TARGET);
     });
+}
+
+function enqueueRawShellCommand(command, callback, options = {}) {
+    return rawShellCommandQueue.enqueue(
+        (done) => dispatchRawShellCommand(command, done),
+        callback,
+        options
+    );
 }
 
 function stripAnsiText(value) {
@@ -547,10 +704,41 @@ function redactSensitiveText(value) {
     return stripAnsiText(value)
         .replace(/\/data\/\.codex\/auth\.json/g, '/data/.codex/[redacted-auth].json')
         .replace(/\/data\/\.supervisor\/token/g, '/data/.supervisor/[redacted-token]')
+        .replace(
+            /([a-z][a-z0-9+.-]{0,31}:\/\/)([^/\s:@]+):([^@/\s]+)@/gi,
+            '$1[redacted]:[redacted]@'
+        )
+        .replace(
+            /-----BEGIN ((?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY)-----[\s\S]{0,262144}?-----END \1-----/gi,
+            '[redacted-private-key]'
+        )
+        .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/-]+=*/gi, '$1 [redacted]')
+        .replace(
+            /(\b(?:authorization|proxy-authorization|cookie|set-cookie)\s*:\s*)[^\r\n]*/gim,
+            '$1[redacted]'
+        )
+        .replace(
+            /((?:^|[\r\n])([ \t]*)["']?[A-Za-z0-9_.-]{0,80}(?:token|api[_-]?key|password|passwd|secret|authorization|proxy[_-]?authorization|cookie|set-cookie|private[_-]?key)[A-Za-z0-9_.-]{0,80}["']?\s*:\s*)[|>][-+]?[0-9]*[^\r\n]*(?:\r?\n\2[ \t]+[^\r\n]*)*/gim,
+            '$1[redacted]'
+        )
+        .replace(
+            /((?:^|[\s,{?&;])["']?[A-Za-z0-9_.-]{0,80}(?:token|api[_-]?key|password|passwd|secret|authorization|proxy[_-]?authorization|cookie|set-cookie|private[_-]?key)[A-Za-z0-9_.-]{0,80}["']?\s*[:=]\s*)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*')/gim,
+            '$1[redacted]'
+        )
+        .replace(
+            /((?:^|[\r\n])[ \t]*["']?[A-Za-z0-9_.-]{0,80}(?:token|api[_-]?key|password|passwd|secret|authorization|proxy[_-]?authorization|cookie|set-cookie|private[_-]?key)[A-Za-z0-9_.-]{0,80}["']?\s*[:=]\s*)[^\r\n]*/gim,
+            '$1[redacted]'
+        )
+        .replace(
+            /((?:^|[\s,{?&;])["']?[A-Za-z0-9_.-]{0,80}(?:token|api[_-]?key|password|passwd|secret|authorization|proxy[_-]?authorization|cookie|set-cookie|private[_-]?key)[A-Za-z0-9_.-]{0,80}["']?\s*[:=]\s*)[^,}\r\n&;]*/gim,
+            '$1[redacted]'
+        )
         .replace(/((?:TOKEN|SECRET|PASSWORD|PASS|KEY)[A-Z0-9_]*=)[^\s"']+/gi, '$1[redacted]')
         .replace(/(Bearer\s+)[A-Za-z0-9._~+/-]+=*/gi, '$1[redacted]')
         .replace(/sk-[A-Za-z0-9_-]{20,}/g, '[redacted-openai-key]')
-        .replace(/gh[pousr]_[A-Za-z0-9_]{20,}/g, '[redacted-github-token]');
+        .replace(/github_pat_[A-Za-z0-9_]{20,}/gi, '[redacted-github-token]')
+        .replace(/gh[pousr]_[A-Za-z0-9_]{20,}/gi, '[redacted-github-token]')
+        .replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '[redacted-jwt]');
 }
 
 function truncateChangeDeskText(value, maxChars = CHANGE_DESK_OUTPUT_MAX_CHARS) {
@@ -565,6 +753,25 @@ function truncateChangeDeskText(value, maxChars = CHANGE_DESK_OUTPUT_MAX_CHARS) 
         text: `${text.slice(0, keep)}${notice}`,
         truncated: true
     };
+}
+
+function redactStructuredValue(value, depth = 0) {
+    if (depth > 12) {
+        return '[nested data omitted]';
+    }
+    if (typeof value === 'string') {
+        return redactSensitiveText(value);
+    }
+    if (Array.isArray(value)) {
+        return value.map((item) => redactStructuredValue(item, depth + 1));
+    }
+    if (value && typeof value === 'object') {
+        return Object.fromEntries(Object.entries(value).map(([key, item]) => [
+            redactSensitiveText(key),
+            redactStructuredValue(item, depth + 1)
+        ]));
+    }
+    return value;
 }
 
 function ensureChangeDeskReportDir() {
@@ -616,7 +823,7 @@ function loadMallCopMemory() {
 
 function saveMallCopMemory(memory) {
     ensureMallCopMemoryDir();
-    fs.writeFileSync(
+    writeFileAtomic(
         CHANGE_DESK_MALL_COP_MEMORY_FILE,
         `${JSON.stringify(memory, null, 2)}\n`,
         { encoding: 'utf8', mode: 0o600 }
@@ -627,12 +834,19 @@ function mallCopMemoryGeneratedAt(memory) {
     return memory?.generatedAt || memory?.observation?.generatedAt || '';
 }
 
+function mallCopLastActivityAt(memory) {
+    const candidates = [memory?.lastAttemptAt, mallCopMemoryGeneratedAt(memory)]
+        .map((value) => Date.parse(value || ''))
+        .filter(Number.isFinite);
+    return candidates.length > 0 ? new Date(Math.max(...candidates)).toISOString() : '';
+}
+
 function isMallCopAutoDue(memory, nowMs = Date.now()) {
     if (CHANGE_DESK_MALL_COP_AUTO_INTERVAL_SECONDS <= 0) {
         return false;
     }
 
-    const generatedAt = Date.parse(mallCopMemoryGeneratedAt(memory));
+    const generatedAt = Date.parse(mallCopLastActivityAt(memory));
     if (!Number.isFinite(generatedAt)) {
         return true;
     }
@@ -641,7 +855,7 @@ function isMallCopAutoDue(memory, nowMs = Date.now()) {
 }
 
 function mallCopNextRunAt(memory) {
-    const generatedAt = Date.parse(mallCopMemoryGeneratedAt(memory));
+    const generatedAt = Date.parse(mallCopLastActivityAt(memory));
     if (!Number.isFinite(generatedAt) || CHANGE_DESK_MALL_COP_AUTO_INTERVAL_SECONDS <= 0) {
         return '';
     }
@@ -879,9 +1093,19 @@ function buildMallCopMemoryLines(previousMemory, currentDigest) {
 
 function buildMallCopMemoryRecord(snapshot, observation, report, previousMemory, trigger) {
     const digest = buildMallCopDigest(snapshot);
+    const generatedAt = new Date().toISOString();
     return {
         version: 1,
-        generatedAt: new Date().toISOString(),
+        generatedAt,
+        lastAttemptAt: generatedAt,
+        lastAttempt: {
+            generatedAt,
+            trigger,
+            success: true,
+            timedOut: false,
+            durationMs: Number.isFinite(observation.durationMs) ? observation.durationMs : 0,
+            exitCode: observation.exitCode
+        },
         trigger,
         packetPath: report.path,
         packetTruncated: Boolean(report.truncated),
@@ -898,6 +1122,23 @@ function buildMallCopMemoryRecord(snapshot, observation, report, previousMemory,
     };
 }
 
+function buildFailedMallCopAttempt(previousMemory, observation, report, trigger) {
+    const generatedAt = new Date().toISOString();
+    return {
+        ...(previousMemory || { version: 1 }),
+        lastAttemptAt: generatedAt,
+        lastAttempt: {
+            generatedAt,
+            trigger,
+            success: false,
+            timedOut: Boolean(observation.timedOut),
+            durationMs: Number.isFinite(observation.durationMs) ? observation.durationMs : 0,
+            exitCode: observation.exitCode,
+            packetPath: report.path
+        }
+    };
+}
+
 function runChangeDeskCommand(command, args, options = {}) {
     const timeout = options.timeout || CHANGE_DESK_COMMAND_TIMEOUT_MS;
     const maxChars = options.maxChars || CHANGE_DESK_OUTPUT_MAX_CHARS;
@@ -908,6 +1149,14 @@ function runChangeDeskCommand(command, args, options = {}) {
             timeout,
             maxBuffer: 1024 * 1024
         }, (err, stdout = '', stderr = '') => {
+            let parsedJson = null;
+            if (options.parseJson) {
+                try {
+                    parsedJson = JSON.parse(stdout || '{}');
+                } catch {
+                    parsedJson = null;
+                }
+            }
             const stdoutResult = truncateChangeDeskText(stdout, maxChars);
             const stderrResult = truncateChangeDeskText(stderr, maxChars);
             const combinedResult = truncateChangeDeskText(
@@ -927,7 +1176,8 @@ function runChangeDeskCommand(command, args, options = {}) {
                 truncated: stdoutResult.truncated || stderrResult.truncated || combinedResult.truncated,
                 timedOut: Boolean(err?.killed || err?.signal === 'SIGTERM'),
                 notFound: err?.code === 'ENOENT',
-                error: err ? redactSensitiveText(err.message) : ''
+                error: err ? redactSensitiveText(err.message) : '',
+                parsedJson
             });
         });
     });
@@ -943,7 +1193,8 @@ async function collectChangeDeskAudit() {
         '500'
     ], {
         timeout: CHANGE_DESK_COMMAND_TIMEOUT_MS,
-        maxChars: CHANGE_DESK_OUTPUT_MAX_CHARS
+        maxChars: CHANGE_DESK_OUTPUT_MAX_CHARS,
+        parseJson: true
     });
 
     if (result.notFound) {
@@ -954,12 +1205,7 @@ async function collectChangeDeskAudit() {
         };
     }
 
-    let parsed = null;
-    try {
-        parsed = JSON.parse(result.stdout || '{}');
-    } catch {
-        parsed = null;
-    }
+    const parsed = result.parsedJson ? redactStructuredValue(result.parsedJson) : null;
 
     if (!parsed) {
         return {
@@ -1315,7 +1561,8 @@ async function collectChangeDeskLogs() {
 async function collectChangeDeskLive() {
     const result = await runChangeDeskCommand('ha-api', ['config'], {
         timeout: CHANGE_DESK_FAST_COMMAND_TIMEOUT_MS,
-        maxChars: CHANGE_DESK_OUTPUT_MAX_CHARS
+        maxChars: CHANGE_DESK_OUTPUT_MAX_CHARS,
+        parseJson: true
     });
 
     if (result.notFound) {
@@ -1326,12 +1573,7 @@ async function collectChangeDeskLive() {
         };
     }
 
-    let parsed = null;
-    try {
-        parsed = JSON.parse(result.stdout || '{}');
-    } catch {
-        parsed = null;
-    }
+    const parsed = result.parsedJson ? redactStructuredValue(result.parsedJson) : null;
 
     if (!result.success || !parsed) {
         return {
@@ -1358,7 +1600,8 @@ async function collectChangeDeskLive() {
 async function collectChangeDeskMcp() {
     const result = await runChangeDeskCommand('ha-mcp-status', ['--json'], {
         timeout: CHANGE_DESK_FAST_COMMAND_TIMEOUT_MS,
-        maxChars: CHANGE_DESK_OUTPUT_MAX_CHARS
+        maxChars: CHANGE_DESK_OUTPUT_MAX_CHARS,
+        parseJson: true
     });
 
     if (result.notFound) {
@@ -1369,12 +1612,7 @@ async function collectChangeDeskMcp() {
         };
     }
 
-    let parsed = null;
-    try {
-        parsed = JSON.parse(result.stdout || '{}');
-    } catch {
-        parsed = null;
-    }
+    const parsed = result.parsedJson ? redactStructuredValue(result.parsedJson) : null;
 
     if (!result.success || !parsed) {
         return {
@@ -1487,12 +1725,10 @@ function loadChangeDeskDispatch(fallbackDispatch) {
 
 function loadMonitorHistory(limit = 48) {
     try {
-        return fs.readFileSync(HA_MONITOR_HISTORY_FILE, 'utf8')
-            .split(/\r?\n/)
-            .filter(Boolean)
-            .slice(-Math.max(1, limit))
-            .map((line) => JSON.parse(line))
-            .filter((entry) => entry && typeof entry === 'object');
+        return parseJsonLinesTail(HA_MONITOR_HISTORY_FILE, {
+            limit,
+            maxBytes: HA_MONITOR_HISTORY_READ_MAX_BYTES
+        });
     } catch {
         return [];
     }
@@ -1929,36 +2165,123 @@ function buildMallCopObservationPacket(snapshot, previousMemory = null) {
 
 function runCodexMallCopObservation(prompt) {
     return new Promise((resolve) => {
-        const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'change-desk-mall-cop-'));
+        const startedAt = Date.now();
+        let tempDir = '';
+        let child;
+        const unsafeTestMode = process.env.NODE_ENV === 'test'
+            && process.env.IMAGE_SERVICE_TEST_MODE === 'true';
+        try {
+            if (unsafeTestMode) {
+                tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'change-desk-mall-cop-'));
+            } else {
+                refreshMallCopJailRuntimeFiles(JAIL_ROOT);
+                tempDir = fs.mkdtempSync(path.join(JAIL_ROOT, 'work', 'run-'));
+            }
+        } catch (err) {
+            resolve({
+                success: false,
+                exitCode: null,
+                timedOut: false,
+                durationMs: Date.now() - startedAt,
+                summary: '',
+                output: '',
+                error: redactSensitiveText(err.message)
+            });
+            return;
+        }
         const outputFile = path.join(tempDir, 'summary.md');
-        const args = [
-            'exec',
-            '--sandbox',
-            'read-only',
-            '--cd',
-            CONFIG_ROOT,
-            '--skip-git-repo-check',
-            '--output-last-message',
-            outputFile,
-            '-'
-        ];
-        const child = spawn('codex', args, {
-            cwd: CONFIG_ROOT,
-            env: {
-                ...process.env,
-                CODEX_HOME: process.env.CODEX_HOME || '/data/.codex'
-            },
-            stdio: ['pipe', 'pipe', 'pipe']
-        });
+        const sourceCodexHome = process.env.CODEX_HOME || '/data/.codex';
+
+        try {
+            if (unsafeTestMode) {
+                const directArgs = buildMallCopCodexArgs(tempDir, outputFile);
+                const testCodexPath = process.env.IMAGE_SERVICE_TEST_CODEX_PATH;
+                if (!testCodexPath || !path.isAbsolute(testCodexPath)) {
+                    throw new Error('IMAGE_SERVICE_TEST_CODEX_PATH must be absolute in Mall Cop test mode');
+                }
+                child = spawn(testCodexPath, directArgs, {
+                    cwd: tempDir,
+                    env: buildMallCopCodexEnvironment(
+                        process.env,
+                        tempDir,
+                        tempDir,
+                        sourceCodexHome
+                    ),
+                    stdio: ['pipe', 'pipe', 'pipe']
+                });
+            } else {
+                const sandboxWorkDir = `${SANDBOX_WORK_ROOT}/${path.basename(tempDir)}`;
+                prepareMallCopSandbox(tempDir, sourceCodexHome, JAIL_UID, JAIL_GID);
+                const sandboxOutputFile = `${sandboxWorkDir}/summary.md`;
+                const codexArgs = buildMallCopCodexArgs(sandboxWorkDir, sandboxOutputFile);
+                child = spawn(
+                    '/opt/scripts/codex-terminal-mall-cop-jail.py',
+                    buildMallCopJailLauncherArgs(JAIL_ROOT, sandboxWorkDir, codexArgs),
+                    {
+                    cwd: tempDir,
+                    env: buildMallCopCodexEnvironment(
+                        process.env,
+                        `${sandboxWorkDir}/home`,
+                        `${sandboxWorkDir}/tmp`,
+                        `${sandboxWorkDir}/codex-home`
+                    ),
+                    stdio: ['pipe', 'pipe', 'pipe']
+                    }
+                );
+            }
+        } catch (err) {
+            fs.rm(tempDir, { recursive: true, force: true }, () => {});
+            resolve({
+                success: false,
+                exitCode: null,
+                timedOut: false,
+                durationMs: Date.now() - startedAt,
+                summary: '',
+                output: '',
+                error: redactSensitiveText(err.message)
+            });
+            return;
+        }
         let stdout = '';
         let stderr = '';
         let settled = false;
-        const startedAt = Date.now();
+        let timeoutTriggered = false;
+        let forceKillTimer = null;
+        const cleanupTempDir = () => {
+            fs.rm(tempDir, { recursive: true, force: true }, () => {});
+        };
+        const settleFailure = (err) => {
+            if (settled) {
+                return;
+            }
+            settled = true;
+            clearTimeout(timeout);
+            if (forceKillTimer) {
+                clearTimeout(forceKillTimer);
+            }
+            child?.kill('SIGTERM');
+            cleanupTempDir();
+            resolve({
+                success: false,
+                exitCode: null,
+                timedOut: false,
+                durationMs: Date.now() - startedAt,
+                summary: '',
+                output: '',
+                error: redactSensitiveText(err.message)
+            });
+        };
         const timeout = setTimeout(() => {
             if (settled) {
                 return;
             }
+            timeoutTriggered = true;
             child.kill('SIGTERM');
+            forceKillTimer = setTimeout(() => {
+                if (!settled) {
+                    child.kill('SIGKILL');
+                }
+            }, 3000);
         }, CHANGE_DESK_MALL_COP_TIMEOUT_MS);
 
         child.stdout.on('data', (chunk) => {
@@ -1973,28 +2296,16 @@ function runCodexMallCopObservation(prompt) {
                 stderr = stderr.slice(-CHANGE_DESK_MALL_COP_MAX_CHARS);
             }
         });
-        child.on('error', (err) => {
-            if (settled) {
-                return;
-            }
-            settled = true;
-            clearTimeout(timeout);
-            resolve({
-                success: false,
-                exitCode: null,
-                timedOut: false,
-                durationMs: Date.now() - startedAt,
-                summary: '',
-                output: '',
-                error: redactSensitiveText(err.message)
-            });
-        });
+        child.on('error', settleFailure);
         child.on('close', (code, signal) => {
             if (settled) {
                 return;
             }
             settled = true;
             clearTimeout(timeout);
+            if (forceKillTimer) {
+                clearTimeout(forceKillTimer);
+            }
             let summary = '';
             try {
                 summary = fs.readFileSync(outputFile, 'utf8');
@@ -2008,16 +2319,16 @@ function runCodexMallCopObservation(prompt) {
                 success: code === 0 && Boolean(text.text.trim()),
                 exitCode: Number.isInteger(code) ? code : null,
                 signal: signal || '',
-                timedOut: signal === 'SIGTERM',
+                timedOut: timeoutTriggered || signal === 'SIGTERM' || signal === 'SIGKILL',
                 durationMs: Date.now() - startedAt,
                 summary: text.text.trim(),
                 output: output.text,
                 error: error.text,
                 truncated: text.truncated || output.truncated || error.truncated
             });
-            fs.rm(tempDir, { recursive: true, force: true }, () => {});
+            cleanupTempDir();
         });
-        child.stdin.end(prompt);
+        endChildStdin(child.stdin, protectMallCopPrompt(prompt), settleFailure);
     });
 }
 
@@ -2033,11 +2344,18 @@ async function runMallCopForSnapshot(snapshot, trigger = 'manual') {
         const observation = await runCodexMallCopObservation(packet);
 
         if (!observation.success) {
+            const failedMemory = buildFailedMallCopAttempt(
+                previousMemory,
+                observation,
+                report,
+                trigger
+            );
+            saveMallCopMemory(failedMemory);
             return {
                 success: false,
                 report,
                 observation,
-                memory: previousMemory
+                memory: failedMemory
             };
         }
 
@@ -2114,9 +2432,35 @@ app.use((req, res, next) => {
 
 app.use((req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('Referrer-Policy', 'no-referrer');
+    // Keep the opaque Home Assistant ingress path out of every Referer while
+    // retaining the scheme/host proof used by same-origin request checks.
+    res.setHeader('Referrer-Policy', 'strict-origin');
     next();
 });
+
+app.use((req, res, next) => {
+    const healthCheck = req.path === '/health';
+    // The bundled codex-shell-dispatch helper talks to this one endpoint over
+    // container loopback. All browser-facing routes remain ingress-only.
+    const internalShellDispatch = req.path === '/terminal-shell-command';
+    if (isAllowedRequestSource(req, requestSecurityPolicy, {
+        allowLoopback: healthCheck || internalShellDispatch
+    })) {
+        next();
+        return;
+    }
+
+    console.warn(`Rejected non-ingress request from ${requestRemoteAddress(req) || 'unknown source'} to ${req.path}`);
+    res.status(403).json({ success: false, error: 'This service is available only through Home Assistant ingress' });
+});
+
+function requireSameOriginBrowserRequest(req, res, next) {
+    if (!isSameOriginBrowserRequest(req)) {
+        res.status(403).json({ success: false, error: 'A same-origin browser request is required' });
+        return;
+    }
+    next();
+}
 
 // Ensure upload directory exists
 if (!fs.existsSync(UPLOAD_DIR)) {
@@ -2204,11 +2548,12 @@ const storage = multer.diskStorage({
     },
     filename: (req, file, cb) => {
         const timestamp = Date.now();
+        const nonce = crypto.randomBytes(12).toString('hex');
         const originalExt = path.extname(file.originalname || '').toLowerCase();
         const ext = ALLOWED_IMAGE_EXTENSIONS.has(originalExt)
             ? originalExt
             : extensionForMime(file.mimetype);
-        const filename = `pasted-${timestamp}${ext}`;
+        const filename = `pasted-${timestamp}-${nonce}${ext}`;
         cb(null, filename);
     }
 });
@@ -2216,13 +2561,20 @@ const storage = multer.diskStorage({
 const upload = multer({
     storage: storage,
     limits: {
-        fileSize: UPLOAD_MAX_BYTES // 10MB max file size
+        fileSize: UPLOAD_MAX_BYTES,
+        files: 1,
+        fields: 4,
+        parts: 5,
+        fieldNameSize: 64,
+        fieldSize: 1024
     },
     fileFilter: (req, file, cb) => {
         if (isAllowedImage(file)) {
             cb(null, true);
         } else {
-            cb(new Error('Only image files are allowed'));
+            const error = new Error('Only supported image files are allowed');
+            error.code = 'UNSUPPORTED_IMAGE_TYPE';
+            cb(error);
         }
     }
 });
@@ -2368,7 +2720,7 @@ app.post('/terminal-mode', (req, res) => {
 });
 
 // Image upload endpoint
-app.post('/upload', upload.single('image'), (req, res) => {
+app.post('/upload', requireSameOriginBrowserRequest, upload.single('image'), (req, res) => {
     if (!req.file) {
         return res.status(400).json({ error: 'No image file provided' });
     }
@@ -2471,31 +2823,11 @@ app.post('/terminal-paste', (req, res) => {
             return res.status(502).json({ success: false, error: 'Failed to prepare terminal paste' });
         }
 
-        const bufferName = `codex-terminal-paste-${Date.now()}`;
-        const loader = spawn('tmux', ['load-buffer', '-b', bufferName, '-'], {
-            stdio: ['pipe', 'ignore', 'pipe']
-        });
-        let stderr = '';
-        let responded = false;
-
-        loader.stderr.on('data', (chunk) => {
-            stderr += chunk.toString();
-        });
-
-        loader.on('error', (err) => {
-            console.error(`Failed to load tmux paste buffer for ${target}:`, err.message);
-            responded = true;
-            res.status(502).json({ success: false, error: 'Failed to prepare terminal paste' });
-        });
-
-        loader.on('close', (code) => {
-            if (responded) {
+        loadTmuxPasteBuffer(text, {}, (loadErr, bufferName) => {
+            if (loadErr) {
+                console.error(`Failed to load tmux paste buffer for ${target}:`, loadErr.message);
+                res.status(502).json({ success: false, error: 'Failed to prepare terminal paste' });
                 return;
-            }
-
-            if (code !== 0) {
-                console.error(`tmux load-buffer failed for ${target}:`, stderr.trim());
-                return res.status(502).json({ success: false, error: 'Failed to prepare terminal paste' });
             }
 
             runTmux(['paste-buffer', '-p', '-d', '-b', bufferName, '-t', target], (err) => {
@@ -2507,8 +2839,6 @@ app.post('/terminal-paste', (req, res) => {
                 res.json({ success: true });
             });
         });
-
-        loader.stdin.end(text);
     }, target);
 });
 
@@ -2519,7 +2849,8 @@ app.post('/terminal-shell-command', (req, res) => {
     const requestedCommand = typeof req.body?.command === 'string' ? req.body.command.trim() : '';
     const command = normalizeShellCommandForDispatch(requestedCommand);
 
-    if (!isSameOriginBrowserRequest(req)) {
+    const internalLoopbackRequest = isLoopbackAddress(requestRemoteAddress(req));
+    if (!internalLoopbackRequest && !isSameOriginBrowserRequest(req)) {
         return res.status(403).json({ success: false, error: 'Cross-origin shell command dispatch is not allowed' });
     }
 
@@ -2535,9 +2866,26 @@ app.post('/terminal-shell-command', (req, res) => {
         return res.status(400).json({ success: false, error: 'Shell command contains unsupported control characters' });
     }
 
-    dispatchRawShellCommand(command, (err, result = {}) => {
+    const queuedRequest = new AbortController();
+    const cancelIfDisconnected = () => {
+        if (!res.writableEnded) {
+            queuedRequest.abort();
+        }
+    };
+    req.once('aborted', cancelIfDisconnected);
+    res.once('close', cancelIfDisconnected);
+
+    enqueueRawShellCommand(command, (err, result = {}) => {
+        req.off('aborted', cancelIfDisconnected);
+        res.off('close', cancelIfDisconnected);
+        if (res.writableEnded || res.destroyed) {
+            return;
+        }
         if (err) {
             console.error(`Failed to dispatch raw shell command to ${RAW_TMUX_TARGET}:`, err.message);
+            if (err.code === 'QUEUE_FULL' || err.code === 'QUEUE_WAIT_TIMEOUT') {
+                return res.status(429).json({ success: false, error: 'Too many shell commands are already queued' });
+            }
             return res.status(502).json({ success: false, error: 'Failed to dispatch shell command' });
         }
 
@@ -2548,9 +2896,10 @@ app.post('/terminal-shell-command', (req, res) => {
             output: result.output || '',
             exitCode: result.exitCode,
             timedOut: Boolean(result.timedOut),
+            terminated: Boolean(result.terminated),
             truncated: Boolean(result.truncated)
         });
-    });
+    }, { signal: queuedRequest.signal });
 });
 
 app.post('/terminal-control', (req, res) => {
@@ -2645,19 +2994,41 @@ app.use(express.static(path.join(__dirname, 'public'), {
 
 // Multer error handling middleware
 app.use((err, req, res, next) => {
+    if (req.file?.path) {
+        try {
+            fs.unlinkSync(req.file.path);
+        } catch (cleanupErr) {
+            if (cleanupErr.code !== 'ENOENT') {
+                console.error('Unable to clean up failed upload:', cleanupErr.message);
+            }
+        }
+    }
+
     if (err instanceof multer.MulterError) {
         console.error('Multer error:', err.message);
-        return res.status(400).json({
+        return res.status(err.code === 'LIMIT_FILE_SIZE' ? 413 : 400).json({
             success: false,
             error: `Upload error: ${err.message}`
         });
+    }
+
+    if (err?.code === 'UNSUPPORTED_IMAGE_TYPE') {
+        return res.status(400).json({ success: false, error: err.message });
+    }
+
+    if (err?.type === 'entity.too.large' || err?.status === 413) {
+        return res.status(413).json({ success: false, error: 'Request body is too large' });
+    }
+
+    if (err?.type === 'entity.parse.failed' || (err instanceof SyntaxError && 'body' in err)) {
+        return res.status(400).json({ success: false, error: 'Request body is not valid JSON' });
     }
 
     if (err) {
         console.error('Error:', err.message);
         return res.status(500).json({
             success: false,
-            error: err.message
+            error: 'Request failed'
         });
     }
 
@@ -2665,19 +3036,22 @@ app.use((err, req, res, next) => {
 });
 
 // Create HTTP server and start listening
-const server = http.createServer(app);
+const server = http.createServer({ maxHeaderSize: 16 * 1024 }, app);
 
 server.on('upgrade', (req, socket, head) => {
     if (req.url && req.url.startsWith('//')) {
         req.url = req.url.replace(/^\/+/, '/');
     }
 
-    if (req.url && req.url.startsWith('/terminal')) {
+    const upgradePath = String(req.url || '').split('?', 1)[0];
+    const terminalUpgrade = upgradePath === '/terminal' || upgradePath.startsWith('/terminal/');
+    if (terminalUpgrade && isAuthorizedWebSocketRequest(req, requestSecurityPolicy)) {
         terminalProxy.upgrade(req, socket, head);
         return;
     }
 
-    socket.destroy();
+    console.warn(`Rejected WebSocket upgrade from ${requestRemoteAddress(req) || 'unknown source'}`);
+    socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
 });
 
 server.listen(PORT, '0.0.0.0', () => {
@@ -2688,4 +3062,8 @@ server.listen(PORT, '0.0.0.0', () => {
     console.log(`tmux Codex target: ${CODEX_TMUX_TARGET}`);
     console.log(`tmux raw shell target: ${RAW_TMUX_TARGET}`);
     console.log(`Terminal proxy available at /terminal/`);
+    console.log(`Trusted Home Assistant ingress proxy address(es): ${[...requestSecurityPolicy.trustedIngressAddresses].join(', ')}`);
+    if (requestSecurityPolicy.allowLoopbackDevelopment) {
+        console.warn('Loopback-only development access is enabled by IMAGE_SERVICE_ALLOW_LOOPBACK_DEVELOPMENT=true');
+    }
 });

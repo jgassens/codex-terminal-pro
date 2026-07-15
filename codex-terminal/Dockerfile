@@ -1,7 +1,7 @@
-FROM ghcr.io/home-assistant/base:latest
+FROM ghcr.io/home-assistant/base:3.22-2026.04.0@sha256:eed9b5eff1441d4db22d5036b7802610e7fc94af8c0448439ae6dda9942d5230
 
 LABEL \
-    io.hass.version="2.5.10" \
+    io.hass.version="2.6.0" \
     io.hass.type="addon" \
     io.hass.arch="aarch64|amd64" \
     org.opencontainers.image.title="Home Assistant Add-on: Codex Terminal Pro" \
@@ -47,13 +47,24 @@ RUN apk add --no-cache \
     ttyd
 
 # Install Codex CLI.
-ARG CODEX_CLI_VERSION=0.134.0
+ARG CODEX_CLI_VERSION=0.144.4
 RUN npm install -g "@openai/codex@${CODEX_CLI_VERSION}" \
     && codex --version \
-    && npm cache clean --force
+    && CODEX_NATIVE="$(find /usr/local/lib/node_modules/@openai/codex -path '*/vendor/*/bin/codex' -type f -perm -0100 | head -n 1)" \
+    && test -n "${CODEX_NATIVE}" \
+    && install -d -m 0755 /opt/mall-cop-jail/bin /opt/mall-cop-jail/etc/ssl /opt/mall-cop-jail/proc/self /opt/mall-cop-jail/work \
+    && ln "${CODEX_NATIVE}" /opt/mall-cop-jail/bin/codex \
+    && ln -s /bin/codex /opt/mall-cop-jail/proc/self/exe \
+    && cp -a /etc/ssl/. /opt/mall-cop-jail/etc/ssl/ \
+    && cp /etc/resolv.conf /opt/mall-cop-jail/etc/resolv.conf \
+    && cp /etc/hosts /opt/mall-cop-jail/etc/hosts \
+    && chmod 0755 /opt/mall-cop-jail /opt/mall-cop-jail/bin /opt/mall-cop-jail/work \
+    && chmod 0555 /opt/mall-cop-jail/bin/codex \
+    && chmod -R go-w /opt/mall-cop-jail/etc \
+    && rm -rf /root/.npm
 
 # Install read-only Modbus Python tooling into an isolated import path.
-RUN python3 -m pip install --no-cache-dir --target /opt/modbus-python \
+RUN PIP_ROOT_USER_ACTION=ignore python3 -m pip install --no-cache-dir --target /opt/modbus-python \
         'pymodbus[serial]==3.13.0' \
         'minimalmodbus==2.1.1' \
         'pyserial==3.5' \
@@ -64,35 +75,46 @@ ENV PYTHONPATH="/opt/modbus-python"
 # Install Home Assistant CLI (ha command).
 # Download appropriate binary based on build architecture.
 ARG TARGETARCH
-RUN case "${TARGETARCH:-amd64}" in \
-        amd64)   HA_ARCH="amd64" ;; \
-        arm64)   HA_ARCH="aarch64" ;; \
-        *)       echo "Unsupported architecture: ${TARGETARCH}" && exit 1 ;; \
+ARG BUILD_ARCH
+ARG HA_CLI_VERSION=5.2.0
+ARG HA_CLI_SHA256_AMD64=701be67aee9f1e092254097a40d006b450d1578641a262258b182237987e7479
+ARG HA_CLI_SHA256_ARM64=af8c03ccddb65d223d7b7dab1570197b8a2ff8fc7139c1db054d08a91a4f8073
+RUN RESOLVED_ARCH="${TARGETARCH:-${BUILD_ARCH:-$(apk --print-arch)}}" && \
+    case "${RESOLVED_ARCH}" in \
+        amd64|x86_64) HA_ARCH="amd64"; HA_SHA256="${HA_CLI_SHA256_AMD64}" ;; \
+        arm64|aarch64) HA_ARCH="aarch64"; HA_SHA256="${HA_CLI_SHA256_ARM64}" ;; \
+        *)       echo "Unsupported architecture: ${RESOLVED_ARCH}" && exit 1 ;; \
     esac && \
-    echo "Fetching latest Home Assistant CLI version..." && \
-    HA_VERSION=$(curl -fsSL https://api.github.com/repos/home-assistant/cli/releases/latest | jq -r '.tag_name') && \
-    echo "Installing Home Assistant CLI ${HA_VERSION} for ${HA_ARCH}..." && \
-    curl -fsSL -o /usr/bin/ha \
-        "https://github.com/home-assistant/cli/releases/download/${HA_VERSION}/ha_${HA_ARCH}" && \
+    echo "Installing Home Assistant CLI ${HA_CLI_VERSION} for ${HA_ARCH}..." && \
+    curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+        --output /usr/bin/ha \
+        "https://github.com/home-assistant/cli/releases/download/${HA_CLI_VERSION}/ha_${HA_ARCH}" && \
+    printf '%s  %s\n' "${HA_SHA256}" /usr/bin/ha | sha256sum -c - && \
     chmod +x /usr/bin/ha && \
-    echo "Home Assistant CLI ${HA_VERSION} installed successfully"
+    /usr/bin/ha --help >/dev/null && \
+    echo "Home Assistant CLI ${HA_CLI_VERSION} installed successfully"
 
 # Install GitHub CLI (gh command).
-RUN case "${TARGETARCH:-amd64}" in \
-        amd64)   GH_ARCH="amd64" ;; \
-        arm64)   GH_ARCH="arm64" ;; \
-        *)       echo "Unsupported architecture for gh: ${TARGETARCH}" && exit 1 ;; \
+ARG GH_CLI_VERSION=2.96.0
+ARG GH_CLI_SHA256_AMD64=83d5c2ccad5498f58bf6368acb1ab32588cf43ab3a4b1c301bf36328b1c8bd60
+ARG GH_CLI_SHA256_ARM64=06f86ec7103d41993b76cd78072f43595c34aaa56506d971d9860e67140bf909
+RUN RESOLVED_ARCH="${TARGETARCH:-${BUILD_ARCH:-$(apk --print-arch)}}" && \
+    case "${RESOLVED_ARCH}" in \
+        amd64|x86_64) GH_ARCH="amd64"; GH_SHA256="${GH_CLI_SHA256_AMD64}" ;; \
+        arm64|aarch64) GH_ARCH="arm64"; GH_SHA256="${GH_CLI_SHA256_ARM64}" ;; \
+        *)       echo "Unsupported architecture for gh: ${RESOLVED_ARCH}" && exit 1 ;; \
     esac && \
-    echo "Fetching latest GitHub CLI version..." && \
-    GH_VERSION=$(curl -fsSL https://api.github.com/repos/cli/cli/releases/latest | jq -r '.tag_name' | sed 's/^v//') && \
-    echo "Installing GitHub CLI v${GH_VERSION} for ${GH_ARCH}..." && \
-    curl -fsSL -o /tmp/gh.tar.gz \
-        "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${GH_ARCH}.tar.gz" && \
+    echo "Installing GitHub CLI v${GH_CLI_VERSION} for ${GH_ARCH}..." && \
+    curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+        --output /tmp/gh.tar.gz \
+        "https://github.com/cli/cli/releases/download/v${GH_CLI_VERSION}/gh_${GH_CLI_VERSION}_linux_${GH_ARCH}.tar.gz" && \
+    printf '%s  %s\n' "${GH_SHA256}" /tmp/gh.tar.gz | sha256sum -c - && \
     tar -xzf /tmp/gh.tar.gz -C /tmp && \
-    mv /tmp/gh_${GH_VERSION}_linux_${GH_ARCH}/bin/gh /usr/bin/gh && \
+    mv /tmp/gh_${GH_CLI_VERSION}_linux_${GH_ARCH}/bin/gh /usr/bin/gh && \
     chmod +x /usr/bin/gh && \
+    /usr/bin/gh --version && \
     rm -rf /tmp/gh* && \
-    echo "GitHub CLI v${GH_VERSION} installed successfully"
+    echo "GitHub CLI v${GH_CLI_VERSION} installed successfully"
 
 WORKDIR /config
 
@@ -106,7 +128,7 @@ COPY HA.md /opt/home-assistant/HA.md
 COPY image-service/ /opt/image-service/
 RUN cd /opt/image-service \
     && npm ci --omit=dev --no-audit --no-fund \
-    && npm cache clean --force \
+    && rm -rf /root/.npm \
     && chmod +x server.js
 
 # Copy startup script and modular scripts.
@@ -119,7 +141,14 @@ RUN mkdir -p /usr/libexec/codex-terminal \
     && chmod +x /run.sh \
     && chmod +x /opt/scripts/*.sh \
     && chmod +x /opt/scripts/codex-disable-heygen-plugin \
+    && chmod +x /opt/scripts/codex-disable-github-mcp \
+    && chmod +x /opt/scripts/codex-config-set \
+    && chmod +x /opt/scripts/codex-config-tui \
+    && chmod +x /opt/scripts/codex-terminal-config-files.py \
     && chmod +x /opt/scripts/persist-install \
+    && chmod +x /opt/scripts/update-apk-manifest \
+    && chmod +x /opt/scripts/codex-terminal-ssh-mailbox.py \
+    && chmod +x /opt/scripts/codex-terminal-mall-cop-jail.py \
     && chmod +x /opt/scripts/codex-prune-plugins \
     && chmod +x /opt/scripts/codex-shell-dispatch \
     && chmod +x /opt/scripts/codex-terminal-briefing \

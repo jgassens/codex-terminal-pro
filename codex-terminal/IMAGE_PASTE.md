@@ -1,7 +1,7 @@
 # Image Paste Support
 
-Codex Terminal Pro includes a lightweight image upload service on port `7680`
-with the ttyd terminal proxied underneath it.
+Codex Terminal Pro includes a lightweight image upload service behind Home
+Assistant ingress, with the ttyd terminal proxied underneath it.
 
 ## What It Does
 
@@ -43,10 +43,12 @@ Please inspect this Home Assistant dashboard screenshot and identify unavailable
 - Accepted types: JPEG, PNG, GIF, WebP, SVG, HEIC, HEIF
 - Files survive container restarts because they live under `/data`
 
-## Ports
+## Network Access
 
-- `7680`: image upload service and web UI
-- `7681`: ttyd terminal proxied by the web UI
+The image service listens internally on `7680`, and ttyd listens internally on
+loopback port `7681`. Neither port is published to the Home Assistant host.
+Open the authenticated Home Assistant ingress panel rather than a direct
+`http://host:7680` URL.
 
 ## Troubleshooting
 

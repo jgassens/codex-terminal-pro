@@ -20,7 +20,7 @@ MODBUS_SITE = "/opt/modbus-python"
 if os.path.isdir(MODBUS_SITE) and MODBUS_SITE not in sys.path:
     sys.path.insert(0, MODBUS_SITE)
 
-VERSION = "0.1.27"
+VERSION = "0.1.28"
 
 if "--version" in sys.argv[1:]:
     print(f"modbus-read {VERSION}")
@@ -31,6 +31,12 @@ READ_METHODS = {
     "input": ("read_input_registers", "registers", 0x04),
     "coil": ("read_coils", "bits", 0x01),
     "discrete": ("read_discrete_inputs", "bits", 0x02),
+}
+MAX_READ_COUNTS = {
+    "holding": 125,
+    "input": 125,
+    "coil": 2000,
+    "discrete": 2000,
 }
 
 ModbusSerialClient: Any | None = None
@@ -90,7 +96,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Modbus data area to read (default: holding)",
     )
     parser.add_argument("--address", type=int, required=True, help="Register/coil address from the device manual")
-    parser.add_argument("--count", type=int, default=1, help="Number of registers/coils to read")
+    parser.add_argument(
+        "--count",
+        type=int,
+        default=1,
+        help="Values to read (maximum: 125 registers or 2000 bits per request)",
+    )
     parser.add_argument(
         "--address-base",
         choices=("zero", "one", "modicon"),
@@ -128,17 +139,45 @@ def normalize_address(kind: str, address: int, base: str) -> int:
 
 
 def normalize_modicon_address(kind: str, address: int) -> int:
-    prefixes = {
-        "coil": 1,
-        "discrete": 10001,
-        "input": 30001,
-        "holding": 40001,
+    ranges = {
+        "coil": (1, 9999),
+        "discrete": (10001, 19999),
+        "input": (30001, 39999),
+        "holding": (40001, 49999),
     }
-    prefix = prefixes[kind]
 
-    if address >= prefix:
-        return address - prefix
-    return address - 1
+    # Short references (1, 2, 3...) are one-based offsets within the selected
+    # data area. Five-digit references encode the area and must agree with
+    # --type; silently reading a different area is unsafe for diagnostics.
+    if address < 10000:
+        return address - 1
+
+    lower, upper = ranges[kind]
+    if not lower <= address <= upper:
+        expected = f"{lower}-{upper}"
+        raise ValueError(
+            f"Modicon reference {address} does not belong to --type {kind}; "
+            f"expected {expected}, or use a short one-based offset"
+        )
+    return address - lower
+
+
+def validate_address_span(address: int, count: int) -> None:
+    if address + count > 0x10000:
+        raise ValueError(
+            f"read span {address}-{address + count - 1} exceeds the 16-bit Modbus address range"
+        )
+
+
+def validate_read_count(kind: str, count: int) -> None:
+    if count <= 0:
+        raise ValueError("count must be greater than zero")
+    maximum = MAX_READ_COUNTS[kind]
+    if count > maximum:
+        unit = "registers" if kind in {"holding", "input"} else "bits"
+        raise ValueError(
+            f"{kind} reads support at most {maximum} {unit} per Modbus request; got {count}"
+        )
 
 
 def make_client(args: argparse.Namespace) -> tuple[Any, str]:
@@ -243,15 +282,15 @@ def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
 
-    if args.count <= 0:
-        parser.error("--count must be greater than zero")
     if args.unit < 0 or args.unit > 247:
         parser.error("--unit must be between 0 and 247")
 
     method_name, attr_name, function_code = READ_METHODS[args.type]
 
     try:
+        validate_read_count(args.type, args.count)
         address_zero_based = normalize_address(args.type, args.address, args.address_base)
+        validate_address_span(address_zero_based, args.count)
     except ValueError as exc:
         parser.error(str(exc))
 

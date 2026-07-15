@@ -13,12 +13,16 @@ The repository has been converted into a first MVP fork:
 - Session picker: `codex-session-picker`
 - Supported architectures: `amd64`, `aarch64`
 
-## Remaining Maintainer Work
+## Release Status
 
 - GitHub repository URL is set to
   `https://github.com/jgassens/codex-terminal-pro`.
-- Pin `ghcr.io/home-assistant/base:latest` to a specific current base image tag
-  when ready for release hardening.
+- The Home Assistant base image, Home Assistant CLI, GitHub CLI, and CI actions
+  are version/digest pinned and checksum verified where downloaded directly.
+- Automated validation covers both `amd64` and `aarch64` image builds in CI.
+
+## Remaining Hardware Validation
+
 - Verify device-code login on an actual Home Assistant add-on install.
 - Verify image upload and ttyd ingress through Home Assistant, not just Docker.
 - Add API-key auth only if a safe Home Assistant secret path is designed.

@@ -1,0 +1,71 @@
+#!/usr/bin/env python3
+"""Install/sanitize Codex Terminal Pro TUI defaults under the config lock."""
+
+from __future__ import annotations
+
+import argparse
+import re
+import sys
+from pathlib import Path
+
+from codex_config_utils import locked_config, read_config, validate_toml, write_atomic_validated
+
+
+UNSUPPORTED = {"auto-review", "permissions", "approval-mode"}
+DEFAULT_ITEMS = [
+    "run-state",
+    "model-with-reasoning",
+    "fast-mode",
+    "context-remaining",
+    "five-hour-limit",
+    "weekly-limit",
+]
+DEFAULT_BLOCK = """
+
+# Codex Terminal Pro default TUI. Edit or remove this block to customize.
+[tui]
+theme = "catppuccin-mocha"
+status_line_use_colors = true
+status_line = ["run-state", "model-with-reasoning", "fast-mode", "context-remaining", "five-hour-limit", "weekly-limit"]
+"""
+
+
+def sanitize_status_line(text: str) -> str:
+    def sanitize(match: re.Match[str]) -> str:
+        items = re.findall(r'"([^"]+)"', match.group("body"))
+        if not items:
+            return match.group(0)
+        kept = [item for item in items if item not in UNSUPPORTED] or DEFAULT_ITEMS
+        if kept == items:
+            return match.group(0)
+        rendered = ", ".join(f'"{item}"' for item in kept)
+        return f'{match.group("prefix")}[{rendered}]{match.group("suffix")}'
+
+    return re.sub(
+        r'(?m)^(?P<prefix>[ \t]*status_line[ \t]*=[ \t]*)\[(?P<body>[^\n\]]*)\](?P<suffix>[ \t]*(?:#.*)?)$',
+        sanitize,
+        text,
+    )
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("config", type=Path)
+    args = parser.parse_args()
+    try:
+        with locked_config(args.config):
+            original = read_config(args.config)
+            validate_toml(original)
+            updated = sanitize_status_line(original)
+            if not re.search(r'(?m)^[ \t]*(?:\[tui\]|tui\.)', updated):
+                updated = updated.rstrip("\r\n") + DEFAULT_BLOCK
+            if updated != original:
+                write_atomic_validated(args.config, updated)
+        return 0
+    except Exception as exc:
+        print(f"Codex TUI config was left unchanged: {exc}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

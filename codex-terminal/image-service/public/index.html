@@ -994,7 +994,8 @@
         <div id="manual-copy-message">Copy this text manually.</div>
         <textarea id="manual-copy-text" readonly></textarea>
         <div class="modal-buttons">
-            <button id="manual-copy-dismiss" class="modal-btn modal-btn-secondary">Dismiss</button>
+            <button type="button" id="manual-copy-button" class="modal-btn modal-btn-primary">Copy selection</button>
+            <button type="button" id="manual-copy-dismiss" class="modal-btn modal-btn-secondary">Dismiss</button>
         </div>
     </div>
 
@@ -1039,11 +1040,12 @@
         let ttydPort = 7681;
         let uploadDir = '/data/images';
         let terminalMode = 'codex';
-        let lastCopiedTerminalSelection = '';
-        let lastCopiedTerminalSelectionAt = 0;
         let lastImagePasteSignature = '';
         let lastImagePasteAt = 0;
         let touchSelectionMode = false;
+        const OSC52_CLIPBOARD_ARM_MS = 2500;
+        const OSC52_MAX_BYTES = 256 * 1024;
+        const OSC52_MAX_ENCODED_LENGTH = Math.ceil(OSC52_MAX_BYTES / 3) * 4;
         const handledImagePasteEvents = new WeakSet();
         const rootElement = document.documentElement;
         let viewportSyncTimer = null;
@@ -1203,8 +1205,8 @@
             iframe.addEventListener('load', () => {
                 scheduleTerminalViewportSync(false);
             });
-            iframe.src = ingressPath('terminal/?embedded=1');
             installTerminalSelectionCopy();
+            iframe.src = ingressPath('terminal/?embedded=1');
         }
 
         const status = document.getElementById('status');
@@ -1225,6 +1227,7 @@
         const manualCopyPanel = document.getElementById('manual-copy-panel');
         const manualCopyText = document.getElementById('manual-copy-text');
         const manualCopyMessage = document.getElementById('manual-copy-message');
+        const manualCopyButton = document.getElementById('manual-copy-button');
         const manualCopyDismiss = document.getElementById('manual-copy-dismiss');
         const manualPastePanel = document.getElementById('manual-paste-panel');
         const manualPasteText = document.getElementById('manual-paste-text');
@@ -1255,11 +1258,31 @@
                 statusTimer = null;
             }
 
+            // A copyable image path is a special status state. Every ordinary
+            // status transition must revoke that handler so later copy/error
+            // messages cannot copy a stale path.
+            status.onclick = null;
+            status.style.cursor = '';
+            status.style.userSelect = '';
             status.textContent = message;
             status.className = type;
             if (message && !persistent) {
                 statusTimer = setTimeout(() => setStatus(''), 5000);
             }
+        }
+
+        function setCopyableImageStatus(filePath) {
+            setStatus(`📋 ${filePath} (click to copy)`, 'success', true);
+            status.style.cursor = 'pointer';
+            status.style.userSelect = 'text';
+            status.onclick = async () => {
+                const copied = await copyToClipboard(filePath);
+                if (copied) {
+                    setStatus('✓ Copied!', 'success', false);
+                } else {
+                    showManualCopy(filePath, 'Tap and hold the path to Copy, then paste it into the terminal.');
+                }
+            };
         }
 
         function changeDeskElement(tag, className = '', text = '') {
@@ -2366,7 +2389,14 @@
                 }
 
                 if (result.timedOut) {
-                    setStatus('Shell command is still running', 'success', true);
+                    showShellOutput(result.command || command, result);
+                    setStatus(
+                        result.terminated
+                            ? 'Shell command timed out and was stopped'
+                            : 'Shell command timed out; shell state is uncertain',
+                        'error',
+                        !result.terminated
+                    );
                     return true;
                 }
 
@@ -2703,17 +2733,123 @@
             });
         });
 
+        function createTerminalClipboardState() {
+            return {
+                sequence: 0,
+                arm: null,
+                attempt: null
+            };
+        }
+
+        function armTerminalClipboardInteraction(state, source, now = Date.now()) {
+            state.sequence += 1;
+            const interactionId = state.sequence;
+            state.arm = {
+                interactionId,
+                source,
+                expiresAt: now + OSC52_CLIPBOARD_ARM_MS
+            };
+            // A new physical gesture supersedes pending status from the old one.
+            state.attempt = null;
+            return interactionId;
+        }
+
+        function disarmTerminalClipboardInteraction(state, interactionId) {
+            if (!interactionId || state.arm?.interactionId === interactionId) {
+                state.arm = null;
+            }
+        }
+
+        function beginTerminalCopyAttempt(state, interactionId, text, now = Date.now()) {
+            if (!state || !interactionId || typeof text !== 'string' || text.length === 0) {
+                return false;
+            }
+
+            if (state.attempt?.interactionId === interactionId) {
+                return false;
+            }
+
+            state.attempt = { interactionId, text, at: now };
+            return true;
+        }
+
+        function consumeArmedOsc52(state, text, now = Date.now()) {
+            const arm = state?.arm;
+            if (!arm || arm.expiresAt < now || typeof text !== 'string' || text.length === 0) {
+                if (arm?.expiresAt < now) {
+                    state.arm = null;
+                }
+                return { accepted: false, duplicate: false, interactionId: null };
+            }
+
+            state.arm = null;
+            const attempt = state.attempt?.interactionId === arm.interactionId
+                ? state.attempt
+                : null;
+            if (attempt) {
+                const matchesAttempt = attempt.text === text;
+                return {
+                    accepted: matchesAttempt,
+                    duplicate: matchesAttempt,
+                    interactionId: arm.interactionId
+                };
+            }
+
+            return { accepted: true, duplicate: false, interactionId: arm.interactionId };
+        }
+
+        function attemptTerminalSelectionCopy(state, interactionId, selectedText, clipboardDocument) {
+            if (!beginTerminalCopyAttempt(state, interactionId, selectedText)) {
+                return false;
+            }
+
+            let copyResult;
+            try {
+                copyResult = copyToClipboardFromGesture(selectedText, clipboardDocument);
+            } catch (err) {
+                console.log('Terminal selection copy failed:', err);
+                copyResult = false;
+            }
+
+            Promise.resolve(copyResult)
+                .then((copied) => {
+                    if (state.attempt?.interactionId !== interactionId) {
+                        return;
+                    }
+                    updateTerminalSelectionCopyStatus(Boolean(copied), selectedText);
+                })
+                .catch((err) => {
+                    console.log('Terminal selection copy failed:', err);
+                    if (state.attempt?.interactionId === interactionId) {
+                        updateTerminalSelectionCopyStatus(false, selectedText);
+                    }
+                });
+            return true;
+        }
+
         function installTerminalSelectionCopy() {
             const iframe = document.getElementById('terminal-frame');
+            if (!iframe || iframe.__codexTerminalSelectionLoadHandlerInstalled) {
+                return;
+            }
+
+            iframe.__codexTerminalSelectionLoadHandlerInstalled = true;
+            let activeCleanup = null;
+            let setupTimer = null;
 
             iframe.addEventListener('load', () => {
-                setTimeout(() => {
+                if (setupTimer) {
+                    clearTimeout(setupTimer);
+                    setupTimer = null;
+                }
+                activeCleanup?.();
+                activeCleanup = null;
+
+                const expectedWindow = iframe.contentWindow;
+                setupTimer = setTimeout(() => {
+                    setupTimer = null;
                     let iframeWindow;
                     let iframeDocument;
-                    let lastKnownTerminalSelection = '';
-                    let dragStartCell = null;
-                    let touchSelectStartCell = null;
-                    let touchSelectCurrentCell = null;
 
                     try {
                         iframeWindow = iframe.contentWindow;
@@ -2723,215 +2859,284 @@
                         return;
                     }
 
-                    if (!iframeWindow || !iframeDocument) {
+                    if (!iframeWindow || !iframeDocument || iframeWindow !== expectedWindow) {
                         return;
                     }
 
-                    if (iframeWindow.__codexTerminalSelectionCopyInstalled) {
-                        return;
-                    }
-                    iframeWindow.__codexTerminalSelectionCopyInstalled = true;
-
-                    const rememberTerminalSelection = () => {
-                        const selectedText = getTerminalSelection(iframeWindow);
-                        if (selectedText.trim()) {
-                            lastKnownTerminalSelection = selectedText;
-                        }
-                    };
-
-                    const copyTerminalSelection = () => {
-                        if (touchSelectionMode) {
-                            return;
-                        }
-
-                        rememberTerminalSelection();
-                        const selectedText = getTerminalSelection(iframeWindow) || lastKnownTerminalSelection;
-
-                        if (!selectedText.trim()) {
-                            copyTerminalSelectionWithTtyd(iframeDocument);
-                            return;
-                        }
-
-                        const now = Date.now();
-                        if (
-                            selectedText === lastCopiedTerminalSelection &&
-                            now - lastCopiedTerminalSelectionAt < 1000
-                        ) {
-                            return;
-                        }
-
-                        const copyResult = copyToClipboardFromGesture(selectedText, iframeDocument);
-                        if (copyResult && typeof copyResult.then === 'function') {
-                            copyResult.then((copied) => {
-                                updateTerminalSelectionCopyStatus(copied, selectedText);
-                            });
-                        } else {
-                            updateTerminalSelectionCopyStatus(Boolean(copyResult), selectedText);
-                        }
-                    };
-
-                    const rememberDragStart = (event) => {
-                        if (event.button !== 0) {
-                            return;
-                        }
-                        dragStartCell = getTerminalCellFromMouseEvent(iframeWindow, event);
-                    };
-
-                    const copyDraggedTerminalText = (event) => {
-                        rememberTerminalSelection();
-                        const dragEndCell = getTerminalCellFromMouseEvent(iframeWindow, event);
-                        const draggedText = getTerminalTextFromDrag(iframeWindow, dragStartCell, dragEndCell);
-                        dragStartCell = null;
-
-                        if (draggedText.trim()) {
-                            const copyResult = copyToClipboardFromGesture(draggedText, iframeDocument);
-                            if (copyResult && typeof copyResult.then === 'function') {
-                                copyResult.then((copied) => {
-                                    updateTerminalSelectionCopyStatus(copied, draggedText);
-                                });
-                            } else {
-                                updateTerminalSelectionCopyStatus(Boolean(copyResult), draggedText);
-                            }
-                            return;
-                        }
-
-                        copyTerminalSelection();
-                    };
-
-                    const rememberTouchSelectionStart = (event) => {
-                        if (!touchSelectionMode || event.touches.length !== 1) {
-                            return;
-                        }
-
-                        touchSelectStartCell = getTerminalCellFromTouchEvent(iframeWindow, event);
-                        touchSelectCurrentCell = touchSelectStartCell;
-
-                        if (!touchSelectStartCell) {
-                            return;
-                        }
-
-                        event.preventDefault();
-                        event.stopPropagation();
-                        selectTerminalRange(iframeWindow, touchSelectStartCell, touchSelectCurrentCell);
-                        setStatus('Drag to select terminal text', 'success', false);
-                    };
-
-                    const updateTouchSelection = (event) => {
-                        if (!touchSelectionMode || !touchSelectStartCell || event.touches.length !== 1) {
-                            return;
-                        }
-
-                        const currentCell = getTerminalCellFromTouchEvent(iframeWindow, event);
-                        if (!currentCell) {
-                            return;
-                        }
-
-                        touchSelectCurrentCell = currentCell;
-                        event.preventDefault();
-                        event.stopPropagation();
-                        selectTerminalRange(iframeWindow, touchSelectStartCell, touchSelectCurrentCell);
-                    };
-
-                    const finishTouchSelection = (event) => {
-                        if (!touchSelectionMode || !touchSelectStartCell) {
-                            return;
-                        }
-
-                        const startCell = touchSelectStartCell;
-                        const endCell = getTerminalCellFromTouchEvent(iframeWindow, event) || touchSelectCurrentCell;
-                        event.preventDefault();
-                        event.stopPropagation();
-
-                        const selectedText = getTerminalTextFromDrag(iframeWindow, startCell, endCell);
-                        selectTerminalRange(iframeWindow, startCell, endCell);
-                        touchSelectStartCell = null;
-                        touchSelectCurrentCell = null;
-                        setTouchSelectionMode(false);
-
-                        if (!selectedText.trim()) {
-                            setStatus('No terminal text selected', 'error', false);
-                            return;
-                        }
-
-                        const copyResult = copyToClipboardFromGesture(selectedText, iframeDocument);
-                        if (copyResult && typeof copyResult.then === 'function') {
-                            copyResult.then((copied) => {
-                                updateTerminalSelectionCopyStatus(copied, selectedText, {
-                                    selectionReadyMessage: 'Text selected. Use the selection handles to Copy if needed.'
-                                });
-                            });
-                        } else {
-                            updateTerminalSelectionCopyStatus(Boolean(copyResult), selectedText, {
-                                selectionReadyMessage: 'Text selected. Use the selection handles to Copy if needed.'
-                            });
-                        }
-                    };
-
-                    iframeDocument.addEventListener('selectionchange', rememberTerminalSelection, true);
-                    iframeWindow.addEventListener('keydown', trackTerminalPromptKeydown, { capture: true });
-                    iframeWindow.addEventListener('beforeinput', trackTerminalPromptBeforeInput, { capture: true });
-                    iframeWindow.addEventListener('paste', trackTerminalPromptPaste, { capture: true });
-                    iframeDocument.addEventListener('keydown', trackTerminalPromptKeydown, { capture: true });
-                    iframeDocument.addEventListener('beforeinput', trackTerminalPromptBeforeInput, { capture: true });
-                    iframeDocument.addEventListener('paste', trackTerminalPromptPaste, { capture: true });
-                    iframeDocument.addEventListener('mousedown', rememberDragStart, true);
-                    iframeDocument.addEventListener('mouseup', copyDraggedTerminalText, true);
-                    iframeDocument.addEventListener('touchstart', rememberTouchSelectionStart, { capture: true, passive: false });
-                    iframeDocument.addEventListener('touchmove', updateTouchSelection, { capture: true, passive: false });
-                    iframeDocument.addEventListener('touchcancel', finishTouchSelection, { capture: true, passive: false });
-                    iframeDocument.addEventListener('touchend', copyTerminalSelection, true);
-                    iframeDocument.addEventListener('touchend', finishTouchSelection, { capture: true, passive: false });
-                    iframeDocument.addEventListener('keyup', (event) => {
-                        if (event.key === 'Shift' || event.key.startsWith('Arrow') || event.key === 'PageUp' || event.key === 'PageDown') {
-                            rememberTerminalSelection();
-                            copyTerminalSelection();
-                        }
-                    }, true);
-
-                    installMobileTerminalScroll(iframeWindow, iframeDocument);
-
-                    waitForTerminalApi(iframeWindow, () => {
-                        try {
-                            iframeWindow.term.onSelectionChange(rememberTerminalSelection);
-                        } catch (err) {
-                            console.log('Cannot attach xterm selection tracker:', err);
-                        }
-
-                        try {
-                            if (
-                                typeof iframeWindow.term.attachCustomKeyEventHandler === 'function' &&
-                                !iframeWindow.__codexShellDispatchKeyHandlerInstalled
-                            ) {
-                                iframeWindow.__codexShellDispatchKeyHandlerInstalled = true;
-                                iframeWindow.term.attachCustomKeyEventHandler((event) => {
-                                    if (!claimTerminalEvent(event)) {
-                                        return true;
-                                    }
-
-                                    return handleTerminalPromptKeydown(event, 'xterm-keydown');
-                                });
-                            }
-                        } catch (err) {
-                            console.log('Cannot attach xterm shell dispatch key handler:', err);
-                        }
-
-                        installOsc52ClipboardBridge(iframeWindow, iframeDocument);
-                    });
-                }, 500);
+                    activeCleanup = attachTerminalSelectionCopy(iframeWindow, iframeDocument);
+                }, 0);
             });
         }
 
-        function installMobileTerminalScroll(iframeWindow, iframeDocument) {
-            if (!iframeWindow || !iframeDocument || iframeWindow.__codexMobileScrollInstalled) {
-                return;
+        function attachTerminalSelectionCopy(iframeWindow, iframeDocument) {
+            if (iframeWindow.__codexTerminalSelectionCopyCleanup) {
+                iframeWindow.__codexTerminalSelectionCopyCleanup();
             }
 
-            iframeWindow.__codexMobileScrollInstalled = true;
+            const clipboardState = createTerminalClipboardState();
+            const cleanups = [];
+            let cleanedUp = false;
+            let dragStartCell = null;
+            let dragInteractionId = null;
+            let dragInitialSelection = '';
+            let touchSelectStartCell = null;
+            let touchSelectCurrentCell = null;
+            let touchInteractionId = null;
+
+            const listen = (target, type, handler, options) => {
+                target.addEventListener(type, handler, options);
+                cleanups.push(() => target.removeEventListener(type, handler, options));
+            };
+
+            const rememberDragStart = (event) => {
+                if (event.button !== 0 || touchSelectionMode) {
+                    return;
+                }
+
+                dragStartCell = getTerminalCellFromMouseEvent(iframeWindow, event);
+                dragInitialSelection = getTerminalSelection(iframeWindow);
+                dragInteractionId = dragStartCell
+                    ? armTerminalClipboardInteraction(clipboardState, 'pointer')
+                    : null;
+            };
+
+            const cancelDraggedTerminalText = () => {
+                disarmTerminalClipboardInteraction(clipboardState, dragInteractionId);
+                dragStartCell = null;
+                dragInteractionId = null;
+                dragInitialSelection = '';
+            };
+
+            const finishDraggedTerminalText = (event) => {
+                if (event.button !== 0 || touchSelectionMode) {
+                    return;
+                }
+
+                const startCell = dragStartCell;
+                const interactionId = dragInteractionId;
+                const endCell = getTerminalCellFromMouseEvent(iframeWindow, event);
+                const initialSelection = dragInitialSelection;
+                dragStartCell = null;
+                dragInteractionId = null;
+                dragInitialSelection = '';
+
+                if (!interactionId) {
+                    disarmTerminalClipboardInteraction(clipboardState, interactionId);
+                    return;
+                }
+
+                // xterm creates word/line selections for double/triple clicks
+                // even though the pointer begins and ends in the same cell.
+                // Only accept a same-cell selection when it changed during this
+                // gesture, so an old selection cannot be copied accidentally.
+                const selectedText = terminalCellsDiffer(startCell, endCell)
+                    ? getTerminalTextFromDrag(iframeWindow, startCell, endCell)
+                    : newSameCellTerminalSelection(
+                        initialSelection,
+                        getTerminalSelection(iframeWindow)
+                    );
+                if (selectedText.length === 0) {
+                    disarmTerminalClipboardInteraction(clipboardState, interactionId);
+                    return;
+                }
+
+                attemptTerminalSelectionCopy(clipboardState, interactionId, selectedText, iframeDocument);
+            };
+
+            const rememberTouchSelectionStart = (event) => {
+                if (!touchSelectionMode || event.touches.length !== 1) {
+                    return;
+                }
+
+                touchSelectStartCell = getTerminalCellFromTouchEvent(iframeWindow, event);
+                touchSelectCurrentCell = touchSelectStartCell;
+                touchInteractionId = touchSelectStartCell
+                    ? armTerminalClipboardInteraction(clipboardState, 'touch')
+                    : null;
+
+                if (!touchSelectStartCell) {
+                    return;
+                }
+
+                event.preventDefault();
+                event.stopPropagation();
+                selectTerminalRange(iframeWindow, touchSelectStartCell, touchSelectCurrentCell);
+                setStatus('Drag to select terminal text', '', true);
+            };
+
+            const updateTouchSelection = (event) => {
+                if (!touchSelectionMode || !touchSelectStartCell || event.touches.length !== 1) {
+                    return;
+                }
+
+                const currentCell = getTerminalCellFromTouchEvent(iframeWindow, event);
+                if (!currentCell) {
+                    return;
+                }
+
+                touchSelectCurrentCell = currentCell;
+                event.preventDefault();
+                event.stopPropagation();
+                selectTerminalRange(iframeWindow, touchSelectStartCell, touchSelectCurrentCell);
+            };
+
+            const clearTouchSelection = () => {
+                touchSelectStartCell = null;
+                touchSelectCurrentCell = null;
+                touchInteractionId = null;
+            };
+
+            const cancelTouchSelection = (event) => {
+                if (!touchSelectStartCell) {
+                    return;
+                }
+                event.preventDefault();
+                event.stopPropagation();
+                disarmTerminalClipboardInteraction(clipboardState, touchInteractionId);
+                clearTouchSelection();
+                clearTerminalSelection(iframeWindow);
+                setTouchSelectionMode(false);
+                setStatus('Terminal selection canceled', 'error', false);
+            };
+
+            const finishTouchSelection = (event) => {
+                if (!touchSelectionMode || !touchSelectStartCell) {
+                    return;
+                }
+
+                const startCell = touchSelectStartCell;
+                const endCell = getTerminalCellFromTouchEvent(iframeWindow, event) || touchSelectCurrentCell;
+                const interactionId = touchInteractionId;
+                event.preventDefault();
+                event.stopPropagation();
+
+                const selectedText = terminalCellsDiffer(startCell, endCell)
+                    ? getTerminalTextFromDrag(iframeWindow, startCell, endCell)
+                    : '';
+                clearTouchSelection();
+                setTouchSelectionMode(false);
+
+                if (!interactionId || selectedText.length === 0) {
+                    disarmTerminalClipboardInteraction(clipboardState, interactionId);
+                    clearTerminalSelection(iframeWindow);
+                    setStatus('No terminal text selected', 'error', false);
+                    return;
+                }
+
+                attemptTerminalSelectionCopy(clipboardState, interactionId, selectedText, iframeDocument);
+            };
+
+            const copyKeyboardSelection = (event) => {
+                const selectionKeys = new Set([
+                    'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown',
+                    'PageUp', 'PageDown', 'Home', 'End'
+                ]);
+                if (!event.shiftKey || !selectionKeys.has(event.key)) {
+                    return;
+                }
+
+                const selectedText = getTerminalSelection(iframeWindow);
+                if (selectedText.length === 0) {
+                    return;
+                }
+
+                const interactionId = armTerminalClipboardInteraction(clipboardState, 'keyboard');
+                attemptTerminalSelectionCopy(clipboardState, interactionId, selectedText, iframeDocument);
+            };
+
+            listen(iframeWindow, 'keydown', trackTerminalPromptKeydown, { capture: true });
+            listen(iframeWindow, 'beforeinput', trackTerminalPromptBeforeInput, { capture: true });
+            listen(iframeWindow, 'paste', trackTerminalPromptPaste, { capture: true });
+            listen(iframeDocument, 'keydown', trackTerminalPromptKeydown, { capture: true });
+            listen(iframeDocument, 'beforeinput', trackTerminalPromptBeforeInput, { capture: true });
+            listen(iframeDocument, 'paste', trackTerminalPromptPaste, { capture: true });
+            listen(iframeDocument, 'mousedown', rememberDragStart, true);
+            listen(iframeDocument, 'mouseup', finishDraggedTerminalText, true);
+            listen(iframeDocument, 'mouseleave', cancelDraggedTerminalText, true);
+            listen(iframeDocument, 'touchstart', rememberTouchSelectionStart, { capture: true, passive: false });
+            listen(iframeDocument, 'touchmove', updateTouchSelection, { capture: true, passive: false });
+            listen(iframeDocument, 'touchcancel', cancelTouchSelection, { capture: true, passive: false });
+            listen(iframeDocument, 'touchend', finishTouchSelection, { capture: true, passive: false });
+            listen(iframeDocument, 'keyup', copyKeyboardSelection, true);
+
+            const scrollCleanup = installMobileTerminalScroll(iframeWindow, iframeDocument);
+            if (typeof scrollCleanup === 'function') {
+                cleanups.push(scrollCleanup);
+            }
+
+            const cancelTerminalApiWait = waitForTerminalApi(iframeWindow, () => {
+                try {
+                    if (
+                        typeof iframeWindow.term.attachCustomKeyEventHandler === 'function' &&
+                        !iframeWindow.__codexShellDispatchKeyHandlerInstalled
+                    ) {
+                        iframeWindow.__codexShellDispatchKeyHandlerInstalled = true;
+                        iframeWindow.term.attachCustomKeyEventHandler((event) => {
+                            if (!claimTerminalEvent(event)) {
+                                return true;
+                            }
+
+                            return handleTerminalPromptKeydown(event, 'xterm-keydown');
+                        });
+                    }
+                } catch (err) {
+                    console.log('Cannot attach xterm shell dispatch key handler:', err);
+                }
+            });
+            cleanups.push(cancelTerminalApiWait);
+
+            const cancelOsc52Wait = waitForTerminalApi(
+                iframeWindow,
+                () => {
+                    const osc52Disposable = installOsc52ClipboardBridge(iframeWindow, clipboardState);
+                    if (osc52Disposable?.dispose) {
+                        cleanups.push(() => osc52Disposable.dispose());
+                    }
+                },
+                (term) => Boolean(term?.parser && typeof term.parser.registerOscHandler === 'function')
+            );
+            cleanups.push(cancelOsc52Wait);
+
+            const cleanup = () => {
+                if (cleanedUp) {
+                    return;
+                }
+                cleanedUp = true;
+                clipboardState.arm = null;
+                clipboardState.attempt = null;
+                while (cleanups.length > 0) {
+                    try {
+                        cleanups.pop()();
+                    } catch (err) {
+                        console.log('Cannot detach terminal selection handler:', err);
+                    }
+                }
+                if (iframeWindow.__codexTerminalSelectionCopyCleanup === cleanup) {
+                    delete iframeWindow.__codexTerminalSelectionCopyCleanup;
+                }
+            };
+
+            iframeWindow.__codexTerminalSelectionCopyCleanup = cleanup;
+            listen(iframeWindow, 'pagehide', cleanup, { once: true });
+            return cleanup;
+        }
+
+        function installMobileTerminalScroll(iframeWindow, iframeDocument) {
+            if (!iframeWindow || !iframeDocument) {
+                return null;
+            }
+
+            iframeWindow.__codexMobileScrollCleanup?.();
             let touchStartY = null;
             let scrollRequestPending = false;
             let lastScrollAt = 0;
             const scrollThreshold = 54;
             const scrollThrottleMs = 140;
+            const listeners = [];
+            const listen = (type, handler, options) => {
+                iframeDocument.addEventListener(type, handler, options);
+                listeners.push(() => iframeDocument.removeEventListener(type, handler, options));
+            };
 
             const sendTouchScroll = (action) => {
                 const now = Date.now();
@@ -2956,16 +3161,16 @@
                     });
             };
 
-            iframeDocument.addEventListener('touchstart', (event) => {
+            const handleTouchStart = (event) => {
                 if (!rootElement.classList.contains('touch-ui') || touchSelectionMode || event.touches.length !== 1) {
                     touchStartY = null;
                     return;
                 }
 
                 touchStartY = event.touches[0].clientY;
-            }, { capture: true, passive: true });
+            };
 
-            iframeDocument.addEventListener('touchmove', (event) => {
+            const handleTouchMove = (event) => {
                 if (!rootElement.classList.contains('touch-ui') || touchSelectionMode || event.touches.length !== 1 || touchStartY === null) {
                     return;
                 }
@@ -2980,14 +3185,28 @@
                 event.stopPropagation();
                 sendTouchScroll(deltaY > 0 ? 'scroll-up' : 'scroll-down');
                 touchStartY = currentY;
-            }, { capture: true, passive: false });
+            };
 
-            iframeDocument.addEventListener('touchend', () => {
+            const clearTouchStart = () => {
                 touchStartY = null;
-            }, true);
-            iframeDocument.addEventListener('touchcancel', () => {
+            };
+
+            listen('touchstart', handleTouchStart, { capture: true, passive: true });
+            listen('touchmove', handleTouchMove, { capture: true, passive: false });
+            listen('touchend', clearTouchStart, true);
+            listen('touchcancel', clearTouchStart, true);
+
+            const cleanup = () => {
+                while (listeners.length > 0) {
+                    listeners.pop()();
+                }
                 touchStartY = null;
-            }, true);
+                if (iframeWindow.__codexMobileScrollCleanup === cleanup) {
+                    delete iframeWindow.__codexMobileScrollCleanup;
+                }
+            };
+            iframeWindow.__codexMobileScrollCleanup = cleanup;
+            return cleanup;
         }
 
         function setTouchSelectionMode(enabled) {
@@ -3008,16 +3227,7 @@
             setTouchSelectionMode(!touchSelectionMode);
         });
 
-        function copyTerminalSelectionWithTtyd(iframeDocument) {
-            try {
-                return iframeDocument.execCommand('copy');
-            } catch (err) {
-                console.log('Cannot trigger ttyd terminal copy:', err);
-                return false;
-            }
-        }
-
-        function installOsc52ClipboardBridge(iframeWindow, iframeDocument) {
+        function installOsc52ClipboardBridge(iframeWindow, clipboardState) {
             const term = iframeWindow.term;
             if (
                 !term ||
@@ -3025,85 +3235,145 @@
                 typeof term.parser.registerOscHandler !== 'function' ||
                 iframeWindow.__codexOsc52ClipboardInstalled
             ) {
-                return;
+                return null;
             }
 
-            iframeWindow.__codexOsc52ClipboardInstalled = true;
-
-            term.parser.registerOscHandler(52, (data) => {
+            const registration = term.parser.registerOscHandler(52, (data) => {
                 const text = decodeOsc52ClipboardData(data);
-                if (!text) {
-                    return false;
+                if (text.length === 0) {
+                    // Swallow malformed, querying, or oversized OSC 52 packets
+                    // so an older xterm handler cannot process them behind us.
+                    return true;
                 }
 
-                const copyResult = copyToClipboardFromGesture(text, iframeDocument);
-                if (copyResult && typeof copyResult.then === 'function') {
-                    copyResult.then((copied) => {
-                        updateTerminalSelectionCopyStatus(copied, text);
-                    });
-                } else {
-                    updateTerminalSelectionCopyStatus(Boolean(copyResult), text);
+                const decision = consumeArmedOsc52(clipboardState, text);
+                if (!decision.accepted) {
+                    return true;
                 }
 
+                // The direct gesture path already made the only automatic copy
+                // attempt. The matching OSC 52 packet is just tmux echoing that
+                // same selection, so consuming it must not write a second time.
+                if (decision.duplicate) {
+                    return true;
+                }
+
+                // Parser callbacks do not carry browser user activation. Stage
+                // the bounded, recently armed selection behind a real Copy click.
+                showManualCopy(text, 'Terminal selection is ready. Tap Copy selection to place it on the clipboard.');
+                setStatus('Selection ready — tap Copy selection', '', true);
                 return true;
             });
+            iframeWindow.__codexOsc52ClipboardInstalled = true;
+
+            return {
+                dispose() {
+                    try {
+                        registration?.dispose?.();
+                    } finally {
+                        iframeWindow.__codexOsc52ClipboardInstalled = false;
+                    }
+                }
+            };
         }
 
         function decodeOsc52ClipboardData(data) {
+            if (typeof data !== 'string') {
+                return '';
+            }
+
             const separator = data.indexOf(';');
             if (separator === -1) {
                 return '';
             }
 
+            const target = data.slice(0, separator);
             const encoded = data.slice(separator + 1);
-            if (!encoded || encoded === '?') {
+            if (
+                (target !== '' && target !== 'c') ||
+                !encoded ||
+                encoded === '?' ||
+                encoded.length > OSC52_MAX_ENCODED_LENGTH ||
+                !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)
+            ) {
                 return '';
             }
 
             try {
                 const binary = atob(encoded);
+                if (binary.length > OSC52_MAX_BYTES) {
+                    return '';
+                }
                 const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
-                return new TextDecoder().decode(bytes).replace(/\u00a0/g, ' ');
+                return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
             } catch (err) {
                 console.log('Cannot decode OSC 52 clipboard data:', err);
                 return '';
             }
         }
 
-        function waitForTerminalApi(iframeWindow, callback, attempt = 0) {
-            if (iframeWindow.term && typeof iframeWindow.term.getSelection === 'function') {
-                callback();
-                return;
-            }
+        function waitForTerminalApi(
+            iframeWindow,
+            callback,
+            isReady = (term) => Boolean(term && typeof term.getSelection === 'function')
+        ) {
+            let cancelled = false;
+            let retryTimer = null;
+            let attempt = 0;
 
-            if (attempt >= 40) {
-                console.log('ttyd terminal API was not available for selection copy');
-                return;
-            }
+            const poll = () => {
+                if (cancelled || iframeWindow.closed) {
+                    return;
+                }
 
-            setTimeout(() => waitForTerminalApi(iframeWindow, callback, attempt + 1), 250);
+                let term = null;
+                try {
+                    term = iframeWindow.term;
+                } catch (err) {
+                    console.log('Cannot inspect ttyd terminal API:', err);
+                }
+
+                if (isReady(term)) {
+                    try {
+                        callback(term);
+                        return;
+                    } catch (err) {
+                        console.log('Cannot initialize ttyd terminal integration:', err);
+                    }
+                }
+
+                const delay = Math.min(1000, 100 + (attempt * 50));
+                attempt += 1;
+                retryTimer = setTimeout(poll, delay);
+            };
+
+            poll();
+            return () => {
+                cancelled = true;
+                if (retryTimer) {
+                    clearTimeout(retryTimer);
+                    retryTimer = null;
+                }
+            };
         }
 
         function getTerminalSelection(iframeWindow) {
-            let selectedText = '';
-
             try {
                 if (iframeWindow.term && typeof iframeWindow.term.getSelection === 'function') {
-                    selectedText = String(iframeWindow.term.getSelection() || '');
+                    return String(iframeWindow.term.getSelection() || '');
                 }
             } catch (err) {
                 console.log('Cannot read xterm selection:', err);
             }
+            return '';
+        }
 
-            if (!selectedText) {
-                try {
-                    selectedText = String(iframeWindow.getSelection()?.toString() || '');
-                } catch (err) {
-                    console.log('Cannot read terminal document selection:', err);
-                }
+        function clearTerminalSelection(iframeWindow) {
+            try {
+                iframeWindow.term?.clearSelection?.();
+            } catch (err) {
+                console.log('Cannot clear xterm selection:', err);
             }
-
-            return selectedText.replace(/\u00a0/g, ' ');
         }
 
         function getTerminalCellFromMouseEvent(iframeWindow, event) {
@@ -3165,6 +3435,14 @@
             return { start, end };
         }
 
+        function terminalCellsDiffer(startCell, endCell) {
+            return Boolean(
+                startCell &&
+                endCell &&
+                (startCell.row !== endCell.row || startCell.col !== endCell.col)
+            );
+        }
+
         function selectTerminalRange(iframeWindow, startCell, endCell) {
             const term = iframeWindow.term;
             const buffer = term?.buffer?.active;
@@ -3186,12 +3464,15 @@
         function getTerminalTextFromDrag(iframeWindow, startCell, endCell) {
             const term = iframeWindow.term;
             const buffer = term?.buffer?.active;
-            if (!buffer || !startCell || !endCell) {
+            if (!buffer || !terminalCellsDiffer(startCell, endCell)) {
                 return '';
             }
 
-            if (startCell.row === endCell.row && Math.abs(startCell.col - endCell.col) < 1) {
-                return '';
+            if (selectTerminalRange(iframeWindow, startCell, endCell)) {
+                const xtermSelection = getTerminalSelection(iframeWindow);
+                if (xtermSelection.length > 0) {
+                    return xtermSelection;
+                }
             }
 
             const { start, end } = orderedTerminalCells(startCell, endCell);
@@ -3204,63 +3485,101 @@
                     continue;
                 }
 
-                const nextLine = row < end.row ? buffer.getLine(viewportY + row + 1) : null;
-                const text = line.translateToString(false).replace(/\u00a0/g, ' ');
-                let selected = '';
-                if (row === start.row && row === end.row) {
-                    selected = text.slice(start.col, end.col + 1);
-                } else if (row === start.row) {
-                    selected = text.slice(start.col);
-                } else if (row === end.row) {
-                    selected = text.slice(0, end.col + 1);
-                } else {
-                    selected = text;
-                }
+                const firstColumn = row === start.row ? start.col : 0;
+                const lastColumnExclusive = row === end.row ? end.col + 1 : term.cols;
+                parts.push(terminalLineTextFromCells(line, firstColumn, lastColumnExclusive));
 
-                const joinsPreviousRow = row > start.row && line.isWrapped;
-                const continuesIntoNextRow = Boolean(nextLine?.isWrapped);
-                if (parts.length > 0 && !joinsPreviousRow) {
-                    parts.push('\n');
+                if (row < end.row) {
+                    const nextLine = buffer.getLine(viewportY + row + 1);
+                    if (!nextLine?.isWrapped) {
+                        parts.push('\n');
+                    }
                 }
-
-                parts.push(continuesIntoNextRow ? selected : selected.trimEnd());
             }
 
-            return parts.join('').trim();
+            return parts.join('');
         }
 
-        function updateTerminalSelectionCopyStatus(copied, selectedText, options = {}) {
-            if (copied) {
-                lastCopiedTerminalSelection = selectedText;
-                lastCopiedTerminalSelectionAt = Date.now();
-                setStatus('Copied terminal selection', 'success', false);
-            } else if (options.selectionReadyMessage) {
-                lastCopiedTerminalSelection = selectedText;
-                lastCopiedTerminalSelectionAt = Date.now();
-                setStatus(options.selectionReadyMessage, 'success', false);
-            } else if (options.showManualFallback) {
-                lastCopiedTerminalSelection = selectedText;
-                lastCopiedTerminalSelectionAt = Date.now();
-                showManualCopy(selectedText, 'Copy failed. Tap and hold to Copy, or use the selected text below.');
-                setStatus('Selection ready for manual copy', 'error', false);
-            } else {
-                lastCopiedTerminalSelection = selectedText;
-                lastCopiedTerminalSelectionAt = Date.now();
-                setStatus('');
+        function terminalLineTextFromCells(line, startColumn, endColumnExclusive) {
+            if (!line || typeof line.getCell !== 'function') {
+                return '';
             }
+
+            const parts = [];
+            const firstColumn = Math.max(0, startColumn);
+            const lastColumn = Math.max(firstColumn, endColumnExclusive);
+            for (let column = firstColumn; column < lastColumn; column += 1) {
+                const cell = line.getCell(column);
+                if (!cell) {
+                    parts.push(' ');
+                    continue;
+                }
+
+                const width = typeof cell.getWidth === 'function' ? cell.getWidth() : 1;
+                if (width === 0) {
+                    continue;
+                }
+
+                const chars = typeof cell.getChars === 'function'
+                    ? String(cell.getChars() || '')
+                    : '';
+                parts.push(chars || ' ');
+            }
+            return parts.join('');
+        }
+
+        function updateTerminalSelectionCopyStatus(copied, selectedText) {
+            if (copied) {
+                setStatus('Copied terminal selection', 'success', false);
+                return;
+            }
+
+            showManualCopy(
+                selectedText,
+                'Automatic copy was blocked. Tap Copy selection, or select the text below and use Copy.'
+            );
+            setStatus('Copy blocked — use Copy selection', 'error', true);
+        }
+
+        function newSameCellTerminalSelection(initialSelection, currentSelection) {
+            const before = String(initialSelection || '');
+            const after = String(currentSelection || '');
+            return after.length > 0 && after !== before ? after : '';
         }
 
         function copyToClipboardFromGesture(text, clipboardDocument = document) {
-            if (navigator.clipboard && navigator.clipboard.writeText) {
-                return navigator.clipboard.writeText(text)
-                    .then(() => true)
-                    .catch((err) => {
-                        console.log('Clipboard API failed:', err);
-                        return fallbackCopyToClipboard(text, clipboardDocument);
-                    });
+            // Safari often exposes navigator.clipboard but rejects it under an
+            // ingress iframe. Try the synchronous, gesture-bound fallback
+            // first; it cannot be recovered after awaiting a rejected promise.
+            if (fallbackCopyToClipboard(text, clipboardDocument)) {
+                return true;
             }
 
-            return fallbackCopyToClipboard(text, clipboardDocument);
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                try {
+                    return Promise.resolve(navigator.clipboard.writeText(text))
+                        .then(() => true)
+                        .catch((err) => {
+                            console.log('Clipboard API failed:', err);
+                            return false;
+                        });
+                } catch (err) {
+                    console.log('Clipboard API failed:', err);
+                    return false;
+                }
+            }
+
+            return false;
+        }
+
+        function copyToClipboardFromExplicitControl(text, clipboardDocument = document) {
+            // execCommand must run synchronously inside this button click. It is
+            // still the most dependable Safari fallback; if unavailable, invoke
+            // the modern API before returning from the same trusted event.
+            if (fallbackCopyToClipboard(text, clipboardDocument)) {
+                return true;
+            }
+            return copyToClipboardFromGesture(text, clipboardDocument);
         }
 
         function isImageFile(file) {
@@ -3375,25 +3694,8 @@
                     const filePath = result.path;
 
                     // Display full path persistently with click-to-copy functionality
-                    setStatus(`📋 ${filePath} (click to select)`, 'success', true);
+                    setCopyableImageStatus(filePath);
                     console.log('Image uploaded:', filePath);
-
-                    // Make status clickable to copy or manually select text.
-                    status.style.cursor = 'pointer';
-                    status.style.userSelect = 'text';
-
-                    status.onclick = async () => {
-                        const copied = await copyToClipboard(filePath);
-                        if (copied) {
-                            const originalText = status.textContent;
-                            setStatus('✓ Copied!', 'success', false);
-                            setTimeout(() => {
-                                setStatus(originalText, 'success', true);
-                            }, 2000);
-                        } else {
-                            showManualCopy(filePath, 'Tap and hold the path to Copy, then paste it into the terminal.');
-                        }
-                    };
 
                     if (insertTextIntoMobileInput(`${filePath} `)) {
                         await copyToClipboard(filePath);
@@ -3494,6 +3796,7 @@
 
         async function handleImageDrop(e) {
             e.preventDefault();
+            e.stopPropagation();
             dragCounter = 0;
             dropZone.classList.remove('active');
 
@@ -3507,7 +3810,6 @@
 
         document.addEventListener('drop', handleImageDrop);
         dropZone.addEventListener('dragover', (e) => e.preventDefault());
-        dropZone.addEventListener('drop', handleImageDrop);
 
         async function insertTextIntoTerminal(text) {
             try {
@@ -3669,39 +3971,46 @@
 
         // iOS-compatible fallback clipboard copy using execCommand.
         function fallbackCopyToClipboard(text, clipboardDocument = document) {
-            const textArea = clipboardDocument.createElement('textarea');
-            textArea.value = text;
-            textArea.readOnly = false;
-            textArea.contentEditable = 'true';
-            textArea.style.position = 'fixed';
-            textArea.style.top = '0';
-            textArea.style.left = '0';
-            textArea.style.width = '1px';
-            textArea.style.height = '1px';
-            textArea.style.opacity = '0';
-            textArea.style.pointerEvents = 'none';
-            clipboardDocument.body.appendChild(textArea);
-
-            const selection = clipboardDocument.getSelection?.();
-            const range = clipboardDocument.createRange?.();
-
-            textArea.focus({ preventScroll: true });
-            if (range && selection) {
-                range.selectNodeContents(textArea);
-                selection.removeAllRanges();
-                selection.addRange(range);
-            }
-            textArea.setSelectionRange(0, text.length);
+            let textArea = null;
+            let selection = null;
 
             try {
-                const copied = clipboardDocument.execCommand('copy');
-                clipboardDocument.body.removeChild(textArea);
-                selection?.removeAllRanges();
-                return copied;
+                if (!clipboardDocument?.body || typeof clipboardDocument.createElement !== 'function') {
+                    return false;
+                }
+
+                textArea = clipboardDocument.createElement('textarea');
+                textArea.value = text;
+                textArea.readOnly = false;
+                textArea.contentEditable = 'true';
+                textArea.style.position = 'fixed';
+                textArea.style.top = '0';
+                textArea.style.left = '0';
+                textArea.style.width = '1px';
+                textArea.style.height = '1px';
+                textArea.style.opacity = '0';
+                textArea.style.pointerEvents = 'none';
+                clipboardDocument.body.appendChild(textArea);
+
+                selection = clipboardDocument.getSelection?.() || null;
+                const range = clipboardDocument.createRange?.();
+
+                textArea.focus({ preventScroll: true });
+                if (range && selection) {
+                    range.selectNodeContents(textArea);
+                    selection.removeAllRanges();
+                    selection.addRange(range);
+                }
+                textArea.setSelectionRange(0, text.length);
+                return Boolean(clipboardDocument.execCommand('copy'));
             } catch (err) {
-                clipboardDocument.body.removeChild(textArea);
-                selection?.removeAllRanges();
+                console.log('Fallback clipboard copy failed:', err);
                 return false;
+            } finally {
+                if (textArea?.parentNode) {
+                    textArea.parentNode.removeChild(textArea);
+                }
+                selection?.removeAllRanges();
             }
         }
 
@@ -3738,8 +4047,43 @@
             focusMobileTerminalInput() || focusTerminal(false);
         });
 
+        manualCopyButton.addEventListener('click', async () => {
+            const text = manualCopyText.value;
+            if (text.length === 0) {
+                setStatus('No text to copy', 'error', false);
+                return;
+            }
+
+            // Keep the real textarea selected even if the browser rejects the
+            // Clipboard API. Command-C / the native Copy menu remains usable.
+            manualCopyText.focus({ preventScroll: true });
+            manualCopyText.select();
+            manualCopyButton.disabled = true;
+
+            let copied = false;
+            try {
+                copied = Boolean(await copyToClipboardFromExplicitControl(text, document));
+            } finally {
+                manualCopyButton.disabled = false;
+            }
+
+            if (copied) {
+                manualCopyPanel.classList.remove('active');
+                manualCopyText.value = '';
+                setStatus('Copied text', 'success', false);
+                return;
+            }
+
+            manualCopyMessage.textContent = 'The browser blocked automatic copy. The text is selected; use Command-C or the native Copy menu.';
+            manualCopyText.focus({ preventScroll: true });
+            manualCopyText.select();
+            setStatus('Copy still blocked — use Command-C', 'error', true);
+        });
+
         manualCopyDismiss.addEventListener('click', () => {
             manualCopyPanel.classList.remove('active');
+            manualCopyText.value = '';
+            manualCopyMessage.textContent = 'Copy this text manually.';
         });
 
         manualPasteDismiss.addEventListener('click', () => {

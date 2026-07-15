@@ -106,9 +106,10 @@ Use the smallest practical reload:
 
 ## Safety Boundaries
 
-- Direct human Shell commands and `,,` dispatches are human intent.
-- Codex-initiated restart, stop, update, install, uninstall, host, backup, and
-  OS operations remain broker-guarded.
+- Shell mode and `,,` are explicit command dispatch, not authorization to
+  bypass the broker.
+- Restart, stop, update, install, uninstall, host, backup, and OS operations
+  remain broker-guarded from every surface.
 - Do not silently answer broker challenges from Codex's normal tool path.
 - Before changing automations or scripts, preserve the old YAML and explain the
   reload path.
