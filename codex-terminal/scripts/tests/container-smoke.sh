@@ -9,6 +9,13 @@ failure_name="ctp-child-failure-$$"
 
 cleanup() {
     docker rm -f "$normal_name" "$failure_name" >/dev/null 2>&1 || true
+    if [ -d "$work_dir" ]; then
+        docker run --rm \
+            --entrypoint /bin/chown \
+            --volume "$work_dir:/cleanup" \
+            "$image" \
+            -R "$(id -u):$(id -g)" /cleanup >/dev/null 2>&1 || true
+    fi
     rm -rf "$work_dir"
 }
 trap cleanup EXIT
