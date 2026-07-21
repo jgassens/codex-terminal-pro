@@ -233,28 +233,25 @@ test('copy failures expose the selected text and are never reported as success',
     assert.deepEqual(statuses[0], ['Copied terminal selection', 'success', false]);
 });
 
-test('gesture copy tries the synchronous Safari fallback before Clipboard API', async () => {
-    let clipboardAttempts = 0;
-    let fallbackAttempts = 0;
+test('gesture copy starts Clipboard API before the synchronous Safari fallback', async () => {
+    const attempts = [];
     const context = loadFunctions(['copyToClipboardFromGesture'], {
         navigator: {
             clipboard: {
                 writeText: async () => {
-                    clipboardAttempts += 1;
-                    throw new Error('blocked');
+                    attempts.push('clipboard');
                 }
             }
         },
         document: {},
         fallbackCopyToClipboard: () => {
-            fallbackAttempts += 1;
+            attempts.push('fallback');
             return true;
         }
     });
 
     assert.equal(await context.copyToClipboardFromGesture('text', {}), true);
-    assert.equal(fallbackAttempts, 1);
-    assert.equal(clipboardAttempts, 0);
+    assert.deepEqual(attempts, ['clipboard', 'fallback']);
 });
 
 test('Clipboard API is attempted immediately when the synchronous fallback is unavailable', async () => {
@@ -284,9 +281,8 @@ test('same-cell double/triple-click selection must be new, not stale', () => {
     assert.equal(context.newSameCellTerminalSelection('stale text', ''), '');
 });
 
-test('the explicit Copy control runs the synchronous fallback inside its click', async () => {
-    let clipboardAttempts = 0;
-    let fallbackAttempts = 0;
+test('the explicit Copy control starts Clipboard API and keeps the synchronous fallback', async () => {
+    const attempts = [];
     const context = loadFunctions([
         'copyToClipboardFromGesture',
         'copyToClipboardFromExplicitControl'
@@ -294,20 +290,19 @@ test('the explicit Copy control runs the synchronous fallback inside its click',
         navigator: {
             clipboard: {
                 writeText: async () => {
-                    clipboardAttempts += 1;
+                    attempts.push('clipboard');
                 }
             }
         },
         document: {},
         fallbackCopyToClipboard: () => {
-            fallbackAttempts += 1;
+            attempts.push('fallback');
             return true;
         }
     });
 
     assert.equal(await context.copyToClipboardFromExplicitControl('text', {}), true);
-    assert.equal(fallbackAttempts, 1);
-    assert.equal(clipboardAttempts, 0);
+    assert.deepEqual(attempts, ['clipboard', 'fallback']);
 });
 
 test('terminal API initialization retries until ready and can be canceled', () => {

@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.6.1
+
+- Fix copy-on-highlight falsely reporting success without changing the browser
+  clipboard. Terminal selections now start the standard Clipboard API during
+  the mouse or touch gesture before using the synchronous Safari fallback.
+
 ## 2.6.0
 
 - Upgrade the bundled Codex CLI from `0.134.0` to `0.144.4`, keep the image

@@ -3548,16 +3548,14 @@
         }
 
         function copyToClipboardFromGesture(text, clipboardDocument = document) {
-            // Safari often exposes navigator.clipboard but rejects it under an
-            // ingress iframe. Try the synchronous, gesture-bound fallback
-            // first; it cannot be recovered after awaiting a rejected promise.
-            if (fallbackCopyToClipboard(text, clipboardDocument)) {
-                return true;
-            }
-
+            let clipboardWrite = null;
             if (navigator.clipboard && navigator.clipboard.writeText) {
                 try {
-                    return Promise.resolve(navigator.clipboard.writeText(text))
+                    // Start the standard write while the mouse/touch event still
+                    // has browser activation. The legacy command can report a
+                    // false success inside an iframe, so it must not prevent this
+                    // real Clipboard API attempt from running.
+                    clipboardWrite = Promise.resolve(navigator.clipboard.writeText(text))
                         .then(() => true)
                         .catch((err) => {
                             console.log('Clipboard API failed:', err);
@@ -3565,20 +3563,22 @@
                         });
                 } catch (err) {
                     console.log('Clipboard API failed:', err);
-                    return false;
                 }
             }
 
-            return false;
+            // Run the Safari-compatible fallback synchronously before browser
+            // activation expires. If the standard API exists, prefer its result
+            // and use this only when that write is rejected.
+            const fallbackCopied = fallbackCopyToClipboard(text, clipboardDocument);
+            if (!clipboardWrite) {
+                return fallbackCopied;
+            }
+            return clipboardWrite.then((copied) => copied || fallbackCopied);
         }
 
         function copyToClipboardFromExplicitControl(text, clipboardDocument = document) {
-            // execCommand must run synchronously inside this button click. It is
-            // still the most dependable Safari fallback; if unavailable, invoke
-            // the modern API before returning from the same trusted event.
-            if (fallbackCopyToClipboard(text, clipboardDocument)) {
-                return true;
-            }
+            // The shared gesture path starts the standard API first and still
+            // runs the Safari fallback synchronously inside this button click.
             return copyToClipboardFromGesture(text, clipboardDocument);
         }
 
