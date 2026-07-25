@@ -1,0 +1,179 @@
+#!/usr/bin/env python3
+"""Disable a Codex Security MCP transport with a stale persisted launch path."""
+
+from __future__ import annotations
+
+import argparse
+import os
+import re
+from pathlib import Path
+
+from codex_config_utils import (
+    locked_config,
+    read_config,
+    validate_toml,
+    write_atomic_validated,
+)
+
+
+PLUGIN_ID = "codex-security@openai-curated-remote"
+SERVER_NAME = "codex-security"
+TABLE_RE = re.compile(r"^\s*\[(?P<name>[^\]]+)]\s*(?:#.*)?$")
+ENABLED_RE = re.compile(
+    r"^(?P<prefix>[ \t]*enabled[ \t]*=[ \t]*)[^#\r\n]*?(?P<suffix>[ \t]*(?:#.*)?)(?P<nl>\r?\n?)$"
+)
+
+
+def table_name(line: str) -> str | None:
+    match = TABLE_RE.match(line.rstrip("\r\n"))
+    return match.group("name").strip() if match else None
+
+
+def plugin_parent_names() -> set[str]:
+    return {f'plugins."{PLUGIN_ID}"', f"plugins.'{PLUGIN_ID}'"}
+
+
+def plugin_mcp_names() -> set[str]:
+    prefixes = plugin_parent_names()
+    return {
+        *(
+            f'{prefix}.mcp_servers."{SERVER_NAME}"'
+            for prefix in prefixes
+        ),
+        *(
+            f"{prefix}.mcp_servers.'{SERVER_NAME}'"
+            for prefix in prefixes
+        ),
+        *(f"{prefix}.mcp_servers.{SERVER_NAME}" for prefix in prefixes),
+    }
+
+
+def split_tables(text: str) -> list[list[str]]:
+    blocks: list[list[str]] = []
+    current: list[str] = []
+    for line in text.splitlines(keepends=True):
+        if table_name(line) is not None and current:
+            blocks.append(current)
+            current = []
+        current.append(line)
+    if current:
+        blocks.append(current)
+    return blocks
+
+
+def disable_block(block: list[str]) -> list[str]:
+    output: list[str] = []
+    replaced = False
+    for line in block:
+        match = ENABLED_RE.match(line)
+        if not replaced and match:
+            output.append(
+                f'{match.group("prefix")}false{match.group("suffix")}{match.group("nl")}'
+            )
+            replaced = True
+        else:
+            output.append(line)
+    if not replaced:
+        newline = "\r\n" if output and output[0].endswith("\r\n") else "\n"
+        output.insert(1 if output else 0, f"enabled = false{newline}")
+    return output
+
+
+def replace_boolean_assignment(line: str, key_pattern: str) -> tuple[str, bool]:
+    match = re.match(
+        rf"^(?P<prefix>[ \t]*{key_pattern}[ \t]*=[ \t]*)(?:true|false)(?P<suffix>[ \t]*(?:#.*)?)(?P<nl>\r?\n?)$",
+        line,
+    )
+    if not match:
+        return line, False
+    return (
+        f'{match.group("prefix")}false{match.group("suffix")}{match.group("nl")}',
+        True,
+    )
+
+
+def dotted_plugin_pattern() -> str:
+    double = re.escape(f'plugins."{PLUGIN_ID}"')
+    single = re.escape(f"plugins.'{PLUGIN_ID}'")
+    return rf"(?:{double}|{single})"
+
+
+def disable_codex_security_mcp(text: str) -> str:
+    nested_present = False
+    top_level_lines: list[str] = []
+    in_table = False
+    plugin = dotted_plugin_pattern()
+    server = rf'(?:{re.escape(SERVER_NAME)}|"{re.escape(SERVER_NAME)}"|\'{re.escape(SERVER_NAME)}\')'
+
+    for line in text.splitlines(keepends=True):
+        if table_name(line) is not None:
+            in_table = True
+        updated_line = line
+        if not in_table:
+            key = rf"{plugin}\.mcp_servers\.{server}\.enabled"
+            updated_line, replaced = replace_boolean_assignment(updated_line, key)
+            nested_present = nested_present or replaced
+        top_level_lines.append(updated_line)
+
+    output: list[str] = []
+    parent_names = plugin_parent_names()
+    nested_names = plugin_mcp_names()
+    local_key = rf"mcp_servers\.{server}\.enabled"
+
+    for block in split_tables("".join(top_level_lines)):
+        name = table_name(block[0]) if block else None
+        if name in parent_names:
+            transformed = [block[0]]
+            for line in block[1:]:
+                line, replaced = replace_boolean_assignment(line, local_key)
+                nested_present = nested_present or replaced
+                transformed.append(line)
+            block = transformed
+        if name in nested_names:
+            nested_present = True
+            block = disable_block(block)
+        output.extend(block)
+
+    updated = "".join(output)
+    if not nested_present:
+        if updated and not updated.endswith(("\n", "\r\n")):
+            updated += "\n"
+        if updated and not updated.endswith("\n\n"):
+            updated += "\n"
+        updated += (
+            "# Codex Terminal Pro: avoid stale plugin MCP paths in persistent HA data.\n"
+            f'[plugins."{PLUGIN_ID}".mcp_servers."{SERVER_NAME}"]\n'
+            "enabled = false\n"
+        )
+    return updated
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=Path(os.environ.get("CODEX_HOME", "/data/.codex")) / "config.toml",
+    )
+    parser.add_argument("--check", action="store_true")
+    args = parser.parse_args()
+
+    try:
+        with locked_config(args.config):
+            original = read_config(args.config)
+            validate_toml(original)
+            updated = disable_codex_security_mcp(original)
+            validate_toml(updated)
+            if updated == original:
+                return 0
+            if args.check:
+                return 1
+            write_atomic_validated(args.config, updated)
+            return 0
+    except Exception as exc:
+        print(f"Codex Security MCP config was left unchanged: {exc}", file=os.sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

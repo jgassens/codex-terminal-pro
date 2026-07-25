@@ -960,7 +960,7 @@
             </div>
         </div>
         <div id="terminal-container">
-            <iframe id="terminal-frame" src="about:blank"></iframe>
+            <iframe id="terminal-frame" src="about:blank" allow="clipboard-read; clipboard-write"></iframe>
             <div id="drop-zone">
                 <div id="drop-zone-text">Drop image to upload into Codex</div>
             </div>
@@ -3547,15 +3547,34 @@
             return after.length > 0 && after !== before ? after : '';
         }
 
+        function clipboardWritePolicyAllows(clipboardDocument = document) {
+            const policy = clipboardDocument?.permissionsPolicy || clipboardDocument?.featurePolicy;
+            if (!policy || typeof policy.allowsFeature !== 'function') {
+                return true;
+            }
+
+            try {
+                return policy.allowsFeature('clipboard-write');
+            } catch (err) {
+                console.log('Could not inspect clipboard permissions policy:', err);
+                return true;
+            }
+        }
+
         function copyToClipboardFromGesture(text, clipboardDocument = document) {
+            const clipboardNavigator = clipboardDocument?.defaultView?.navigator || navigator;
             let clipboardWrite = null;
-            if (navigator.clipboard && navigator.clipboard.writeText) {
+            if (
+                clipboardWritePolicyAllows(clipboardDocument) &&
+                clipboardNavigator.clipboard &&
+                clipboardNavigator.clipboard.writeText
+            ) {
                 try {
                     // Start the standard write while the mouse/touch event still
-                    // has browser activation. The legacy command can report a
-                    // false success inside an iframe, so it must not prevent this
-                    // real Clipboard API attempt from running.
-                    clipboardWrite = Promise.resolve(navigator.clipboard.writeText(text))
+                    // has browser activation. Use the navigator belonging to the
+                    // frame that received the gesture; Safari scopes transient
+                    // activation to that browsing context.
+                    clipboardWrite = Promise.resolve(clipboardNavigator.clipboard.writeText(text))
                         .then(() => true)
                         .catch((err) => {
                             console.log('Clipboard API failed:', err);
@@ -3566,9 +3585,10 @@
                 }
             }
 
-            // Run the Safari-compatible fallback synchronously before browser
-            // activation expires. If the standard API exists, prefer its result
-            // and use this only when that write is rejected.
+            // Home Assistant ingress intentionally does not delegate the
+            // clipboard-write Permissions Policy. In that case the standard API
+            // is skipped so it cannot consume Safari's one transient activation
+            // before this synchronous native-copy fallback runs.
             const fallbackCopied = fallbackCopyToClipboard(text, clipboardDocument);
             if (!clipboardWrite) {
                 return fallbackCopied;
@@ -3969,14 +3989,33 @@
             }
         }
 
-        // iOS-compatible fallback clipboard copy using execCommand.
+        // iOS/ingress-compatible fallback using the browser's synchronous native
+        // copy event. Setting clipboardData in that event avoids relying on a
+        // hidden textarea selection inside nested terminal frames.
         function fallbackCopyToClipboard(text, clipboardDocument = document) {
             let textArea = null;
             let selection = null;
+            let copyEventHandled = false;
+            let onCopy = null;
 
             try {
                 if (!clipboardDocument?.body || typeof clipboardDocument.createElement !== 'function') {
                     return false;
+                }
+
+                if (
+                    typeof clipboardDocument.addEventListener === 'function' &&
+                    typeof clipboardDocument.removeEventListener === 'function'
+                ) {
+                    onCopy = (event) => {
+                        if (!event.clipboardData || typeof event.clipboardData.setData !== 'function') {
+                            return;
+                        }
+                        event.clipboardData.setData('text/plain', text);
+                        event.preventDefault();
+                        copyEventHandled = true;
+                    };
+                    clipboardDocument.addEventListener('copy', onCopy, true);
                 }
 
                 textArea = clipboardDocument.createElement('textarea');
@@ -4002,11 +4041,15 @@
                     selection.addRange(range);
                 }
                 textArea.setSelectionRange(0, text.length);
-                return Boolean(clipboardDocument.execCommand('copy'));
+                const copied = Boolean(clipboardDocument.execCommand('copy'));
+                return onCopy ? copied && copyEventHandled : copied;
             } catch (err) {
                 console.log('Fallback clipboard copy failed:', err);
                 return false;
             } finally {
+                if (onCopy) {
+                    clipboardDocument.removeEventListener('copy', onCopy, true);
+                }
                 if (textArea?.parentNode) {
                     textArea.parentNode.removeChild(textArea);
                 }

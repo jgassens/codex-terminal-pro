@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.6.2
+
+- Fix copy-on-highlight inside Home Assistant ingress, where the outer add-on
+  iframe does not delegate `clipboard-write`. The terminal now keeps the
+  gesture in the ttyd frame and uses a synchronous native copy event when the
+  standard Clipboard API is blocked, while rejecting legacy false-success
+  reports that did not update the system clipboard.
+- Stop a stale persisted `codex-security` MCP launch path from producing a
+  startup warning in the Home Assistant runtime. The startup guard disables
+  only that plugin transport and preserves the Codex Security skills.
+
 ## 2.6.1
 
 - Fix copy-on-highlight falsely reporting success without changing the browser

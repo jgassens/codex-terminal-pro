@@ -61,6 +61,7 @@ init_environment() {
     ensure_codex_file_credentials
     ensure_heygen_codex_plugin_disabled
     ensure_github_codex_mcp_ready
+    ensure_codex_security_mcp_ready
     remove_heygen_codex_plugin_state
     ensure_codex_update_prompt_disabled
     ensure_codex_tui_defaults
@@ -93,6 +94,10 @@ export GH_CONFIG_DIR="/data/.config/gh"
 
 if [ -x "/data/packages/guard/bin/codex-terminal-disable-github-mcp" ]; then
     /data/packages/guard/bin/codex-terminal-disable-github-mcp >/dev/null 2>&1 || true
+fi
+
+if [ -x "/data/packages/guard/bin/codex-terminal-disable-codex-security-mcp" ]; then
+    /data/packages/guard/bin/codex-terminal-disable-codex-security-mcp >/dev/null 2>&1 || true
 fi
 
 if [ -x "/data/packages/guard/bin/codex-terminal-prune-codex-plugins" ]; then
@@ -178,6 +183,22 @@ ensure_github_codex_mcp_ready() {
     bashio::log.warning "Failed to apply GitHub Codex MCP readiness policy"
 }
 
+ensure_codex_security_mcp_ready() {
+    local disabler="/data/packages/guard/bin/codex-terminal-disable-codex-security-mcp"
+
+    if [ ! -x "$disabler" ]; then
+        bashio::log.warning "Codex Security MCP startup guard missing: ${disabler}"
+        return 0
+    fi
+
+    if "$disabler"; then
+        bashio::log.info "Codex Security plugin: disabled stale-path-prone MCP transport; security skills preserved"
+        return 0
+    fi
+
+    bashio::log.warning "Failed to disable the failing Codex Security MCP transport"
+}
+
 set_codex_top_level_config() {
     local config_file="$1"
     local key="$2"
@@ -204,6 +225,7 @@ install_codex_plugin_cache_guard() {
     local pruner="${guard_bin}/codex-terminal-prune-codex-plugins"
     local heygen_disabler="${guard_bin}/codex-terminal-disable-heygen-plugin"
     local github_mcp_disabler="${guard_bin}/codex-terminal-disable-github-mcp"
+    local codex_security_mcp_disabler="${guard_bin}/codex-terminal-disable-codex-security-mcp"
     local wrapper="${guard_bin}/codex"
 
     if [ -f "/opt/scripts/codex_config_utils.py" ]; then
@@ -234,6 +256,13 @@ install_codex_plugin_cache_guard() {
         bashio::log.warning "Codex GitHub MCP disabler missing: /opt/scripts/codex-disable-github-mcp"
     fi
 
+    if [ -f "/opt/scripts/codex-disable-codex-security-mcp" ]; then
+        cp /opt/scripts/codex-disable-codex-security-mcp "$codex_security_mcp_disabler"
+        chmod 755 "$codex_security_mcp_disabler"
+    else
+        bashio::log.warning "Codex Security MCP disabler missing: /opt/scripts/codex-disable-codex-security-mcp"
+    fi
+
     cat > "$wrapper" << 'CODEX_GUARD_EOF'
 #!/usr/bin/env bash
 
@@ -245,6 +274,10 @@ fi
 
 if [ -x "/data/packages/guard/bin/codex-terminal-disable-github-mcp" ]; then
     /data/packages/guard/bin/codex-terminal-disable-github-mcp >/dev/null 2>&1 || true
+fi
+
+if [ -x "/data/packages/guard/bin/codex-terminal-disable-codex-security-mcp" ]; then
+    /data/packages/guard/bin/codex-terminal-disable-codex-security-mcp >/dev/null 2>&1 || true
 fi
 
 if [ -x "/data/packages/guard/bin/codex-terminal-prune-codex-plugins" ]; then
@@ -322,7 +355,7 @@ install_tools() {
 
 log_startup_diagnostics() {
     local app_name="${APP_NAME:-${ADDON_NAME:-Codex Terminal Pro}}"
-    local app_version="${BUILD_VERSION:-${APP_VERSION:-2.6.1}}"
+    local app_version="${BUILD_VERSION:-${APP_VERSION:-2.6.2}}"
 
     bashio::log.info "Startup diagnostics:"
     bashio::log.info "  - Date: $(date)"

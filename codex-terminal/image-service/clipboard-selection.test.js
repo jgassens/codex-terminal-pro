@@ -235,7 +235,10 @@ test('copy failures expose the selected text and are never reported as success',
 
 test('gesture copy starts Clipboard API before the synchronous Safari fallback', async () => {
     const attempts = [];
-    const context = loadFunctions(['copyToClipboardFromGesture'], {
+    const context = loadFunctions([
+        'clipboardWritePolicyAllows',
+        'copyToClipboardFromGesture'
+    ], {
         navigator: {
             clipboard: {
                 writeText: async () => {
@@ -256,7 +259,10 @@ test('gesture copy starts Clipboard API before the synchronous Safari fallback',
 
 test('Clipboard API is attempted immediately when the synchronous fallback is unavailable', async () => {
     let clipboardAttempts = 0;
-    const context = loadFunctions(['copyToClipboardFromGesture'], {
+    const context = loadFunctions([
+        'clipboardWritePolicyAllows',
+        'copyToClipboardFromGesture'
+    ], {
         navigator: {
             clipboard: {
                 writeText: async () => {
@@ -273,6 +279,67 @@ test('Clipboard API is attempted immediately when the synchronous fallback is un
     assert.equal(clipboardAttempts, 1);
 });
 
+test('gesture copy uses the clipboard from the frame that received the gesture', async () => {
+    const attempts = [];
+    const context = loadFunctions([
+        'clipboardWritePolicyAllows',
+        'copyToClipboardFromGesture'
+    ], {
+        navigator: {
+            clipboard: {
+                writeText: async () => {
+                    attempts.push('parent');
+                }
+            }
+        },
+        document: {},
+        fallbackCopyToClipboard: () => false
+    });
+    const clipboardDocument = {
+        defaultView: {
+            navigator: {
+                clipboard: {
+                    writeText: async () => {
+                        attempts.push('terminal-frame');
+                    }
+                }
+            }
+        }
+    };
+
+    assert.equal(await context.copyToClipboardFromGesture('text', clipboardDocument), true);
+    assert.deepEqual(attempts, ['terminal-frame']);
+});
+
+test('ingress policy denial preserves the gesture for synchronous native copy', async () => {
+    const attempts = [];
+    const context = loadFunctions([
+        'clipboardWritePolicyAllows',
+        'copyToClipboardFromGesture'
+    ], {
+        navigator: {
+            clipboard: {
+                writeText: async () => {
+                    attempts.push('blocked-api');
+                }
+            }
+        },
+        document: {},
+        fallbackCopyToClipboard: () => {
+            attempts.push('native-copy');
+            return true;
+        }
+    });
+    const clipboardDocument = {
+        featurePolicy: {
+            allowsFeature: (feature) => feature !== 'clipboard-write'
+        }
+    };
+
+    assert.equal(await context.copyToClipboardFromGesture('text', clipboardDocument), true);
+    assert.deepEqual(attempts, ['native-copy']);
+});
+
 test('same-cell double/triple-click selection must be new, not stale', () => {
     const context = loadFunctions(['newSameCellTerminalSelection']);
     assert.equal(context.newSameCellTerminalSelection('', 'selected word'), 'selected word');
@@ -284,6 +351,7 @@ test('same-cell double/triple-click selection must be new, not stale', () => {
 test('the explicit Copy control starts Clipboard API and keeps the synchronous fallback', async () => {
     const attempts = [];
     const context = loadFunctions([
+        'clipboardWritePolicyAllows',
         'copyToClipboardFromGesture',
         'copyToClipboardFromExplicitControl'
     ], {
@@ -303,6 +371,102 @@ test('the explicit Copy control starts Clipboard API and keeps the synchronous f
 
     assert.equal(await context.copyToClipboardFromExplicitControl('text', {}), true);
     assert.deepEqual(attempts, ['clipboard', 'fallback']);
+});
+
+test('native copy fallback writes exact text through the trusted copy event', () => {
+    let copyListener = null;
+    let copiedText = null;
+    let prevented = false;
+    const selection = {
+        removeAllRanges() {},
+        addRange() {}
+    };
+    const textArea = {
+        style: {},
+        focus() {},
+        setSelectionRange() {},
+        parentNode: null
+    };
+    const clipboardDocument = {
+        body: {
+            appendChild(node) {
+                node.parentNode = this;
+            },
+            removeChild(node) {
+                node.parentNode = null;
+            }
+        },
+        createElement: () => textArea,
+        getSelection: () => selection,
+        createRange: () => ({ selectNodeContents() {} }),
+        addEventListener(type, listener) {
+            assert.equal(type, 'copy');
+            copyListener = listener;
+        },
+        removeEventListener(type, listener) {
+            assert.equal(type, 'copy');
+            assert.equal(listener, copyListener);
+            copyListener = null;
+        },
+        execCommand(command) {
+            assert.equal(command, 'copy');
+            copyListener({
+                clipboardData: {
+                    setData(type, value) {
+                        assert.equal(type, 'text/plain');
+                        copiedText = value;
+                    }
+                },
+                preventDefault() {
+                    prevented = true;
+                }
+            });
+            return true;
+        }
+    };
+    const context = loadFunctions(['fallbackCopyToClipboard']);
+
+    assert.equal(context.fallbackCopyToClipboard('  界\n', clipboardDocument), true);
+    assert.equal(copiedText, '  界\n');
+    assert.equal(prevented, true);
+    assert.equal(copyListener, null);
+});
+
+test('native copy fallback rejects execCommand false-success without clipboard data', () => {
+    let copyListener = null;
+    const textArea = {
+        style: {},
+        focus() {},
+        setSelectionRange() {},
+        parentNode: null
+    };
+    const clipboardDocument = {
+        body: {
+            appendChild(node) {
+                node.parentNode = this;
+            },
+            removeChild(node) {
+                node.parentNode = null;
+            }
+        },
+        createElement: () => textArea,
+        getSelection: () => ({ removeAllRanges() {}, addRange() {} }),
+        createRange: () => ({ selectNodeContents() {} }),
+        addEventListener(type, listener) {
+            copyListener = listener;
+        },
+        removeEventListener() {
+            copyListener = null;
+        },
+        execCommand() {
+            copyListener({ clipboardData: null, preventDefault() {} });
+            return true;
+        }
+    };
+    const context = loadFunctions(['fallbackCopyToClipboard']);
+
+    assert.equal(context.fallbackCopyToClipboard('text', clipboardDocument), false);
+    assert.equal(copyListener, null);
 });
 
 test('terminal API initialization retries until ready and can be canceled', () => {
