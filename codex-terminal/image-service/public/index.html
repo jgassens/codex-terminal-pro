@@ -52,6 +52,14 @@
             --shadow: rgba(58, 47, 40, 0.18);
         }
 
+        /* Dynamic viewport units track the collapsing mobile URL bar before
+           the visualViewport script refines --app-height. */
+        @supports (height: 100dvh) {
+            :root {
+                --app-height: 100dvh;
+            }
+        }
+
         html {
             height: 100%;
             overflow: hidden;
@@ -256,34 +264,6 @@
             display: none;
         }
 
-        #mobile-scroll-controls {
-            position: absolute;
-            right: 10px;
-            bottom: calc(var(--keyboard-inset, 0px) + 10px + env(safe-area-inset-bottom, 0px));
-            z-index: 1200;
-            display: none !important;
-            flex-direction: column;
-            gap: 6px;
-        }
-
-        .scroll-btn {
-            width: 38px;
-            height: 38px;
-            border: 1px solid rgba(121, 199, 197, 0.32);
-            border-radius: 999px;
-            background: rgba(23, 27, 29, 0.88);
-            color: var(--text);
-            box-shadow: 0 8px 24px var(--shadow);
-            font-size: 16px;
-            font-weight: 700;
-        }
-
-        .scroll-btn:active {
-            background: rgba(240, 180, 91, 0.22);
-            border-color: rgba(240, 180, 91, 0.65);
-            color: var(--accent-strong);
-        }
-
         @keyframes pulse {
             0%, 100% { opacity: 1; }
             50% { opacity: 0.7; }
@@ -298,6 +278,11 @@
             text-overflow: ellipsis;
             white-space: nowrap;
             max-width: min(44vw, 520px);
+        }
+
+        /* An empty status must not reserve a wrapped flex row of its own. */
+        #status:empty {
+            display: none;
         }
 
         #status.success {
@@ -836,6 +821,10 @@
                 flex: 1 1 0;
             }
 
+            #header-title {
+                display: none;
+            }
+
             #status {
                 flex: 1 0 100%;
                 order: 2;
@@ -844,9 +833,10 @@
             }
 
             .header-btn {
-                flex: 1 1 calc(50% - 8px);
+                flex: 1 1 0;
+                min-width: 0;
                 justify-content: center;
-                padding: 6px 8px;
+                padding: 6px 6px;
             }
 
             #change-desk-panel {
@@ -877,6 +867,12 @@
         html.touch-ui #touch-select-btn,
         html.touch-ui #paste-btn {
             display: flex;
+        }
+
+        /* Terminal rows are the scarce resource on a phone; the title row is
+           not worth 30px of them. */
+        html.touch-ui #header-title {
+            display: none;
         }
 
         html.touch-ui #header {
@@ -910,9 +906,10 @@
         }
 
         html.touch-ui .header-btn {
-            flex: 1 1 calc(50% - 8px);
+            flex: 1 1 0;
+            min-width: 0;
             justify-content: center;
-            padding: 6px 8px;
+            padding: 6px 6px;
         }
 
         html.touch-ui #mobile-input-bar {
@@ -963,11 +960,6 @@
             <iframe id="terminal-frame" src="about:blank" allow="clipboard-read; clipboard-write"></iframe>
             <div id="drop-zone">
                 <div id="drop-zone-text">Drop image to upload into Codex</div>
-            </div>
-            <div id="mobile-scroll-controls" aria-label="Terminal scroll controls">
-                <button class="scroll-btn" data-terminal-action="scroll-up" title="Scroll terminal back" aria-label="Scroll terminal back">↑</button>
-                <button class="scroll-btn" data-terminal-action="scroll-down" title="Scroll terminal forward" aria-label="Scroll terminal forward">↓</button>
-                <button class="scroll-btn" data-terminal-action="scroll-bottom" title="Return to live prompt" aria-label="Return to live prompt">⌄</button>
             </div>
         </div>
         <div id="mobile-input-bar" aria-label="Mobile terminal input">
@@ -2149,9 +2141,10 @@
             });
 
             if (mobileTerminalInput) {
+                // Must stay short enough for one placeholder line on a phone.
                 mobileTerminalInput.placeholder = terminalMode === 'raw'
-                    ? 'Type shell command'
-                    : `Type Codex prompt (${SHELL_DISPATCH_PREFIX} shell command)`;
+                    ? 'Shell command'
+                    : `Codex prompt (${SHELL_DISPATCH_PREFIX} shell)`;
             }
 
             if (announce) {
@@ -3146,74 +3139,133 @@
             return cleanup;
         }
 
+        // Touch scrolling synthesizes local wheel events instead of posting
+        // page-jump commands to the server. xterm forwards wheel input to tmux
+        // as mouse reports (tmux runs with mouse on), so tmux or a fullscreen
+        // app scrolls line-wise with no HTTP round-trip, exactly like a mouse
+        // wheel on desktop. Without an application mouse mode, xterm scrolls
+        // its own scrollback locally.
         function installMobileTerminalScroll(iframeWindow, iframeDocument) {
             if (!iframeWindow || !iframeDocument) {
                 return null;
             }
 
             iframeWindow.__codexMobileScrollCleanup?.();
-            let touchStartY = null;
-            let scrollRequestPending = false;
-            let lastScrollAt = 0;
-            const scrollThreshold = 54;
-            const scrollThrottleMs = 140;
+            // tmux scrolls five lines per wheel report; one step per five rows
+            // of finger travel keeps content tracking the finger 1:1.
+            const WHEEL_ROWS_PER_STEP = 5;
+            let lastTouch = null;
+            let wheelRemainder = 0;
             const listeners = [];
             const listen = (type, handler, options) => {
                 iframeDocument.addEventListener(type, handler, options);
                 listeners.push(() => iframeDocument.removeEventListener(type, handler, options));
             };
 
-            const sendTouchScroll = (action) => {
-                const now = Date.now();
-                if (scrollRequestPending || now - lastScrollAt < scrollThrottleMs) {
+            const terminalCellHeight = () => {
+                try {
+                    const term = iframeWindow.term;
+                    const screen = iframeDocument.querySelector('.xterm-screen');
+                    if (term?.rows && screen) {
+                        const height = screen.getBoundingClientRect().height / term.rows;
+                        if (height >= 4 && height <= 80) {
+                            return height;
+                        }
+                    }
+                } catch (err) {
+                    console.log('Could not measure terminal cell height:', err);
+                }
+                return 16;
+            };
+
+            const dispatchTerminalWheel = (deltaY, clientX, clientY) => {
+                const target = iframeDocument.querySelector('.xterm-screen') ||
+                    iframeDocument.querySelector('.xterm') ||
+                    iframeDocument.body;
+                if (!target) {
                     return;
                 }
 
-                scrollRequestPending = true;
-                lastScrollAt = now;
-                sendTerminalControl(action)
-                    .then((ok) => {
-                        if (!ok) {
-                            setStatus('Could not scroll terminal', 'error', false);
-                        }
-                    })
-                    .catch((err) => {
-                        console.log('Touch terminal scroll failed:', err);
-                        setStatus('Could not scroll terminal', 'error', false);
-                    })
-                    .finally(() => {
-                        scrollRequestPending = false;
-                    });
+                try {
+                    target.dispatchEvent(new iframeWindow.WheelEvent('wheel', {
+                        deltaY,
+                        deltaMode: 0,
+                        clientX,
+                        clientY,
+                        bubbles: true,
+                        cancelable: true,
+                        view: iframeWindow
+                    }));
+                } catch (err) {
+                    console.log('Could not dispatch terminal wheel event:', err);
+                }
+            };
+
+            const emitScrollStep = (wheelDirection, step, clientX, clientY) => {
+                // With an application mouse mode active (tmux always enables
+                // one), xterm turns the wheel event into a mouse report and
+                // the application scrolls itself. Without one, a synthetic
+                // wheel cannot trigger the viewport's native default-action
+                // scroll, so drive xterm's own scrollback directly.
+                let term = null;
+                let mouseMode = null;
+                try {
+                    term = iframeWindow.term;
+                    mouseMode = term?.modes?.mouseTrackingMode || null;
+                } catch (err) {
+                    console.log('Could not inspect terminal mouse mode:', err);
+                }
+
+                if (!mouseMode || mouseMode !== 'none') {
+                    dispatchTerminalWheel(wheelDirection * step, clientX, clientY);
+                    return;
+                }
+
+                if (term && typeof term.scrollLines === 'function') {
+                    try {
+                        term.scrollLines(wheelDirection * WHEEL_ROWS_PER_STEP);
+                    } catch (err) {
+                        console.log('Could not scroll terminal buffer:', err);
+                    }
+                }
             };
 
             const handleTouchStart = (event) => {
                 if (!rootElement.classList.contains('touch-ui') || touchSelectionMode || event.touches.length !== 1) {
-                    touchStartY = null;
+                    lastTouch = null;
                     return;
                 }
 
-                touchStartY = event.touches[0].clientY;
+                const touch = event.touches[0];
+                lastTouch = { x: touch.clientX, y: touch.clientY };
+                wheelRemainder = 0;
             };
 
             const handleTouchMove = (event) => {
-                if (!rootElement.classList.contains('touch-ui') || touchSelectionMode || event.touches.length !== 1 || touchStartY === null) {
+                if (!rootElement.classList.contains('touch-ui') || touchSelectionMode || event.touches.length !== 1 || !lastTouch) {
                     return;
                 }
 
-                const currentY = event.touches[0].clientY;
-                const deltaY = currentY - touchStartY;
-                if (Math.abs(deltaY) < scrollThreshold) {
-                    return;
-                }
-
+                const touch = event.touches[0];
+                const deltaY = touch.clientY - lastTouch.y;
+                lastTouch = { x: touch.clientX, y: touch.clientY };
                 event.preventDefault();
                 event.stopPropagation();
-                sendTouchScroll(deltaY > 0 ? 'scroll-up' : 'scroll-down');
-                touchStartY = currentY;
+
+                wheelRemainder += deltaY;
+                const step = WHEEL_ROWS_PER_STEP * terminalCellHeight();
+                while (Math.abs(wheelRemainder) >= step) {
+                    // Finger moving down reveals earlier lines: wheel up, which
+                    // is a negative deltaY.
+                    const wheelDirection = wheelRemainder > 0 ? -1 : 1;
+                    wheelRemainder += wheelDirection * step;
+                    emitScrollStep(wheelDirection, step, touch.clientX, touch.clientY);
+                }
             };
 
             const clearTouchStart = () => {
-                touchStartY = null;
+                lastTouch = null;
+                wheelRemainder = 0;
             };
 
             listen('touchstart', handleTouchStart, { capture: true, passive: true });
@@ -3225,7 +3277,7 @@
                 while (listeners.length > 0) {
                     listeners.pop()();
                 }
-                touchStartY = null;
+                lastTouch = null;
                 if (iframeWindow.__codexMobileScrollCleanup === cleanup) {
                     delete iframeWindow.__codexMobileScrollCleanup;
                 }

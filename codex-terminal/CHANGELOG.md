@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.6.4
+
+- Fix mobile touch scrolling. Finger drags previously posted one full-page
+  tmux jump to the server per 54 pixels of travel, serialized behind HTTP
+  round-trips — quantized, laggy, and error-prone. Drags now synthesize local
+  mouse-wheel input that xterm forwards to tmux as wheel reports (or applies
+  to its own scrollback when no application mouse mode is active), so content
+  tracks the finger line-by-line with no network traffic. The PgUp/PgDn/Bottom
+  keys and the keyboard-open return-to-prompt behavior are unchanged.
+- Reclaim vertical space on phones: the title row is hidden on touch layouts,
+  header buttons share one row instead of two, and an empty status line no
+  longer reserves its own row — roughly 80 more pixels of terminal. Shorten
+  the mobile input placeholders that clipped mid-word, remove the
+  permanently hidden floating scroll buttons, and size the app against
+  dynamic-viewport units so the layout stays correct while the mobile URL
+  bar collapses.
+
 ## 2.6.3
 
 - Fix copy-on-highlight failing for careful selections. Browsers only permit
