@@ -259,6 +259,28 @@ function getPaneInMode(callback, target = activeTmuxTarget()) {
     });
 }
 
+// tmux prints one line per attached client. Every browser holding the shared
+// window open is one client, so this is how many devices are currently
+// constraining the window size.
+function countTmuxClients(stdout) {
+    return String(stdout || '')
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .length;
+}
+
+function readAttachedClientCount(callback) {
+    runTmux(['list-clients', '-t', TMUX_SESSION, '-F', '#{client_name}'], (err, stdout) => {
+        if (err) {
+            callback(err);
+            return;
+        }
+
+        callback(null, countTmuxClients(stdout));
+    });
+}
+
 function cancelCopyModeIfNeeded(callback, target = activeTmuxTarget()) {
     getPaneInMode((modeErr, inMode) => {
         if (modeErr) {
@@ -2696,6 +2718,22 @@ app.post('/change-desk/mall-cop', async (req, res) => {
 
 app.get('/terminal-mode', (req, res) => {
     res.json({ success: true, mode: activeTerminalMode });
+});
+
+// How many browsers are currently attached. The page uses this to decide
+// whether a backgrounded tab should release its terminal client: a lone client
+// stays attached (so a single device never reloads on return), while additional
+// clients release so the visible device is not sized down to fit a screen
+// nobody is looking at.
+app.get('/terminal-clients', (req, res) => {
+    readAttachedClientCount((err, count) => {
+        if (err) {
+            console.error('Failed to count terminal clients:', err.message);
+            return res.status(502).json({ success: false, error: 'Failed to count terminal clients' });
+        }
+
+        res.json({ success: true, count });
+    });
 });
 
 app.post('/terminal-mode', (req, res) => {

@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.6.5
+
+- Stop a terminal left open on a second device from shrinking the view on the
+  device in use. Every browser attaches its own terminal client and tmux sizes
+  the single shared window to whichever client acted last, so an idle phone
+  tab could pin the desktop to phone width. A backgrounded tab now releases its
+  terminal client once at least one other device is still attached, and
+  reattaches when shown again, so the visible device drives the size. A lone
+  device never releases, so single-device use never reloads on return. tmux is
+  also pinned to `window-size latest` so the most recently used client wins
+  when two are visible at once. Adds a `GET /terminal-clients` count endpoint
+  behind the existing ingress guard.
+
 ## 2.6.4
 
 - Fix mobile touch scrolling. Finger drags previously posted one full-page

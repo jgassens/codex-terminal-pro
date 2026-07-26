@@ -1193,16 +1193,105 @@
                 loadTerminal();
             });
 
+        // Use an ingress-aware absolute path to avoid //terminal/ when Home
+        // Assistant serves the add-on from a double-slash ingress base URL.
+        const TERMINAL_EMBED_PATH = 'terminal/?embedded=1';
+
         function loadTerminal() {
             const iframe = document.getElementById('terminal-frame');
-            // Use an ingress-aware absolute path to avoid //terminal/ when Home
-            // Assistant serves the add-on from a double-slash ingress base URL.
             iframe.addEventListener('load', () => {
                 scheduleTerminalViewportSync(false);
             });
             installTerminalSelectionCopy();
-            iframe.src = ingressPath('terminal/?embedded=1');
+            iframe.src = ingressPath(TERMINAL_EMBED_PATH);
         }
+
+        // Every open browser attaches its own terminal client, and tmux sizes
+        // the one shared window to the client that acted last. A tab left open
+        // on a phone would otherwise keep the window at phone size while the
+        // desktop is the screen actually in use. When a tab is backgrounded and
+        // other clients remain, it releases its terminal so only the visible
+        // devices constrain the size; it reattaches when shown again.
+        const HIDDEN_DETACH_DELAY_MS = 3000;
+        let terminalDetachedForVisibility = false;
+        let visibilityDetachTimer = null;
+
+        function detachTerminalForVisibility() {
+            const iframe = document.getElementById('terminal-frame');
+            if (!iframe || terminalDetachedForVisibility) {
+                return;
+            }
+
+            terminalDetachedForVisibility = true;
+            // Blanking the frame closes ttyd's WebSocket, which ends this
+            // browser's tmux client so the remaining devices regain the size.
+            iframe.src = 'about:blank';
+        }
+
+        function reattachTerminalAfterVisibility() {
+            const iframe = document.getElementById('terminal-frame');
+            if (!iframe || !terminalDetachedForVisibility) {
+                return;
+            }
+
+            terminalDetachedForVisibility = false;
+            iframe.addEventListener('load', () => {
+                // This client just reattached and should own the shared size;
+                // land on the live prompt.
+                scheduleTerminalViewportSync(true);
+            }, { once: true });
+            iframe.src = ingressPath(TERMINAL_EMBED_PATH);
+        }
+
+        async function attachedTerminalClientCount() {
+            try {
+                const response = await fetch(ingressPath('terminal-clients'), {
+                    headers: { 'Accept': 'application/json' }
+                });
+                if (!response.ok) {
+                    return null;
+                }
+
+                const result = await response.json();
+                return Number.isInteger(result?.count) ? result.count : null;
+            } catch (err) {
+                console.log('Could not read terminal client count:', err);
+                return null;
+            }
+        }
+
+        function handleTerminalVisibilityChange() {
+            if (document.hidden) {
+                if (visibilityDetachTimer) {
+                    clearTimeout(visibilityDetachTimer);
+                }
+
+                // Wait before releasing so a momentary tab switch does not
+                // trigger a reload on return.
+                visibilityDetachTimer = setTimeout(async () => {
+                    visibilityDetachTimer = null;
+                    if (!document.hidden) {
+                        return;
+                    }
+
+                    const count = await attachedTerminalClientCount();
+                    // Only release when another device is actually attached, so
+                    // a lone client is never reloaded on return.
+                    if (document.hidden && count !== null && count > 1) {
+                        detachTerminalForVisibility();
+                    }
+                }, HIDDEN_DETACH_DELAY_MS);
+                return;
+            }
+
+            if (visibilityDetachTimer) {
+                clearTimeout(visibilityDetachTimer);
+                visibilityDetachTimer = null;
+            }
+            reattachTerminalAfterVisibility();
+        }
+
+        document.addEventListener('visibilitychange', handleTerminalVisibilityChange);
 
         const status = document.getElementById('status');
         const terminalModeButtons = Array.from(document.querySelectorAll('[data-terminal-mode]'));

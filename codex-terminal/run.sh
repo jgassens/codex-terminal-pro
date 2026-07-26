@@ -355,7 +355,7 @@ install_tools() {
 
 log_startup_diagnostics() {
     local app_name="${APP_NAME:-${ADDON_NAME:-Codex Terminal Pro}}"
-    local app_version="${BUILD_VERSION:-${APP_VERSION:-2.6.4}}"
+    local app_version="${BUILD_VERSION:-${APP_VERSION:-2.6.5}}"
 
     bashio::log.info "Startup diagnostics:"
     bashio::log.info "  - Date: $(date)"
@@ -834,6 +834,10 @@ set -g mouse on
 set -g history-limit ${history_limit}
 set -g status off
 set -g escape-time 10
+# When several devices are attached, size the shared window to the client that
+# most recently interacted rather than shrinking it to the smallest screen.
+# The web UI releases backgrounded clients so the device in use stays this one.
+set -g window-size latest
 setw -g mode-keys vi
 set -s set-clipboard external
 set -as terminal-features ',xterm-256color:clipboard'
