@@ -108,9 +108,9 @@ test('OSC 52 is accepted only while armed and never duplicates the direct attemp
     assert.equal(context.consumeArmedOsc52(expired, 'late', 3501).accepted, false);
 });
 
-test('the OSC 52 parser swallows unarmed packets and stages only a trusted gesture', () => {
+test('the OSC 52 parser swallows unarmed packets and stages only armed interactions', () => {
     let handler = null;
-    const manualCopies = [];
+    const stagedCopies = [];
     const context = loadFunctions([
         'createTerminalClipboardState',
         'armTerminalClipboardInteraction',
@@ -118,7 +118,7 @@ test('the OSC 52 parser swallows unarmed packets and stages only a trusted gestu
         'decodeOsc52ClipboardData',
         'installOsc52ClipboardBridge'
     ], {
-        showManualCopy: (...args) => manualCopies.push(args),
+        stageCopyForNextGesture: (...args) => stagedCopies.push(args),
         setStatus: () => {}
     });
     const iframeWindow = {
@@ -137,13 +137,14 @@ test('the OSC 52 parser swallows unarmed packets and stages only a trusted gestu
 
     const packet = `c;${Buffer.from('trusted text').toString('base64')}`;
     assert.equal(handler(packet), true);
-    assert.equal(manualCopies.length, 0);
+    assert.equal(stagedCopies.length, 0);
     assert.equal(handler('c;not base64'), true);
 
     context.armTerminalClipboardInteraction(state, 'pointer', Date.now());
     assert.equal(handler(packet), true);
-    assert.equal(manualCopies.length, 1);
-    assert.equal(manualCopies[0][0], 'trusted text');
+    assert.equal(stagedCopies.length, 1);
+    assert.equal(stagedCopies[0][0], 'trusted text');
+    assert.equal(stagedCopies[0][1], 'osc52');
 });
 
 test('OSC 52 decoding preserves Unicode and whitespace and enforces target and size limits', () => {
@@ -213,24 +214,122 @@ test('the canonical xterm selection is returned without trimming or Unicode rewr
     );
 });
 
-test('copy failures expose the selected text and are never reported as success', () => {
+test('copy failures stage the selected text and are never reported as success', () => {
     const statuses = [];
-    const manualCopies = [];
+    const stagedCopies = [];
     const context = loadFunctions(['updateTerminalSelectionCopyStatus'], {
         setStatus: (...args) => statuses.push(args),
-        showManualCopy: (...args) => manualCopies.push(args)
+        stageCopyForNextGesture: (...args) => stagedCopies.push(args)
     });
 
     context.updateTerminalSelectionCopyStatus(false, '  keep whitespace  ');
-    assert.equal(manualCopies.length, 1);
-    assert.equal(manualCopies[0][0], '  keep whitespace  ');
-    assert.deepEqual(statuses[0], ['Copy blocked — use Copy selection', 'error', true]);
+    assert.equal(stagedCopies.length, 1);
+    assert.equal(stagedCopies[0][0], '  keep whitespace  ');
+    assert.equal(statuses.length, 0);
 
-    statuses.length = 0;
-    manualCopies.length = 0;
+    stagedCopies.length = 0;
     context.updateTerminalSelectionCopyStatus(true, 'copied');
-    assert.equal(manualCopies.length, 0);
+    assert.equal(stagedCopies.length, 0);
     assert.deepEqual(statuses[0], ['Copied terminal selection', 'success', false]);
+});
+
+test('staged copies complete on the next trusted gesture and clear the stage', async () => {
+    const statuses = [];
+    const gestureCopies = [];
+    const context = loadFunctions([
+        'stageCopyForNextGesture',
+        'stagedCopyGestureAllowed',
+        'completeStagedCopyFromGesture'
+    ], {
+        setStatus: (...args) => statuses.push(args),
+        showManualCopy: () => {},
+        status: { style: {}, onclick: null },
+        manualCopyPanel: null,
+        stagedCopy: null,
+        STAGED_COPY_TTL_MS: 60000,
+        copyToClipboardFromGesture: (text, doc) => {
+            gestureCopies.push([text, doc]);
+            return true;
+        }
+    });
+
+    context.stageCopyForNextGesture('staged text', 'selection');
+    assert.equal(statuses.at(-1)[2], true);
+
+    const gestureDocument = {};
+    context.completeStagedCopyFromGesture({ type: 'mousedown', isTrusted: true }, gestureDocument);
+    await Promise.resolve();
+    assert.deepEqual(gestureCopies, [['staged text', gestureDocument]]);
+    assert.deepEqual(statuses.at(-1), ['Copied terminal selection', 'success', false]);
+
+    // The stage is cleared; a second gesture must not copy again.
+    context.completeStagedCopyFromGesture({ type: 'mousedown', isTrusted: true }, gestureDocument);
+    await Promise.resolve();
+    assert.equal(gestureCopies.length, 1);
+});
+
+test('a failed staged completion keeps the text staged for the next gesture', async () => {
+    const gestureCopies = [];
+    const context = loadFunctions([
+        'stageCopyForNextGesture',
+        'stagedCopyGestureAllowed',
+        'completeStagedCopyFromGesture'
+    ], {
+        setStatus: () => {},
+        showManualCopy: () => {},
+        status: { style: {}, onclick: null },
+        manualCopyPanel: null,
+        stagedCopy: null,
+        STAGED_COPY_TTL_MS: 60000,
+        copyToClipboardFromGesture: (text) => {
+            gestureCopies.push(text);
+            return false;
+        }
+    });
+
+    context.stageCopyForNextGesture('sticky text', 'selection');
+    context.completeStagedCopyFromGesture({ type: 'mousedown', isTrusted: true }, {});
+    await Promise.resolve();
+    context.completeStagedCopyFromGesture({ type: 'mousedown', isTrusted: true }, {});
+    await Promise.resolve();
+    assert.deepEqual(gestureCopies, ['sticky text', 'sticky text']);
+});
+
+test('staged completion ignores untrusted events, shortcut chords, and expired stages', () => {
+    const gestureCopies = [];
+    let now = 1000;
+    const context = loadFunctions([
+        'stageCopyForNextGesture',
+        'stagedCopyGestureAllowed',
+        'completeStagedCopyFromGesture'
+    ], {
+        setStatus: () => {},
+        showManualCopy: () => {},
+        status: { style: {}, onclick: null },
+        manualCopyPanel: null,
+        stagedCopy: null,
+        STAGED_COPY_TTL_MS: 60000,
+        Date: { now: () => now },
+        copyToClipboardFromGesture: (text) => {
+            gestureCopies.push(text);
+            return true;
+        }
+    });
+
+    context.stageCopyForNextGesture('guarded text', 'selection');
+    context.completeStagedCopyFromGesture({ type: 'mousedown', isTrusted: false }, {});
+    context.completeStagedCopyFromGesture({ type: 'keydown', isTrusted: true, key: 'Meta' }, {});
+    context.completeStagedCopyFromGesture({ type: 'keydown', isTrusted: true, key: 'c', metaKey: true }, {});
+    assert.equal(gestureCopies.length, 0);
+
+    now += 60001;
+    context.completeStagedCopyFromGesture({ type: 'mousedown', isTrusted: true }, {});
+    assert.equal(gestureCopies.length, 0);
+
+    // Expiry cleared the stage entirely.
+    now += 1;
+    context.completeStagedCopyFromGesture({ type: 'mousedown', isTrusted: true }, {});
+    assert.equal(gestureCopies.length, 0);
 });
 
 test('gesture copy starts Clipboard API before the synchronous Safari fallback', async () => {
@@ -279,7 +378,7 @@ test('Clipboard API is attempted immediately when the synchronous fallback is un
     assert.equal(clipboardAttempts, 1);
 });
 
-test('gesture copy uses the clipboard from the frame that received the gesture', async () => {
+test('gesture copy prefers the gesture frame clipboard and retries through the top frame', async () => {
     const attempts = [];
     const context = loadFunctions([
         'clipboardWritePolicyAllows',
@@ -301,6 +400,45 @@ test('gesture copy uses the clipboard from the frame that received the gesture',
                 clipboard: {
                     writeText: async () => {
                         attempts.push('terminal-frame');
+                        throw new Error('subframe clipboard denied');
+                    }
+                }
+            }
+        }
+    };
+
+    // The terminal frame's write is attempted first; when it is denied and the
+    // synchronous fallback also fails, the top-level navigator is the rescue.
+    assert.equal(await context.copyToClipboardFromGesture('text', clipboardDocument), true);
+    assert.deepEqual(attempts, ['terminal-frame', 'parent']);
+});
+
+test('the top-frame clipboard is not retried after a successful synchronous fallback', async () => {
+    const attempts = [];
+    const context = loadFunctions([
+        'clipboardWritePolicyAllows',
+        'copyToClipboardFromGesture'
+    ], {
+        navigator: {
+            clipboard: {
+                writeText: async () => {
+                    attempts.push('parent');
+                }
+            }
+        },
+        document: {},
+        fallbackCopyToClipboard: () => {
+            attempts.push('fallback');
+            return true;
+        }
+    });
+    const clipboardDocument = {
+        defaultView: {
+            navigator: {
+                clipboard: {
+                    writeText: async () => {
+                        attempts.push('terminal-frame');
+                        throw new Error('subframe clipboard denied');
                     }
                 }
             }
@@ -308,7 +446,7 @@ test('gesture copy uses the clipboard from the frame that received the gesture',
     };
 
     assert.equal(await context.copyToClipboardFromGesture('text', clipboardDocument), true);
-    assert.deepEqual(attempts, ['terminal-frame']);
+    assert.deepEqual(attempts, ['terminal-frame', 'fallback']);
 });
 
 test('ingress policy denial preserves the gesture for synchronous native copy', async () => {

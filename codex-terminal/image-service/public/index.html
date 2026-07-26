@@ -1043,7 +1043,10 @@
         let lastImagePasteSignature = '';
         let lastImagePasteAt = 0;
         let touchSelectionMode = false;
-        const OSC52_CLIPBOARD_ARM_MS = 2500;
+        // Long enough to cover a careful multi-second drag between the arming
+        // mousedown and the OSC 52 packet tmux emits at drag end.
+        const OSC52_CLIPBOARD_ARM_MS = 15000;
+        const STAGED_COPY_TTL_MS = 60000;
         const OSC52_MAX_BYTES = 256 * 1024;
         const OSC52_MAX_ENCODED_LENGTH = Math.ceil(OSC52_MAX_BYTES / 3) * 4;
         const handledImagePasteEvents = new WeakSet();
@@ -2900,7 +2903,14 @@
                     : null;
             };
 
-            const cancelDraggedTerminalText = () => {
+            const cancelDraggedTerminalText = (event) => {
+                // mouseleave fires for every element boundary the pointer
+                // exits and capture listeners see all of them. Only a
+                // document-level exit (no relatedTarget) means the drag
+                // actually left the page.
+                if (event?.relatedTarget) {
+                    return;
+                }
                 disarmTerminalClipboardInteraction(clipboardState, dragInteractionId);
                 dragStartCell = null;
                 dragInteractionId = null;
@@ -3053,6 +3063,21 @@
             listen(iframeDocument, 'mousedown', rememberDragStart, true);
             listen(iframeDocument, 'mouseup', finishDraggedTerminalText, true);
             listen(iframeDocument, 'mouseleave', cancelDraggedTerminalText, true);
+            // tmux copy-mode is keyboard driven; the keystroke that triggers a
+            // copy (for example vi-mode "y") must arm the OSC 52 bridge just
+            // like a pointer gesture does.
+            listen(iframeDocument, 'keydown', (event) => {
+                const modifierKeys = ['Shift', 'Control', 'Alt', 'Meta', 'CapsLock'];
+                if (event.isTrusted !== false && !modifierKeys.includes(event.key)) {
+                    armTerminalClipboardInteraction(clipboardState, 'keyboard');
+                }
+            }, true);
+            listen(iframeDocument, 'mousedown', (event) => {
+                completeStagedCopyFromGesture(event, iframeDocument);
+            }, true);
+            listen(iframeDocument, 'keydown', (event) => {
+                completeStagedCopyFromGesture(event, iframeDocument);
+            }, true);
             listen(iframeDocument, 'touchstart', rememberTouchSelectionStart, { capture: true, passive: false });
             listen(iframeDocument, 'touchmove', updateTouchSelection, { capture: true, passive: false });
             listen(iframeDocument, 'touchcancel', cancelTouchSelection, { capture: true, passive: false });
@@ -3258,10 +3283,10 @@
                     return true;
                 }
 
-                // Parser callbacks do not carry browser user activation. Stage
-                // the bounded, recently armed selection behind a real Copy click.
-                showManualCopy(text, 'Terminal selection is ready. Tap Copy selection to place it on the clipboard.');
-                setStatus('Selection ready — tap Copy selection', '', true);
+                // Parser callbacks do not carry browser user activation, so no
+                // clipboard API can write here. Stage the bounded, recently
+                // armed selection; the next trusted gesture completes the copy.
+                stageCopyForNextGesture(text, 'osc52', 'Terminal copy ready — click or press a key to finish copying');
                 return true;
             });
             iframeWindow.__codexOsc52ClipboardInstalled = true;
@@ -3534,12 +3559,102 @@
                 return;
             }
 
-            showManualCopy(
-                selectedText,
-                'Automatic copy was blocked. Tap Copy selection, or select the text below and use Copy.'
-            );
-            setStatus('Copy blocked — use Copy selection', 'error', true);
+            stageCopyForNextGesture(selectedText, 'selection');
         }
+
+        // Browsers only allow clipboard writes while a user gesture is
+        // "transiently active". Chrome activates on mousedown and expires the
+        // activation after ~5 seconds without ever re-activating on mouse
+        // release, so a careful drag-selection reaches mouseup with no
+        // clipboard privilege at all and every write API fails. The text is
+        // staged here instead and the copy completes silently inside the next
+        // trusted gesture (a click or keystroke), which carries a fresh
+        // activation.
+        let stagedCopy = null;
+
+        function stageCopyForNextGesture(text, source, message) {
+            if (typeof text !== 'string' || text.length === 0) {
+                return;
+            }
+
+            stagedCopy = { text, source, stagedAt: Date.now() };
+            setStatus(message || 'Selection ready — click or press a key to finish copying', '', true);
+            status.style.cursor = 'pointer';
+            status.onclick = () => {
+                // The mousedown that precedes this click already attempted the
+                // staged copy; give its asynchronous writes a moment to land
+                // before falling back to the manual panel.
+                const staged = stagedCopy;
+                setTimeout(() => {
+                    if (staged && stagedCopy === staged) {
+                        showManualCopy(staged.text, 'Tap Copy selection to place it on the clipboard.');
+                    }
+                }, 250);
+            };
+        }
+
+        function stagedCopyGestureAllowed(event) {
+            if (!stagedCopy || event.isTrusted === false) {
+                return false;
+            }
+
+            if (event.type === 'keydown') {
+                const modifierKeys = ['Shift', 'Control', 'Alt', 'Meta', 'CapsLock'];
+                // Skip shortcut chords so a native Command-C copy of the live
+                // selection is not raced by the staged write.
+                if (modifierKeys.includes(event.key) || event.metaKey || event.ctrlKey) {
+                    return false;
+                }
+            }
+
+            // Gestures inside the manual copy panel express their own intent;
+            // its Copy button must stay the only writer for that flow.
+            if (manualCopyPanel && event.target instanceof Node && manualCopyPanel.contains(event.target)) {
+                return false;
+            }
+
+            return true;
+        }
+
+        function completeStagedCopyFromGesture(event, gestureDocument) {
+            if (!stagedCopyGestureAllowed(event)) {
+                return;
+            }
+
+            const pending = stagedCopy;
+            if (Date.now() - pending.stagedAt > STAGED_COPY_TTL_MS) {
+                stagedCopy = null;
+                return;
+            }
+
+            let result;
+            try {
+                result = copyToClipboardFromGesture(pending.text, gestureDocument);
+            } catch (err) {
+                console.log('Staged clipboard copy failed:', err);
+                result = false;
+            }
+
+            Promise.resolve(result)
+                .then((copied) => {
+                    // A failed attempt stays staged so the next gesture retries.
+                    if (!copied || stagedCopy !== pending) {
+                        return;
+                    }
+                    stagedCopy = null;
+                    setStatus('Copied terminal selection', 'success', false);
+                })
+                .catch((err) => {
+                    console.log('Staged clipboard copy failed:', err);
+                });
+        }
+
+        document.addEventListener('mousedown', (event) => {
+            completeStagedCopyFromGesture(event, document);
+        }, true);
+        document.addEventListener('keydown', (event) => {
+            completeStagedCopyFromGesture(event, document);
+        }, true);
 
         function newSameCellTerminalSelection(initialSelection, currentSelection) {
             const before = String(initialSelection || '');
@@ -3590,10 +3705,39 @@
             // is skipped so it cannot consume Safari's one transient activation
             // before this synchronous native-copy fallback runs.
             const fallbackCopied = fallbackCopyToClipboard(text, clipboardDocument);
-            if (!clipboardWrite) {
+
+            // Some browsers deny the clipboard permission to the terminal
+            // subframe while still granting it to the embedding page, and the
+            // gesture activates every ancestor window. Only after the
+            // synchronous fallback has had its chance, retry through the
+            // top-level navigator.
+            let topClipboardWrite = null;
+            if (
+                !fallbackCopied &&
+                clipboardNavigator !== navigator &&
+                clipboardWritePolicyAllows(document) &&
+                navigator.clipboard &&
+                navigator.clipboard.writeText
+            ) {
+                try {
+                    topClipboardWrite = Promise.resolve(navigator.clipboard.writeText(text))
+                        .then(() => true)
+                        .catch((err) => {
+                            console.log('Top-frame Clipboard API failed:', err);
+                            return false;
+                        });
+                } catch (err) {
+                    console.log('Top-frame Clipboard API failed:', err);
+                }
+            }
+
+            if (!clipboardWrite && !topClipboardWrite) {
                 return fallbackCopied;
             }
-            return clipboardWrite.then((copied) => copied || fallbackCopied);
+            return Promise.all([
+                clipboardWrite || Promise.resolve(false),
+                topClipboardWrite || Promise.resolve(false)
+            ]).then(([frameCopied, topCopied]) => frameCopied || topCopied || fallbackCopied);
         }
 
         function copyToClipboardFromExplicitControl(text, clipboardDocument = document) {
@@ -3997,11 +4141,14 @@
             let selection = null;
             let copyEventHandled = false;
             let onCopy = null;
+            let previousActiveElement = null;
 
             try {
                 if (!clipboardDocument?.body || typeof clipboardDocument.createElement !== 'function') {
                     return false;
                 }
+
+                previousActiveElement = clipboardDocument.activeElement || null;
 
                 if (
                     typeof clipboardDocument.addEventListener === 'function' &&
@@ -4054,6 +4201,21 @@
                     textArea.parentNode.removeChild(textArea);
                 }
                 selection?.removeAllRanges();
+                // Removing the focused helper textarea would otherwise drop
+                // focus onto the body, leaving the terminal deaf to keystrokes
+                // until the user clicks it again.
+                if (
+                    previousActiveElement &&
+                    previousActiveElement.isConnected !== false &&
+                    typeof previousActiveElement.focus === 'function' &&
+                    previousActiveElement !== clipboardDocument.body
+                ) {
+                    try {
+                        previousActiveElement.focus({ preventScroll: true });
+                    } catch (focusErr) {
+                        console.log('Could not restore focus after copy:', focusErr);
+                    }
+                }
             }
         }
 

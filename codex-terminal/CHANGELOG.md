@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.6.3
+
+- Fix copy-on-highlight failing for careful selections. Browsers only permit
+  clipboard writes for ~5 seconds after mousedown and a mouse release never
+  renews that permission, so any drag longer than that reached mouseup with
+  every clipboard API blocked and popped the manual-copy dialog. Failed copies
+  are now staged and complete silently on the next click or keystroke, which
+  carries fresh permission; the status bar shows the pending state and still
+  offers the manual dialog on demand.
+- Also try the embedding page's Clipboard API when the terminal frame's write
+  is denied, keep keyboard focus in the terminal after every copy instead of
+  dropping it on the page body, accept tmux OSC 52 copies triggered from
+  copy-mode keyboard bindings (for example vi-mode `y`), extend the OSC 52
+  acceptance window to survive slow drags, and stop canceling drag tracking
+  when the pointer merely crosses element boundaries inside the terminal.
+
 ## 2.6.2
 
 - Fix copy-on-highlight inside Home Assistant ingress, where the outer add-on
