@@ -112,6 +112,81 @@ ensure_codex_tui_defaults
             self.assertEqual(config.read_text(encoding="utf-8"), original)
             self.assertEqual(result.stderr.count("left unchanged"), 6)
 
+    def run_execution_defaults(self, codex_home: Path, option_value: str) -> subprocess.CompletedProcess[str]:
+        command = r'''
+function bashio::log.info() { :; }
+function bashio::log.warning() { printf '%s\n' "$1" >&2; }
+function bashio::config() { printf '%s\n' "$CODEX_FULL_ACCESS_OPTION"; }
+export CODEX_TERMINAL_RUN_LIBRARY_ONLY=true
+. "$RUN_SCRIPT"
+ensure_codex_execution_defaults
+'''
+        return subprocess.run(
+            ["bash", "-c", command],
+            env={
+                **os.environ,
+                "CODEX_HOME": str(codex_home),
+                "CODEX_CONFIG_SET_BIN": str(CONFIG_SET),
+                "RUN_SCRIPT": str(RUN_SCRIPT),
+                "CODEX_FULL_ACCESS_OPTION": option_value,
+            },
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    def test_execution_defaults_enforce_full_access_without_touching_tables(self) -> None:
+        original = (
+            'model = "gpt-5.3-codex"\n'
+            'approval_policy = "on-request"\n'
+            "\n"
+            "[profiles.safe]\n"
+            'approval_policy = "untrusted"\n'
+            'sandbox_mode = "read-only"\n'
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            codex_home = Path(directory) / "codex-home"
+            codex_home.mkdir()
+            config = codex_home / "config.toml"
+            config.write_text(original, encoding="utf-8")
+
+            result = self.run_execution_defaults(codex_home, "true")
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            parsed = tomllib.loads(config.read_text(encoding="utf-8"))
+            self.assertEqual(parsed["approval_policy"], "never")
+            self.assertEqual(parsed["sandbox_mode"], "danger-full-access")
+            self.assertEqual(parsed["model"], "gpt-5.3-codex")
+            self.assertEqual(
+                parsed["profiles"]["safe"],
+                {"approval_policy": "untrusted", "sandbox_mode": "read-only"},
+            )
+
+    def test_execution_defaults_create_missing_config(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            codex_home = Path(directory) / "codex-home"
+            codex_home.mkdir()
+
+            result = self.run_execution_defaults(codex_home, "true")
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            parsed = tomllib.loads((codex_home / "config.toml").read_text(encoding="utf-8"))
+            self.assertEqual(parsed["approval_policy"], "never")
+            self.assertEqual(parsed["sandbox_mode"], "danger-full-access")
+
+    def test_execution_defaults_opt_out_leaves_config_alone(self) -> None:
+        original = 'approval_policy = "untrusted"\nsandbox_mode = "read-only"\n'
+        with tempfile.TemporaryDirectory() as directory:
+            codex_home = Path(directory) / "codex-home"
+            codex_home.mkdir()
+            config = codex_home / "config.toml"
+            config.write_text(original, encoding="utf-8")
+
+            result = self.run_execution_defaults(codex_home, "false")
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(config.read_text(encoding="utf-8"), original)
+
     def test_mutators_never_follow_config_or_lock_symlinks(self) -> None:
         for linked_name in ("config.toml", ".codex-terminal-config.lock"):
             with self.subTest(linked_name=linked_name), tempfile.TemporaryDirectory() as directory:

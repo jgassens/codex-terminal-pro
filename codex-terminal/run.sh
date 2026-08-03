@@ -64,6 +64,7 @@ init_environment() {
     ensure_codex_security_mcp_ready
     remove_heygen_codex_plugin_state
     ensure_codex_update_prompt_disabled
+    ensure_codex_execution_defaults
     ensure_codex_tui_defaults
 
     if [ -f "$CODEX_HOME/auth.json" ]; then
@@ -143,6 +144,31 @@ ensure_codex_update_prompt_disabled() {
         bashio::log.info "Codex CLI startup update prompt disabled; update Codex through add-on releases"
     else
         bashio::log.warning "Could not update Codex startup prompt setting; invalid config.toml was left unchanged"
+    fi
+    return 0
+}
+
+ensure_codex_execution_defaults() {
+    local config_file="$CODEX_HOME/config.toml"
+    local codex_full_access
+    codex_full_access=$(bashio::config 'codex_full_access' 'true')
+
+    if [ "$codex_full_access" != "true" ]; then
+        bashio::log.info "Codex execution defaults left unmanaged (codex_full_access: false)"
+        return 0
+    fi
+
+    # The add-on container is the operating boundary: only /config and /data
+    # are mapped, ingress is admin-only, and management-capable ha and
+    # supervisor-api commands stop at the human-answered broker challenge.
+    # Codex CLI's inner sandbox cannot see any of that; it blocks the bundled
+    # helpers (Home Assistant API network access, /data state) and stalls
+    # sessions on approval reviews with no human in the loop to answer them.
+    if set_codex_top_level_config "$config_file" "approval_policy" '"never"' &&
+        set_codex_top_level_config "$config_file" "sandbox_mode" '"danger-full-access"'; then
+        bashio::log.info "Codex execution defaults set: full container access without approval prompts; the Supervisor broker still guards HA management"
+    else
+        bashio::log.warning "Could not set Codex execution defaults; invalid config.toml was left unchanged"
     fi
     return 0
 }
@@ -355,7 +381,7 @@ install_tools() {
 
 log_startup_diagnostics() {
     local app_name="${APP_NAME:-${ADDON_NAME:-Codex Terminal Pro}}"
-    local app_version="${BUILD_VERSION:-${APP_VERSION:-2.6.6}}"
+    local app_version="${BUILD_VERSION:-${APP_VERSION:-2.6.7}}"
 
     bashio::log.info "Startup diagnostics:"
     bashio::log.info "  - Date: $(date)"

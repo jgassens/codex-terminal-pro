@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.6.7
+
+- Stop Codex from fighting its own sandbox inside the add-on. Codex CLI's
+  inner sandbox and approval flow cannot see the add-on's real boundaries, so
+  sessions stalled on automatic approval reviews that sometimes denied even
+  bundled read-only helpers (`ha-site-memory status`, `ha-api`, ...), and
+  sandboxed helper runs returned empty output because they need Home Assistant
+  API network access and `/data` state. Startup now sets
+  `approval_policy = "never"` and `sandbox_mode = "danger-full-access"` in the
+  persistent Codex config on every boot. The container remains the operating
+  boundary — only `/config` and `/data` are mapped, ingress stays admin-only,
+  and management-capable `ha` and `supervisor-api` commands still stop at the
+  human-answered Supervisor broker challenge. Mall Cop is unchanged; it always
+  runs `codex exec` with `--ignore-user-config --sandbox read-only` inside its
+  jail. Set the new `codex_full_access: false` option to keep those two keys
+  under your own control.
+
 ## 2.6.6
 
 - Fix Change Desk failing with "Cross-origin Change Desk access is not

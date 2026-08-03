@@ -243,6 +243,7 @@ are not changed.
 
 ```yaml
 auto_launch_codex: true
+codex_full_access: true
 terminal_transcript_enabled: true
 terminal_transcript_max_bytes: 1048576
 terminal_transcript_backups: 2
@@ -264,6 +265,19 @@ supervisor_broker_t1_ttl_seconds: 120
 persistent_apk_packages: []
 persistent_pip_packages: []
 ```
+
+`codex_full_access` keeps Codex CLI's own approval prompts and inner sandbox
+out of the way. On every boot the add-on sets `approval_policy = "never"` and
+`sandbox_mode = "danger-full-access"` in `/data/.codex/config.toml`. The add-on
+container is the operating boundary: only `/config` and `/data` are mapped,
+ingress is admin-only, and management-capable `ha` and `supervisor-api`
+commands still stop at the human-answered Supervisor broker challenge. Without
+this, Codex's inner sandbox blocks the bundled helpers (they need Home
+Assistant API network access and `/data` state) and sessions stall on
+automatic approval reviews with no human in the loop. Change Desk's Mall Cop
+is unaffected: it always runs `codex exec` with `--ignore-user-config
+--sandbox read-only` inside its jail. Set `codex_full_access: false` to leave
+those two keys under your own control in `/data/.codex/config.toml`.
 
 Terminal transcript logging stays enabled by default for debugging, but the log
 rotates under `/data/logs`. Uploaded images stay in `/data/images` long enough
