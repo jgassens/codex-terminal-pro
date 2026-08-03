@@ -72,10 +72,31 @@ function requestExternalProtocol(req) {
     return req?.socket?.encrypted ? 'https' : 'http';
 }
 
+function normalizedHeaderToken(req, name) {
+    return String(requestHeader(req, name) || '').trim().toLowerCase();
+}
+
+function requestHostCandidates(req) {
+    const candidates = [];
+    const host = normalizedHeaderToken(req, 'host');
+    if (host) {
+        candidates.push(host);
+    }
+    // Proxy chains in front of Home Assistant can rewrite Host, but ingress
+    // always records the browser-facing host in X-Forwarded-Host. Only trusted
+    // ingress peers reach these routes, so the header is as reliable as Host.
+    // The first entry is the client-facing host when chained proxies append.
+    const forwardedHost = normalizedHeaderToken(req, 'x-forwarded-host').split(',')[0].trim();
+    if (forwardedHost && !candidates.includes(forwardedHost)) {
+        candidates.push(forwardedHost);
+    }
+    return candidates;
+}
+
 function headerMatchesRequestHost(req, headerName) {
     const value = requestHeader(req, headerName);
-    const host = requestHeader(req, 'host');
-    if (!value || !host) {
+    const hosts = requestHostCandidates(req);
+    if (!value || hosts.length === 0) {
         return false;
     }
 
@@ -86,13 +107,27 @@ function headerMatchesRequestHost(req, headerName) {
             parsed.protocol === `${externalProtocol}:` &&
             !parsed.username &&
             !parsed.password &&
-            parsed.host.toLowerCase() === String(host).trim().toLowerCase();
+            hosts.includes(parsed.host.toLowerCase());
     } catch {
         return false;
     }
 }
 
 function isSameOriginBrowserRequest(req) {
+    // Sec-Fetch-Site is attached by the browser itself and cannot be forged by
+    // page scripts, so it is the strongest same-origin proof available. It is
+    // also the only signal that survives every deployment: same-origin GET
+    // fetches carry no Origin header at all, and privacy-focused browsers,
+    // extensions, and proxies can strip Referer, which previously left nothing
+    // for this check to verify.
+    const fetchSite = normalizedHeaderToken(req, 'sec-fetch-site');
+    if (fetchSite === 'same-origin') {
+        return true;
+    }
+    if (fetchSite === 'same-site' || fetchSite === 'cross-site') {
+        return false;
+    }
+
     const origin = requestHeader(req, 'origin');
     const referer = requestHeader(req, 'referer');
     if (!origin && !referer) {

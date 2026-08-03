@@ -142,6 +142,51 @@ test('explicit loopback development mode still enforces same-origin upload check
     assert.equal(fs.readdirSync(path.join(directory, 'uploads')).length, 2);
 });
 
+test('Change Desk accepts browser Sec-Fetch-Site proof when Origin and Referer are absent', async (t) => {
+    const { baseUrl } = await startServer(t, true);
+
+    // Same-origin GET fetches carry no Origin header, and privacy tooling can
+    // strip Referer entirely; the panel must still open.
+    const bare = await fetch(`${baseUrl}/change-desk/summary`);
+    assert.equal(bare.status, 403);
+    assert.match((await bare.json()).error, /Cross-origin Change Desk access/);
+
+    const trusted = await fetch(`${baseUrl}/change-desk/report`, {
+        method: 'POST',
+        headers: {
+            'Sec-Fetch-Site': 'same-origin',
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ report: 'sec-fetch-site provenance check' })
+    });
+    assert.equal(trusted.status, 200);
+    assert.equal((await trusted.json()).success, true);
+
+    const crossSite = await fetch(`${baseUrl}/change-desk/report`, {
+        method: 'POST',
+        headers: {
+            'Sec-Fetch-Site': 'cross-site',
+            Origin: baseUrl,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ report: 'should be rejected' })
+    });
+    assert.equal(crossSite.status, 403);
+
+    // A proxy chain that rewrites Host still matches through X-Forwarded-Host.
+    const forwardedHost = await fetch(`${baseUrl}/change-desk/report`, {
+        method: 'POST',
+        headers: {
+            'X-Forwarded-Host': 'ha.example.com',
+            'X-Forwarded-Proto': 'http',
+            Referer: 'http://ha.example.com/api/hassio_ingress/token/',
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ report: 'forwarded host provenance check' })
+    });
+    assert.equal(forwardedHost.status, 200);
+});
+
 test('Change Desk reports redact fine-grained GitHub tokens and JWTs', async (t) => {
     const { baseUrl } = await startServer(t, true);
     const githubToken = 'github_pat_abcdefghijklmnopqrstuvwxyz0123456789';

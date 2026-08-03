@@ -68,6 +68,63 @@ test('sensitive browser requests require a matching Origin or Referer', () => {
     })), false);
 });
 
+test('browser-declared Sec-Fetch-Site authorizes requests with no Origin or Referer', () => {
+    const host = 'homeassistant.local:8123';
+    const httpsHeaders = { host, 'x-forwarded-proto': 'https' };
+    // Same-origin GET fetches send no Origin, and privacy tooling can strip
+    // Referer; the browser-set Sec-Fetch-Site header must carry the check.
+    assert.equal(isSameOriginBrowserRequest(request('172.30.32.2', {
+        ...httpsHeaders,
+        'sec-fetch-site': 'same-origin'
+    })), true);
+    // A browser-labeled cross-site request stays rejected even when the other
+    // provenance headers look right.
+    assert.equal(isSameOriginBrowserRequest(request('172.30.32.2', {
+        ...httpsHeaders,
+        'sec-fetch-site': 'cross-site',
+        origin: `https://${host}`,
+        referer: `https://${host}/`
+    })), false);
+    assert.equal(isSameOriginBrowserRequest(request('172.30.32.2', {
+        ...httpsHeaders,
+        'sec-fetch-site': 'same-site',
+        origin: `https://${host}`
+    })), false);
+    // Direct navigation falls back to the Origin/Referer requirement.
+    assert.equal(isSameOriginBrowserRequest(request('172.30.32.2', {
+        ...httpsHeaders,
+        'sec-fetch-site': 'none'
+    })), false);
+});
+
+test('X-Forwarded-Host restores origin matching when a proxy rewrites Host', () => {
+    const browserHost = 'ha.example.com';
+    const rewrittenHeaders = {
+        host: '172.30.32.1:8099',
+        'x-forwarded-host': browserHost,
+        'x-forwarded-proto': 'https'
+    };
+    assert.equal(isSameOriginBrowserRequest(request('172.30.32.2', {
+        ...rewrittenHeaders,
+        referer: `https://${browserHost}/api/hassio_ingress/token/`
+    })), true);
+    assert.equal(isSameOriginBrowserRequest(request('172.30.32.2', {
+        ...rewrittenHeaders,
+        'x-forwarded-host': `${browserHost}, internal.proxy`,
+        origin: `https://${browserHost}`
+    })), true);
+    assert.equal(isSameOriginBrowserRequest(request('172.30.32.2', {
+        ...rewrittenHeaders,
+        origin: 'https://evil.example'
+    })), false);
+
+    const policy = buildRequestSecurityPolicy({});
+    assert.equal(isAuthorizedWebSocketRequest(request('172.30.32.2', {
+        ...rewrittenHeaders,
+        origin: `https://${browserHost}`
+    }), policy), true);
+});
+
 test('protected POST provenance rejects a scheme downgrade and ambiguous forwarding', () => {
     const host = 'ha.example.com';
     assert.equal(isSameOriginBrowserRequest(request('172.30.32.2', {

@@ -2622,6 +2622,15 @@ app.get('/config', (req, res) => {
 
 app.get('/change-desk/summary', async (req, res) => {
     if (!isSameOriginBrowserRequest(req)) {
+        // Log header shape only; Origin/Referer values can carry the opaque
+        // ingress token path and do not belong in the add-on log.
+        console.warn('Rejected Change Desk summary provenance: ' +
+            `sec-fetch-site=${req.get('sec-fetch-site') || 'absent'} ` +
+            `origin=${req.get('origin') ? 'present' : 'absent'} ` +
+            `referer=${req.get('referer') ? 'present' : 'absent'} ` +
+            `host=${req.get('host') || 'absent'} ` +
+            `x-forwarded-host=${req.get('x-forwarded-host') || 'absent'} ` +
+            `x-forwarded-proto=${req.get('x-forwarded-proto') || 'absent'}`);
         return res.status(403).json({ success: false, error: 'Cross-origin Change Desk access is not allowed' });
     }
 

@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.6.6
+
+- Fix Change Desk failing with "Cross-origin Change Desk access is not
+  allowed". The summary endpoint is the add-on's only origin-gated GET, and
+  same-origin GET fetches carry no Origin header, so the check depended
+  entirely on the Referer surviving the trip — which privacy-focused browsers,
+  extensions, and some proxy chains strip. The same-origin check now accepts
+  the browser's own Sec-Fetch-Site header (set automatically by all modern
+  browsers and unforgeable by page scripts) as first-class proof, and also
+  matches Origin/Referer against X-Forwarded-Host so reverse proxies that
+  rewrite Host in front of Home Assistant keep working. Requests a browser
+  labels cross-site are now rejected even when other headers look right.
+
 ## 2.6.5
 
 - Stop a terminal left open on a second device from shrinking the view on the
