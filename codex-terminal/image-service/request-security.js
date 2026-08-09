@@ -1,6 +1,8 @@
 'use strict';
 
 const DEFAULT_INGRESS_PROXY_ADDRESSES = ['172.30.32.2'];
+const BROWSER_REQUEST_HEADER = 'x-codex-terminal-request';
+const BROWSER_REQUEST_VALUE = '1';
 
 function parseExplicitBoolean(value) {
     return String(value || '').trim().toLowerCase() === 'true';
@@ -115,11 +117,7 @@ function headerMatchesRequestHost(req, headerName) {
 
 function isSameOriginBrowserRequest(req) {
     // Sec-Fetch-Site is attached by the browser itself and cannot be forged by
-    // page scripts, so it is the strongest same-origin proof available. It is
-    // also the only signal that survives every deployment: same-origin GET
-    // fetches carry no Origin header at all, and privacy-focused browsers,
-    // extensions, and proxies can strip Referer, which previously left nothing
-    // for this check to verify.
+    // page scripts, so it is the strongest same-origin proof available.
     const fetchSite = normalizedHeaderToken(req, 'sec-fetch-site');
     if (fetchSite === 'same-origin') {
         return true;
@@ -130,11 +128,20 @@ function isSameOriginBrowserRequest(req) {
 
     const origin = requestHeader(req, 'origin');
     const referer = requestHeader(req, 'referer');
-    if (!origin && !referer) {
-        return false;
+    if (origin || referer) {
+        return (!origin || headerMatchesRequestHost(req, 'origin')) &&
+            (!referer || headerMatchesRequestHost(req, 'referer'));
     }
-    return (!origin || headerMatchesRequestHost(req, 'origin')) &&
-        (!referer || headerMatchesRequestHost(req, 'referer'));
+
+    // Plain-HTTP LAN origins are not "potentially trustworthy", so browsers
+    // may omit Sec-Fetch-Site. Same-origin GETs also omit Origin, and privacy
+    // controls can suppress Referer. The UI therefore supplies a fixed,
+    // non-CORS-safelisted marker. It is accepted only after the global trusted
+    // ingress-peer check and only when no browser provenance contradicts it.
+    // Cross-origin page scripts cannot attach this header unless the service
+    // opts into their CORS preflight, which it does not.
+    return !fetchSite &&
+        normalizedHeaderToken(req, BROWSER_REQUEST_HEADER) === BROWSER_REQUEST_VALUE;
 }
 
 function isAuthorizedWebSocketRequest(req, policy) {

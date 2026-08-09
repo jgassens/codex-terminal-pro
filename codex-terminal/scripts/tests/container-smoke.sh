@@ -78,7 +78,7 @@ smoke_mall_cop_jail() {
                 /opt/mall-cop-jail \
                 -- /bin/codex --version)"
         case "${output}" in
-            "codex-cli 0.144.4"|"codex 0.144.4") ;;
+            "codex-cli 0.147.0"|"codex 0.147.0") ;;
             *) printf "unexpected jailed Codex version: %s\n" "${output}" >&2; exit 1 ;;
         esac
 
@@ -110,7 +110,7 @@ smoke_mall_cop_jail() {
         exec_status=$?
         set -e
         [ "${exec_status}" -ne 126 ]
-        printf "%s\n" "${exec_output}" | grep -q "OpenAI Codex v0.144.4"
+        printf "%s\n" "${exec_output}" | grep -q "OpenAI Codex v0.147.0"
         if printf "%s\n" "${exec_output}" | grep -Eq "Codex executable path is not configured|no /proc/self/exe available"; then
             printf "jailed Codex exec did not initialize correctly:\n%s\n" "${exec_output}" >&2
             exit 1

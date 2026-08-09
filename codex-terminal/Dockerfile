@@ -1,7 +1,7 @@
 FROM ghcr.io/home-assistant/base:3.22-2026.04.0@sha256:eed9b5eff1441d4db22d5036b7802610e7fc94af8c0448439ae6dda9942d5230
 
 LABEL \
-    io.hass.version="2.6.7" \
+    io.hass.version="2.6.8" \
     io.hass.type="addon" \
     io.hass.arch="aarch64|amd64" \
     org.opencontainers.image.title="Home Assistant Add-on: Codex Terminal Pro" \
@@ -47,7 +47,7 @@ RUN apk add --no-cache \
     ttyd
 
 # Install Codex CLI.
-ARG CODEX_CLI_VERSION=0.144.4
+ARG CODEX_CLI_VERSION=0.147.0
 RUN npm install -g "@openai/codex@${CODEX_CLI_VERSION}" \
     && codex --version \
     && CODEX_NATIVE="$(find /usr/local/lib/node_modules/@openai/codex -path '*/vendor/*/bin/codex' -type f -perm -0100 | head -n 1)" \

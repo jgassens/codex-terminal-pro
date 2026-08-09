@@ -1175,6 +1175,12 @@
             return `${basePath}/${cleanPath}`;
         }
 
+        function protectedIngressFetch(path, options = {}) {
+            const headers = new Headers(options.headers || undefined);
+            headers.set('X-Codex-Terminal-Request', '1');
+            return fetch(ingressPath(path), { ...options, headers });
+        }
+
         // Fetch configuration and load ttyd
         // Use relative paths for Home Assistant ingress compatibility
         fetch(ingressPath('config'))
@@ -2051,7 +2057,7 @@
             setStatus('Collecting Change Desk snapshot...', 'success', false);
 
             try {
-                const response = await fetch(ingressPath('change-desk/summary'));
+                const response = await protectedIngressFetch('change-desk/summary');
                 const data = await response.json().catch(() => ({}));
                 if (!response.ok || !data.success) {
                     throw new Error(data.error || 'Change Desk snapshot failed');
@@ -2089,7 +2095,7 @@
 
         async function stageChangeDeskReport(report) {
             try {
-                const response = await fetch(ingressPath('change-desk/report'), {
+                const response = await protectedIngressFetch('change-desk/report', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
@@ -2163,7 +2169,7 @@
             setStatus(automatic ? 'Mall Cop is checking the daily memory...' : 'Asking Mall Cop to observe and report...', 'success', false);
 
             const request = (async () => {
-                const response = await fetch(ingressPath('change-desk/mall-cop'), {
+                const response = await protectedIngressFetch('change-desk/mall-cop', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
@@ -2258,7 +2264,7 @@
             setStatus(`Switching to ${mode === 'raw' ? 'raw shell' : 'Codex'} mode...`, 'success', false);
 
             try {
-                const response = await fetch(ingressPath('terminal-mode'), {
+                const response = await protectedIngressFetch('terminal-mode', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
@@ -2452,7 +2458,7 @@
         async function dispatchShellCommand(command) {
             try {
                 shellOutputPanel.classList.remove('active');
-                const response = await fetch(ingressPath('terminal-shell-command'), {
+                const response = await protectedIngressFetch('terminal-shell-command', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
@@ -3975,7 +3981,7 @@
 
             try {
                 // Use relative path for Home Assistant ingress compatibility
-                const response = await fetch(ingressPath('upload'), {
+                const response = await protectedIngressFetch('upload', {
                     method: 'POST',
                     body: formData
                 });
@@ -4118,7 +4124,7 @@
 
         async function insertTextIntoTerminal(text) {
             try {
-                const response = await fetch(ingressPath('terminal-input'), {
+                const response = await protectedIngressFetch('terminal-input', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
@@ -4142,7 +4148,7 @@
 
         async function pasteTextIntoTerminal(text) {
             try {
-                const response = await fetch(ingressPath('terminal-paste'), {
+                const response = await protectedIngressFetch('terminal-paste', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
@@ -4166,7 +4172,7 @@
 
         async function sendTerminalControl(action) {
             try {
-                const response = await fetch(ingressPath('terminal-control'), {
+                const response = await protectedIngressFetch('terminal-control', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'

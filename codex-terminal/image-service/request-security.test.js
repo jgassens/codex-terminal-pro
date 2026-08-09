@@ -97,6 +97,43 @@ test('browser-declared Sec-Fetch-Site authorizes requests with no Origin or Refe
     })), false);
 });
 
+test('the UI request marker covers plain-HTTP ingress without weakening provenance checks', () => {
+    const plainHttpIngress = {
+        host: 'homeassistant.local:8123',
+        'x-forwarded-host': 'homeassistant.local:8123',
+        'x-forwarded-proto': 'http'
+    };
+
+    assert.equal(isSameOriginBrowserRequest(request('172.30.32.2', plainHttpIngress)), false);
+    assert.equal(isSameOriginBrowserRequest(request('172.30.32.2', {
+        ...plainHttpIngress,
+        'x-codex-terminal-request': 'wrong'
+    })), false);
+    assert.equal(isSameOriginBrowserRequest(request('172.30.32.2', {
+        ...plainHttpIngress,
+        'x-codex-terminal-request': '1'
+    })), true);
+
+    for (const fetchSite of ['cross-site', 'same-site', 'none']) {
+        assert.equal(isSameOriginBrowserRequest(request('172.30.32.2', {
+            ...plainHttpIngress,
+            'sec-fetch-site': fetchSite,
+            'x-codex-terminal-request': '1'
+        })), false);
+    }
+
+    assert.equal(isSameOriginBrowserRequest(request('172.30.32.2', {
+        ...plainHttpIngress,
+        origin: 'https://evil.example',
+        'x-codex-terminal-request': '1'
+    })), false);
+    assert.equal(isSameOriginBrowserRequest(request('172.30.32.2', {
+        ...plainHttpIngress,
+        referer: 'https://evil.example/',
+        'x-codex-terminal-request': '1'
+    })), false);
+});
+
 test('X-Forwarded-Host restores origin matching when a proxy rewrites Host', () => {
     const browserHost = 'ha.example.com';
     const rewrittenHeaders = {

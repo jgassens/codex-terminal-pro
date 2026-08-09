@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.6.8
+
+- Fix Change Desk and other protected toolbar actions over plain-HTTP Home
+  Assistant LAN access. Browsers can omit all three ambient provenance headers
+  in that environment: same-origin GET has no Origin, privacy controls can
+  suppress Referer, and Fetch Metadata is not guaranteed for an untrustworthy
+  `http://homeassistant.local` origin. The UI now adds a fixed request marker
+  that the service accepts only after trusted Home Assistant ingress and only
+  when no cross-site, Origin, or Referer evidence contradicts it. Bare and
+  explicitly cross-site requests remain rejected, and the service still opts
+  into no cross-origin access.
+- Upgrade the bundled Codex CLI from `0.144.4` to the stable `0.147.0` release.
+  The image build remains pinned to that exact package version, and the normal
+  and jailed container smoke checks assert the new CLI version.
+
 ## 2.6.7
 
 - Stop Codex from fighting its own sandbox inside the add-on. Codex CLI's

@@ -2628,6 +2628,7 @@ app.get('/change-desk/summary', async (req, res) => {
             `sec-fetch-site=${req.get('sec-fetch-site') || 'absent'} ` +
             `origin=${req.get('origin') ? 'present' : 'absent'} ` +
             `referer=${req.get('referer') ? 'present' : 'absent'} ` +
+            `request-marker=${req.get('x-codex-terminal-request') === '1' ? 'valid' : (req.get('x-codex-terminal-request') ? 'invalid' : 'absent')} ` +
             `host=${req.get('host') || 'absent'} ` +
             `x-forwarded-host=${req.get('x-forwarded-host') || 'absent'} ` +
             `x-forwarded-proto=${req.get('x-forwarded-proto') || 'absent'}`);

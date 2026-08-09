@@ -16,3 +16,36 @@ test('image drops have one upload listener and stop bubbling after it claims the
     assert.ok(start >= 0 && end > start);
     assert.match(html.slice(start, end), /e\.stopPropagation\(\)/);
 });
+
+test('every origin-protected browser route uses the ingress request marker', () => {
+    const guardedRoutes = [
+        'change-desk/summary',
+        'change-desk/report',
+        'change-desk/mall-cop',
+        'terminal-mode',
+        'upload',
+        'terminal-input',
+        'terminal-paste',
+        'terminal-shell-command',
+        'terminal-control'
+    ];
+
+    for (const route of guardedRoutes) {
+        assert.match(html, new RegExp(`protectedIngressFetch\\('${route}'`));
+        assert.doesNotMatch(html, new RegExp(`fetch\\(ingressPath\\('${route}'\\)`));
+    }
+
+    const wrapperStart = html.indexOf('function protectedIngressFetch(path, options = {})');
+    const wrapperEnd = html.indexOf('// Fetch configuration and load ttyd', wrapperStart);
+    assert.ok(wrapperStart >= 0 && wrapperEnd > wrapperStart);
+    const wrapper = html.slice(wrapperStart, wrapperEnd);
+    assert.match(wrapper, /new Headers\(options\.headers \|\| undefined\)/);
+    assert.match(wrapper, /headers\.set\('X-Codex-Terminal-Request', '1'\)/);
+    assert.doesNotMatch(wrapper, /Content-Type/i);
+
+    const uploadStart = html.indexOf('async function uploadImage(file)');
+    const uploadEnd = html.indexOf('async function handleImagePaste(e)', uploadStart);
+    const upload = html.slice(uploadStart, uploadEnd);
+    assert.match(upload, /protectedIngressFetch\('upload'/);
+    assert.doesNotMatch(upload, /Content-Type/i);
+});

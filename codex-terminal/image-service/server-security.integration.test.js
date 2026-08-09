@@ -121,7 +121,10 @@ test('explicit loopback development mode still enforces same-origin upload check
     foreignOrigin.set('image', new Blob([MINIMAL_PNG_HEADER], { type: 'image/png' }), 'second.png');
     assert.equal((await fetch(`${baseUrl}/upload`, {
         method: 'POST',
-        headers: { Origin: 'https://evil.example' },
+        headers: {
+            Origin: 'https://evil.example',
+            'X-Codex-Terminal-Request': '1'
+        },
         body: foreignOrigin
     })).status, 403);
 
@@ -138,11 +141,23 @@ test('explicit loopback development mode still enforces same-origin upload check
         filenames.push((await response.json()).filename);
     }
 
+    // The browser wrapper adds only the request marker. In particular it must
+    // leave Content-Type unset so fetch can supply the multipart boundary.
+    const markerOnly = new FormData();
+    markerOnly.set('image', new Blob([MINIMAL_PNG_HEADER], { type: 'image/png' }), 'marker.png');
+    const markerResponse = await fetch(`${baseUrl}/upload`, {
+        method: 'POST',
+        headers: { 'X-Codex-Terminal-Request': '1' },
+        body: markerOnly
+    });
+    assert.equal(markerResponse.status, 200);
+    filenames.push((await markerResponse.json()).filename);
+
     assert.notEqual(filenames[0], filenames[1]);
-    assert.equal(fs.readdirSync(path.join(directory, 'uploads')).length, 2);
+    assert.equal(fs.readdirSync(path.join(directory, 'uploads')).length, 3);
 });
 
-test('Change Desk accepts browser Sec-Fetch-Site proof when Origin and Referer are absent', async (t) => {
+test('Change Desk accepts browser proof when Origin and Referer are absent', async (t) => {
     const { baseUrl } = await startServer(t, true);
 
     // Same-origin GET fetches carry no Origin header, and privacy tooling can
@@ -150,6 +165,12 @@ test('Change Desk accepts browser Sec-Fetch-Site proof when Origin and Referer a
     const bare = await fetch(`${baseUrl}/change-desk/summary`);
     assert.equal(bare.status, 403);
     assert.match((await bare.json()).error, /Cross-origin Change Desk access/);
+
+    const markerOnly = await fetch(`${baseUrl}/change-desk/summary`, {
+        headers: { 'X-Codex-Terminal-Request': '1' }
+    });
+    assert.equal(markerOnly.status, 200);
+    assert.equal((await markerOnly.json()).success, true);
 
     const trusted = await fetch(`${baseUrl}/change-desk/report`, {
         method: 'POST',
@@ -167,11 +188,34 @@ test('Change Desk accepts browser Sec-Fetch-Site proof when Origin and Referer a
         headers: {
             'Sec-Fetch-Site': 'cross-site',
             Origin: baseUrl,
+            'X-Codex-Terminal-Request': '1',
             'Content-Type': 'application/json'
         },
         body: JSON.stringify({ report: 'should be rejected' })
     });
     assert.equal(crossSite.status, 403);
+
+    const hostileOrigin = await fetch(`${baseUrl}/change-desk/report`, {
+        method: 'POST',
+        headers: {
+            Origin: 'https://evil.example',
+            'X-Codex-Terminal-Request': '1',
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ report: 'should also be rejected' })
+    });
+    assert.equal(hostileOrigin.status, 403);
+
+    const hostilePreflight = await fetch(`${baseUrl}/change-desk/summary`, {
+        method: 'OPTIONS',
+        headers: {
+            Origin: 'https://evil.example',
+            'Access-Control-Request-Method': 'GET',
+            'Access-Control-Request-Headers': 'x-codex-terminal-request'
+        }
+    });
+    assert.notEqual(hostilePreflight.headers.get('access-control-allow-origin'), 'https://evil.example');
+    assert.doesNotMatch(hostilePreflight.headers.get('access-control-allow-headers') || '', /x-codex-terminal-request/i);
 
     // A proxy chain that rewrites Host still matches through X-Forwarded-Host.
     const forwardedHost = await fetch(`${baseUrl}/change-desk/report`, {

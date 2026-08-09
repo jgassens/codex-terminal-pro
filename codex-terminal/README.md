@@ -253,7 +253,7 @@ context remaining, 5-hour limit, and weekly limit. Existing user-customized
 Codex TUI config and status-line preferences are left untouched.
 
 The bundled Codex CLI is pinned in the Docker build. This release installs
-`@openai/codex@0.144.4`; future CLI updates should bump that Dockerfile value
+`@openai/codex@0.147.0`; future CLI updates should bump that Dockerfile value
 and the add-on version together.
 
 ![Codex Terminal Pro screenshot](screenshot.png)
