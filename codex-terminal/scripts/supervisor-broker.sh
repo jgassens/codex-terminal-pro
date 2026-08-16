@@ -8,6 +8,8 @@ AUDIT_LOG="/data/logs/supervisor-broker.log"
 
 SUPERVISOR_BROKER_ENABLED="true"
 SUPERVISOR_BROKER_T1_TTL_SECONDS="120"
+SUPERVISOR_BROKER_PRIMARY_TMUX_TARGET="codex-terminal:0.0"
+SUPERVISOR_BROKER_RAW_TMUX_TARGET="codex-terminal:raw-shell.0"
 
 if [ -f "$CONF_FILE" ]; then
     # shellcheck disable=SC1090
@@ -34,6 +36,59 @@ sha_key() {
 
 is_interactive() {
     [ -t 0 ] && [ -t 1 ]
+}
+
+is_same_process_session() {
+    local pane_pid="${1:-}"
+
+    case "$pane_pid" in
+        ""|*[!0-9]*) return 1 ;;
+    esac
+
+    /usr/bin/python3 - "$pane_pid" <<'PY'
+import os
+import sys
+
+try:
+    pane_pid = int(sys.argv[1])
+    same_session = pane_pid > 0 and os.getsid(0) == os.getsid(pane_pid)
+except (OSError, ValueError):
+    same_session = False
+
+raise SystemExit(0 if same_session else 1)
+PY
+}
+
+is_trusted_human_terminal() {
+    local pane_identity
+    local pane_id
+    local pane_pid
+    local target
+
+    [ "${CODEX_TERMINAL_HUMAN_SHELL:-}" = "1" ] || return 1
+    [ -n "${TMUX_PANE:-}" ] || return 1
+    command -v tmux >/dev/null 2>&1 || return 1
+
+    for target in \
+        "$SUPERVISOR_BROKER_PRIMARY_TMUX_TARGET" \
+        "$SUPERVISOR_BROKER_RAW_TMUX_TARGET"; do
+        pane_identity="$(
+            tmux display-message -p -t "$target" '#{pane_id}|#{pane_pid}' 2>/dev/null
+        )" || continue
+        IFS='|' read -r pane_id pane_pid <<< "$pane_identity"
+        if [ "$pane_id" = "$TMUX_PANE" ] && is_same_process_session "$pane_pid"; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+is_codex_managed_execution() {
+    # Interactive Codex launches carry this marker so the wrapper knows that
+    # Codex's own policy is the approval owner. This is a provenance guardrail,
+    # not a containment boundary; the add-on's Codex process runs as root.
+    [ "${CODEX_TERMINAL_AGENT_EXECUTION:-}" = "1" ]
 }
 
 strip_global_flags() {
@@ -426,10 +481,21 @@ authorize() {
             ;;
     esac
 
+    if [ "$tier" = "T0" ]; then
+        return 0
+    fi
+
+    if is_codex_managed_execution; then
+        audit "$op" "$tier" "allow" "codex-approval-policy"
+        return 0
+    fi
+
+    if is_trusted_human_terminal; then
+        audit "$op" "$tier" "allow" "human-terminal"
+        return 0
+    fi
+
     case "$tier" in
-        T0)
-            return 0
-            ;;
         T1)
             authorize_t1 "$op" "$phrase" "${source}:${tier}:${noun:-rest}:${verb:-api}"
             ;;

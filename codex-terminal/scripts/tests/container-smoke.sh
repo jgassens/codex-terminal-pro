@@ -120,8 +120,48 @@ smoke_mall_cop_jail() {
     '
 }
 
+smoke_human_terminal_broker() {
+    local name="$1"
+    docker exec "$name" bash -se <<'INNER'
+set -euo pipefail
+
+response="$(curl -fsS \
+    -H 'Origin: http://127.0.0.1:7680' \
+    -H 'Content-Type: application/json' \
+    --data '{"command":"/data/packages/guard/bin/supervisor-broker ha core restart"}' \
+    http://127.0.0.1:7680/terminal-shell-command)"
+[ "$(jq -r '.exitCode' <<< "$response")" -eq 0 ]
+if grep -Eq 'Type exactly|Refusing non-interactive' <<< "$response"; then
+    printf 'browser shell dispatch received a duplicate broker prompt:\n%s\n' "$response" >&2
+    exit 1
+fi
+
+status_file="/tmp/human-broker-status"
+stdout_file="/tmp/human-broker-stdout"
+stderr_file="/tmp/human-broker-stderr"
+rm -f "$status_file" "$stdout_file" "$stderr_file"
+command='/data/packages/guard/bin/supervisor-broker ha core restart </dev/null >/tmp/human-broker-stdout 2>/tmp/human-broker-stderr; printf "%s\n" "$?" >/tmp/human-broker-status'
+tmux send-keys -t codex-terminal:raw-shell.0 -l "$command"
+tmux send-keys -t codex-terminal:raw-shell.0 Enter
+
+for _ in $(seq 1 40); do
+    [ -f "$status_file" ] && break
+    sleep 0.1
+done
+[ -f "$status_file" ]
+[ "$(cat "$status_file")" -eq 0 ]
+if grep -Eq 'Type exactly|Refusing non-interactive' "$stderr_file"; then
+    printf 'direct Shell command received a duplicate broker prompt:\n' >&2
+    cat "$stderr_file" >&2
+    exit 1
+fi
+[ "$(grep -c 'reason=human-terminal' /data/logs/supervisor-broker.log)" -ge 2 ]
+INNER
+}
+
 start_container "$normal_name"
 wait_for_health "$normal_name"
+smoke_human_terminal_broker "$normal_name"
 smoke_mall_cop_jail "$normal_name"
 docker stop --time 10 "$normal_name" >/dev/null
 normal_exit="$(docker inspect --format '{{.State.ExitCode}}' "$normal_name")"
@@ -152,4 +192,4 @@ failure_exit="$(docker inspect --format '{{.State.ExitCode}}' "$failure_name")"
 failure_logs="$(docker logs "$failure_name" 2>&1)"
 grep -q 'Image service exited; stopping ttyd' <<< "$failure_logs"
 
-echo "container startup, jailed Mall Cop, normal shutdown, and child-failure supervision: ok"
+echo "container startup, human terminal broker routing, jailed Mall Cop, normal shutdown, and child-failure supervision: ok"

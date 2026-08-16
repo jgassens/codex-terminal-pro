@@ -25,7 +25,7 @@ show_menu() {
     echo "  3) Codex auth: check/login/import"
     echo "  4) Run Home Assistant config check, if available"
     echo "  5) Reload Home Assistant YAML, if available"
-    echo "  6) Restart Home Assistant, only after confirmation"
+    echo "  6) Restart Home Assistant (this selection is the confirmation)"
     echo "  7) Exit"
     echo ""
 }
@@ -44,14 +44,14 @@ start_codex() {
     cd /config
     echo "Starting Codex in /config..."
     sleep 1
-    codex
+    CODEX_TERMINAL_AGENT_EXECUTION=1 codex
 }
 
 open_shell() {
     cd /config
     echo "Opening shell in /config. Type 'exit' to return to this menu."
     sleep 1
-    bash
+    CODEX_TERMINAL_HUMAN_SHELL=1 bash
 }
 
 run_auth_helper() {
@@ -73,7 +73,7 @@ run_ha_config_check() {
     fi
 
     echo "Running: ha core check"
-    ha core check || true
+    CODEX_TERMINAL_HUMAN_SHELL=1 ha core check || true
     pause
 }
 
@@ -86,7 +86,7 @@ reload_ha_yaml() {
 
     if ha core --help 2>/dev/null | grep -q "reload"; then
         echo "Running: ha core reload"
-        ha core reload || true
+        CODEX_TERMINAL_HUMAN_SHELL=1 ha core reload || true
     else
         echo "Home Assistant YAML reload is not exposed by this ha CLI build."
         echo "Run a config check first, then reload from Home Assistant UI if needed."
@@ -101,17 +101,8 @@ restart_ha() {
         return
     fi
 
-    echo "Restarting Home Assistant can interrupt automations and dashboards."
-    echo "Run a config check first. To continue, type exactly: restart"
-    printf "> " >&2
-    read -r confirmation
-
-    if [ "$confirmation" = "restart" ]; then
-        echo "Running: ha core restart"
-        ha core restart || true
-    else
-        echo "Restart cancelled."
-    fi
+    echo "Running: ha core restart"
+    CODEX_TERMINAL_HUMAN_SHELL=1 ha core restart || true
     pause
 }
 

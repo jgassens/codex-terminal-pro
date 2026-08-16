@@ -159,14 +159,13 @@ ensure_codex_execution_defaults() {
     fi
 
     # The add-on container is the operating boundary: only /config and /data
-    # are mapped, ingress is admin-only, and management-capable ha and
-    # supervisor-api commands stop at the human-answered broker challenge.
-    # Codex CLI's inner sandbox cannot see any of that; it blocks the bundled
-    # helpers (Home Assistant API network access, /data state) and stalls
-    # sessions on approval reviews with no human in the loop to answer them.
+    # are mapped and ingress is admin-only. Codex CLI's inner sandbox cannot
+    # see those boundaries; it blocks bundled helpers that need Home Assistant
+    # API network access and /data state. When full access is selected, Codex's
+    # own policy intentionally runs those commands without approval prompts.
     if set_codex_top_level_config "$config_file" "approval_policy" '"never"' &&
         set_codex_top_level_config "$config_file" "sandbox_mode" '"danger-full-access"'; then
-        bashio::log.info "Codex execution defaults set: full container access without approval prompts; the Supervisor broker still guards HA management"
+        bashio::log.info "Codex execution defaults set: full container access without approval prompts"
     else
         bashio::log.warning "Could not set Codex execution defaults; invalid config.toml was left unchanged"
     fi
@@ -310,6 +309,11 @@ if [ -x "/data/packages/guard/bin/codex-terminal-prune-codex-plugins" ]; then
     /data/packages/guard/bin/codex-terminal-prune-codex-plugins >/dev/null 2>&1 || true
 fi
 
+# Every normal interactive or exec launch uses Codex's own approval policy as
+# the decision point for model-initiated commands. Descendants inherit this
+# routing marker so the Supervisor wrapper does not ask a second time.
+export CODEX_TERMINAL_AGENT_EXECUTION=1
+
 self="$(readlink -f "$0" 2>/dev/null || printf '%s\n' "$0")"
 
 for candidate in /usr/local/bin/codex /usr/bin/codex; do
@@ -381,7 +385,7 @@ install_tools() {
 
 log_startup_diagnostics() {
     local app_name="${APP_NAME:-${ADDON_NAME:-Codex Terminal Pro}}"
-    local app_version="${BUILD_VERSION:-${APP_VERSION:-2.6.8}}"
+    local app_version="${BUILD_VERSION:-${APP_VERSION:-2.6.9}}"
 
     bashio::log.info "Startup diagnostics:"
     bashio::log.info "  - Date: $(date)"
@@ -723,9 +727,10 @@ write_codex_terminal_agents_block() {
   `codex-shell-dispatch supervisor-api -X POST /core/api/services/automation/reload`.
 - Do not ask for another confirmation before using `codex-shell-dispatch` for a
   `,,` prompt; the prefix is the human's direct shell-dispatch instruction.
-- Shell mode and `,,` select the interactive command surface; they do not
-  bypass the broker. Read-only work runs directly, while management operations
-  show a challenge that only the human should answer.
+- Human commands in Shell mode or dispatched with `,,` run without a second
+  app-specific confirmation. Codex's current approval policy is the single
+  decision point for model-launched commands, including Auto-review or Full
+  access; do not add a duplicate broker prompt.
 - Use `/opt/home-assistant/HA.md` as the local Home Assistant field guide.
 - Search current official Home Assistant documentation or inspect live service
   schemas when integration behavior, service payloads, or Supervisor behavior
@@ -837,16 +842,16 @@ get_codex_launch_command() {
 
     if [ "$auto_launch_codex" = "true" ]; then
         if [ -f /usr/local/bin/codex-session-picker ]; then
-            echo "cd /config && clear && echo 'Welcome to Codex Terminal Pro' && echo 'Briefing: /config/CODEX_TERMINAL_PRO.md or codex-terminal-briefing' && echo '' && echo 'Starting Codex in /config...' && sleep 1 && codex; /usr/local/bin/codex-session-picker"
+            echo "cd /config && clear && echo 'Welcome to Codex Terminal Pro' && echo 'Briefing: /config/CODEX_TERMINAL_PRO.md or codex-terminal-briefing' && echo '' && echo 'Starting Codex in /config...' && sleep 1 && env CODEX_TERMINAL_AGENT_EXECUTION=1 codex; /usr/local/bin/codex-session-picker"
         else
-            echo "cd /config && clear && echo 'Welcome to Codex Terminal Pro' && echo 'Briefing: /config/CODEX_TERMINAL_PRO.md or codex-terminal-briefing' && echo '' && echo 'Starting Codex in /config...' && sleep 1 && codex"
+            echo "cd /config && clear && echo 'Welcome to Codex Terminal Pro' && echo 'Briefing: /config/CODEX_TERMINAL_PRO.md or codex-terminal-briefing' && echo '' && echo 'Starting Codex in /config...' && sleep 1 && env CODEX_TERMINAL_AGENT_EXECUTION=1 codex"
         fi
     else
         if [ -f /usr/local/bin/codex-session-picker ]; then
             echo "cd /config && clear && /usr/local/bin/codex-session-picker"
         else
             bashio::log.warning "Session picker not found, falling back to Codex auto-launch"
-            echo "cd /config && clear && echo 'Welcome to Codex Terminal Pro' && echo 'Briefing: /config/CODEX_TERMINAL_PRO.md or codex-terminal-briefing' && echo '' && echo 'Starting Codex in /config...' && sleep 1 && codex"
+            echo "cd /config && clear && echo 'Welcome to Codex Terminal Pro' && echo 'Briefing: /config/CODEX_TERMINAL_PRO.md or codex-terminal-briefing' && echo '' && echo 'Starting Codex in /config...' && sleep 1 && env CODEX_TERMINAL_AGENT_EXECUTION=1 codex"
         fi
     fi
 }

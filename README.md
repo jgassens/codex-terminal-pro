@@ -27,10 +27,10 @@ This is an MVP fork. It is not an official OpenAI add-on.
 - House-aware help: `ha-site-memory` builds a local map of areas, integrations,
   and likely entity IDs, so natural phrases like "Ring lights" can resolve to
   the right Home Assistant surfaces before Codex proposes a change.
-- Human-controlled operations: risky Home Assistant management commands stay
-  behind the Supervisor broker. Shell mode and `,,` provide an explicit route
-  to the interactive shell, where any required broker challenge remains visible
-  for the human to answer.
+- One clear approval owner: commands deliberately entered in Shell mode or
+  with `,,` run directly, while model-initiated commands use Codex's native
+  approval policy. Ask-for-approval can stop the bot before execution, and
+  Auto-review or Full access can proceed without a second app-specific prompt.
 - Reliable access from more places: the ingress sidebar, persistent `tmux`
   session, mobile command bar, paste fallbacks, and `/config/codex-terminal-pro-attach`
   SSH helper keep the same Codex session reachable across browser refreshes,
@@ -184,10 +184,10 @@ directly to the Shell pane, for example `,, ha store reload` or
 output in the Codex view. Long-running commands switch to Shell mode so they can
 be controlled interactively.
 
-The `,,` prefix authorizes dispatch to the Shell pane; it does not authorize a
-Home Assistant management operation. Read-only commands run immediately.
-Routine and high-risk `ha` or `supervisor-api` commands still show the broker's
-typed challenge in the Shell pane, where only the human should answer it.
+The Shell pane and `,,` are explicit human command surfaces. Commands entered
+there run without a second app-specific confirmation. Model-initiated commands
+use Codex's current approval policy, so Ask-for-approval can stop them while
+Auto-review or Full access can proceed without another terminal challenge.
 
 If browser interception ever misses a `,,` line and Codex sees it as a prompt,
 the shipped `codex-shell-dispatch` helper is the fallback path Codex should use
@@ -376,8 +376,8 @@ paste it into tickets, or share it in chat.
 - Ask Codex to inspect first, then show diffs before edits.
 - Run `ha core check` before reloads or restarts.
 - Do not restart Home Assistant until config checks pass.
-- All management-capable `ha` and `supervisor-api` operations use the broker
-  guardrail, including commands typed in Shell mode or sent with `,,`.
+- The `ha` and `supervisor-api` wrappers still validate, classify, and audit
+  management operations. They do not ask twice after human or Codex approval.
 - Do not add broader mounts unless there is a concrete need.
 
 ## Architecture Support

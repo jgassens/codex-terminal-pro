@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.6.9
+
+- Stop asking for a second Home Assistant confirmation after command intent is
+  already established. Commands typed in the verified Shell tmux pane, sent
+  from the human mobile command bar, or dispatched with `,,` now run directly.
+  Commands launched by Codex are delegated to Codex's native approval policy,
+  so Ask-for-approval can stop before execution while Auto-review or Full
+  access can proceed without a second terminal challenge.
+- Keep the Supervisor wrapper's fixed endpoint, managed-token, argument
+  validation, tier classification, and audit log. Unmarked background callers
+  remain broker-guarded, and an environment flag alone cannot impersonate the
+  human pane: its pane ID and operating-system session must match the live tmux
+  pane. This remains reliable when a command redirects all standard streams.
+- Treat choosing **Restart Home Assistant** in the human session picker as the
+  confirmation itself instead of asking the human to type `restart` again.
+
 ## 2.6.8
 
 - Fix Change Desk and other protected toolbar actions over plain-HTTP Home

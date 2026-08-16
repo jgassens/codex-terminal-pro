@@ -14,8 +14,9 @@ Treat this file as the local map of the room.
   `/data/.supervisor/token`.
 - Use read-only inspection before changing Home Assistant configuration.
 - Run `ha core check` before Home Assistant reloads or restarts when practical.
-- Never auto-answer a Supervisor broker challenge from Codex's normal command
-  path. If a broker challenge appears unexpectedly, stop and explain it.
+- Let Codex's current approval policy decide model-initiated shell commands.
+  If an additional fallback broker challenge appears unexpectedly, stop and
+  identify the unmarked caller instead of answering it automatically.
 
 ## Shell Dispatch
 
@@ -34,9 +35,9 @@ Treat this file as the local map of the room.
 - The web wrapper has Codex mode and Shell mode.
 - Codex mode shows the Codex TUI.
 - Shell mode is a real `/config` shell in a separate tmux window.
-- Shell mode and `,,` select the interactive command surface; they do not
-  bypass the broker. Read-only work runs directly, while management operations
-  show a challenge that only the human should answer.
+- Shell mode and `,,` are direct human command surfaces and do not receive a
+  second app-specific confirmation. Commands launched by Codex have already
+  passed its current approval policy, including Auto-review or Full access.
 - Mobile uses a native command bar; the ttyd iframe remains the live display.
 
 ## Home Assistant SSH Access

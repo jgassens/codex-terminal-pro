@@ -106,11 +106,12 @@ Use the smallest practical reload:
 
 ## Safety Boundaries
 
-- Shell mode and `,,` are explicit command dispatch, not authorization to
-  bypass the broker.
-- Restart, stop, update, install, uninstall, host, backup, and OS operations
-  remain broker-guarded from every surface.
-- Do not silently answer broker challenges from Codex's normal tool path.
+- Shell mode, the mobile Send action, and `,,` are explicit human command
+  dispatch and do not receive a second app-specific confirmation.
+- Model-initiated commands are governed by Codex's current approval policy;
+  Auto-review or Full access may allow them without another terminal prompt.
+- If an unexpected fallback broker challenge appears, stop and identify the
+  unmarked caller instead of answering it automatically.
 - Before changing automations or scripts, preserve the old YAML and explain the
   reload path.
 - Before touching integrations or add-ons, capture logs and current options.

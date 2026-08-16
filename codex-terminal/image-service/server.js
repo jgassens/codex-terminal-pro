@@ -34,7 +34,10 @@ const {
 } = require('./request-security');
 const { parseJsonLinesTail, writeFileAtomic } = require('./persistence-utils');
 const { createSerialTaskQueue } = require('./serial-task-queue');
-const { buildMarkedShellCommand } = require('./raw-shell-wrapper');
+const {
+    buildCodexDispatchedShellCommand,
+    buildMarkedShellCommand
+} = require('./raw-shell-wrapper');
 const { endChildStdin } = require('./child-stdin');
 const { loadTmuxPasteBuffer } = require('./tmux-paste-buffer');
 const {
@@ -72,6 +75,8 @@ const RAW_SHELL_CAPTURE_LINES = parseNonNegativeInt(process.env.RAW_SHELL_CAPTUR
 const RAW_SHELL_OUTPUT_MAX_CHARS = parseNonNegativeInt(process.env.RAW_SHELL_OUTPUT_MAX_CHARS, 20000);
 const RAW_SHELL_MAX_PENDING_COMMANDS = parseNonNegativeInt(process.env.RAW_SHELL_MAX_PENDING_COMMANDS, 8);
 const RAW_SHELL_QUEUE_WAIT_TIMEOUT_MS = parseNonNegativeInt(process.env.RAW_SHELL_QUEUE_WAIT_TIMEOUT_MS, 5000);
+const RAW_SHELL_LAUNCH_COMMAND =
+    'env -u CODEX_TERMINAL_AGENT_EXECUTION CODEX_TERMINAL_HUMAN_SHELL=1 /bin/bash -l';
 const CHANGE_DESK_COMMAND_TIMEOUT_MS = parseNonNegativeInt(process.env.CHANGE_DESK_COMMAND_TIMEOUT_MS, 45000);
 const CHANGE_DESK_FAST_COMMAND_TIMEOUT_MS = parseNonNegativeInt(process.env.CHANGE_DESK_FAST_COMMAND_TIMEOUT_MS, 12000);
 const CHANGE_DESK_OUTPUT_MAX_CHARS = parseNonNegativeInt(process.env.CHANGE_DESK_OUTPUT_MAX_CHARS, 12000);
@@ -464,7 +469,7 @@ function rawShellRespawnArgs() {
         RAW_TMUX_TARGET,
         '-c',
         '/config',
-        'env CODEX_TERMINAL_HUMAN_SHELL=1 /bin/bash -l'
+        RAW_SHELL_LAUNCH_COMMAND
     ];
 }
 
@@ -573,7 +578,7 @@ function ensureRawTerminal(callback) {
             RAW_TERMINAL_WINDOW,
             '-c',
             '/config',
-            'env CODEX_TERMINAL_HUMAN_SHELL=1 /bin/bash -l'
+            RAW_SHELL_LAUNCH_COMMAND
         ], callback);
     });
 }
@@ -621,8 +626,11 @@ function selectTerminalMode(mode, callback) {
     selectTargetWindow();
 }
 
-function dispatchRawShellCommand(command, callback) {
+function dispatchRawShellCommand(command, callback, options = {}) {
     const previousMode = activeTerminalMode;
+    const executionCommand = options.actor === 'codex'
+        ? buildCodexDispatchedShellCommand(command)
+        : command;
     const finish = (result) => {
         selectTerminalMode(previousMode, (restoreErr) => {
             if (restoreErr) {
@@ -644,7 +652,7 @@ function dispatchRawShellCommand(command, callback) {
         const markerSuffix = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
         const startMarker = `__CTP_SHELL_START_${markerSuffix}__`;
         const endMarker = `__CTP_SHELL_END_${markerSuffix}__`;
-        const wrappedCommand = buildMarkedShellCommand(command, startMarker, endMarker);
+        const wrappedCommand = buildMarkedShellCommand(executionCommand, startMarker, endMarker);
 
         cancelCopyModeIfNeeded((modeErr) => {
             if (modeErr) {
@@ -664,9 +672,9 @@ function dispatchRawShellCommand(command, callback) {
                         return;
                     }
 
-                    // Make prompts from guarded shell commands visible before
-                    // pressing Enter so the human can answer them in the raw
-                    // terminal instead of waiting on a hidden pane.
+                    // Show the explicitly dispatched command in the raw pane
+                    // before pressing Enter so any interactive output remains
+                    // visible instead of waiting on a hidden pane.
                     selectTerminalMode('raw', (selectErr) => {
                         if (selectErr) {
                             resetRawShellAfterAmbiguousDispatch(selectErr, callback);
@@ -708,10 +716,11 @@ function dispatchRawShellCommand(command, callback) {
 }
 
 function enqueueRawShellCommand(command, callback, options = {}) {
+    const { actor = 'human', ...queueOptions } = options;
     return rawShellCommandQueue.enqueue(
-        (done) => dispatchRawShellCommand(command, done),
+        (done) => dispatchRawShellCommand(command, done, { actor }),
         callback,
-        options
+        queueOptions
     );
 }
 
@@ -2890,15 +2899,16 @@ app.post('/terminal-paste', (req, res) => {
     }, target);
 });
 
-// Dispatch a human-prefixed command to the raw shell pane. The frontend only
-// calls this after the user types ",," at the Codex prompt or mobile command
-// bar; it is not used by Codex's own command execution path.
+// Dispatch an explicit browser ",," command or the Codex loopback fallback to
+// the raw shell pane. Browser ingress keeps human-lane provenance; loopback
+// dispatch is wrapped with Codex provenance before it reaches the pane.
 app.post('/terminal-shell-command', (req, res) => {
     const requestedCommand = typeof req.body?.command === 'string' ? req.body.command.trim() : '';
     const command = normalizeShellCommandForDispatch(requestedCommand);
 
     const internalLoopbackRequest = isLoopbackAddress(requestRemoteAddress(req));
-    if (!internalLoopbackRequest && !isSameOriginBrowserRequest(req)) {
+    const sameOriginBrowserRequest = isSameOriginBrowserRequest(req);
+    if (!internalLoopbackRequest && !sameOriginBrowserRequest) {
         return res.status(403).json({ success: false, error: 'Cross-origin shell command dispatch is not allowed' });
     }
 
@@ -2947,7 +2957,10 @@ app.post('/terminal-shell-command', (req, res) => {
             terminated: Boolean(result.terminated),
             truncated: Boolean(result.truncated)
         });
-    }, { signal: queuedRequest.signal });
+    }, {
+        actor: sameOriginBrowserRequest ? 'human' : 'codex',
+        signal: queuedRequest.signal
+    });
 });
 
 app.post('/terminal-control', (req, res) => {

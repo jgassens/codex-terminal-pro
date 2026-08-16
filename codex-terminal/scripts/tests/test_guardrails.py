@@ -63,6 +63,7 @@ class SupervisorApiTests(TemporaryGuardrailTest):
     def setUp(self) -> None:
         super().setUp()
         self.broker_capture = self.temp / "broker.json"
+        self.broker_env_capture = self.temp / "broker-env.txt"
         self.curl_capture = self.temp / "curl.json"
         self.token_file = self.temp / "token"
         self.token_file.write_text("test-supervisor-token\n", encoding="utf-8")
@@ -76,6 +77,8 @@ import os
 import sys
 with open(os.environ["BROKER_CAPTURE"], "w", encoding="utf-8") as handle:
     json.dump(sys.argv[1:], handle)
+with open(os.environ["BROKER_ENV_CAPTURE"], "w", encoding="utf-8") as handle:
+    handle.write(os.environ.get("CODEX_TERMINAL_AGENT_EXECUTION", ""))
 """,
         )
         write_executable(
@@ -99,7 +102,14 @@ with open(os.environ["CURL_CAPTURE"], "w", encoding="utf-8") as handle:
             },
         )
         self.env["BROKER_CAPTURE"] = str(self.broker_capture)
+        self.env["BROKER_ENV_CAPTURE"] = str(self.broker_env_capture)
         self.env["CURL_CAPTURE"] = str(self.curl_capture)
+
+    def test_codex_actor_marker_reaches_the_authorization_broker(self) -> None:
+        self.env["CODEX_TERMINAL_AGENT_EXECUTION"] = "1"
+        completed = self.run_command([str(self.script), "/core/info"])
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(self.broker_env_capture.read_text(encoding="utf-8"), "1")
 
     def test_legitimate_json_request_uses_one_fixed_supervisor_url(self) -> None:
         path = "/core/api/services/automation/reload"
@@ -222,6 +232,7 @@ class HaGuardTests(TemporaryGuardrailTest):
         super().setUp()
         self.real_capture = self.temp / "real-ha.json"
         self.broker_capture = self.temp / "broker-ha.json"
+        self.broker_env_capture = self.temp / "broker-ha-env.txt"
         self.token_file = self.temp / "supervisor-token"
         self.token_file.write_text("trusted-supervisor-token\n", encoding="utf-8")
         self.fake_broker = self.bin_dir / "supervisor-broker"
@@ -234,6 +245,8 @@ import os
 import sys
 with open(os.environ["BROKER_CAPTURE"], "w", encoding="utf-8") as handle:
     json.dump(sys.argv[1:], handle)
+with open(os.environ["BROKER_ENV_CAPTURE"], "w", encoding="utf-8") as handle:
+    handle.write(os.environ.get("CODEX_TERMINAL_AGENT_EXECUTION", ""))
 """,
         )
         write_executable(
@@ -264,9 +277,16 @@ with open(os.environ["REAL_HA_CAPTURE"], "w", encoding="utf-8") as handle:
         self.env.update(
             {
                 "BROKER_CAPTURE": str(self.broker_capture),
+                "BROKER_ENV_CAPTURE": str(self.broker_env_capture),
                 "REAL_HA_CAPTURE": str(self.real_capture),
             }
         )
+
+    def test_codex_actor_marker_reaches_the_authorization_broker(self) -> None:
+        self.env["CODEX_TERMINAL_AGENT_EXECUTION"] = "1"
+        completed = self.run_command([str(self.script), "core", "info"])
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(self.broker_env_capture.read_text(encoding="utf-8"), "1")
 
     def test_caller_cli_destination_config_token_and_debug_overrides_are_rejected(self) -> None:
         attacks = (
@@ -373,6 +393,69 @@ print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest(), " -")
 """,
         )
 
+    def run_in_tmux_pty(
+        self,
+        arguments: list[str],
+        *,
+        lane: str = "raw",
+        pane_matches: bool = True,
+        pane_pid: int | None = None,
+        stdin_is_tty: bool = True,
+        stdout_is_tty: bool = True,
+        extra_env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        master_fd, slave_fd = os.openpty()
+        expected_pane_id = {"primary": "%0", "raw": "%7", "other": "%9"}[lane]
+        displayed_primary_pane_id = "%8" if lane == "primary" and not pane_matches else "%0"
+        displayed_raw_pane_id = "%8" if lane == "raw" and not pane_matches else "%7"
+        expected_pane_pid = pane_pid if pane_pid is not None else os.getpid()
+        write_executable(
+            self.bin_dir / "tmux",
+            """#!/bin/sh
+target=""
+while [ "$#" -gt 0 ]; do
+    if [ "$1" = "-t" ]; then
+        target="${2:-}"
+        break
+    fi
+    shift
+done
+case "$target" in
+    codex-terminal:0.0) printf '%s|%s\n' "${EXPECTED_PRIMARY_PANE_ID}" "${EXPECTED_PANE_PID}" ;;
+    codex-terminal:raw-shell.0) printf '%s|%s\n' "${EXPECTED_RAW_PANE_ID}" "${EXPECTED_PANE_PID}" ;;
+    *) exit 1 ;;
+esac
+""",
+        )
+        env = {
+            **self.env,
+            "CODEX_TERMINAL_HUMAN_SHELL": "1",
+            "TMUX_PANE": expected_pane_id,
+            "EXPECTED_PRIMARY_PANE_ID": displayed_primary_pane_id,
+            "EXPECTED_RAW_PANE_ID": displayed_raw_pane_id,
+            "EXPECTED_PANE_PID": str(expected_pane_pid),
+            **(extra_env or {}),
+        }
+        try:
+            # Queue a wrong confirmation answer. A verified human pane never
+            # consumes it; a provenance mismatch reaches the old challenge and
+            # fails promptly instead of hanging the test.
+            os.write(master_fd, b"no\n")
+            stdin_options = {"stdin": slave_fd} if stdin_is_tty else {"input": "no\n"}
+            return subprocess.run(
+                [str(self.script), *arguments],
+                check=False,
+                stdout=slave_fd if stdout_is_tty else subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
+                timeout=5,
+                **stdin_options,
+            )
+        finally:
+            os.close(master_fd)
+            os.close(slave_fd)
+
     def test_safe_get_remains_noninteractive(self) -> None:
         completed = self.run_command([str(self.script), "rest", "GET", "/core/api/states"])
         self.assertEqual(completed.returncode, 0, completed.stderr)
@@ -429,6 +512,110 @@ printf '%s\n' '> ,, supervisor-api -X POST {path}'
         completed = self.run_command([str(self.script), "rest", "POST", "/host/reboot"])
         self.assertEqual(completed.returncode, 1, completed.stderr)
         self.assertIn("high-risk", completed.stderr)
+
+    def test_verified_human_tmux_pane_skips_duplicate_management_confirmation(self) -> None:
+        for arguments in (
+            ["ha", "core", "restart"],
+            ["ha", "apps", "update", "demo"],
+            ["rest", "POST", "/host/reboot"],
+        ):
+            with self.subTest(arguments=arguments):
+                completed = self.run_in_tmux_pty(arguments)
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                self.assertNotIn("Type exactly", completed.stderr)
+
+        audit = self.audit_log.read_text(encoding="utf-8")
+        self.assertEqual(audit.count("reason=human-terminal"), 3)
+
+    def test_human_marker_with_wrong_tmux_pane_id_does_not_bypass(self) -> None:
+        completed = self.run_in_tmux_pty(
+            ["ha", "apps", "update", "demo"],
+            pane_matches=False,
+        )
+        self.assertEqual(completed.returncode, 1, completed.stderr)
+        self.assertIn("Confirmation did not match", completed.stderr)
+
+    def test_human_marker_from_another_process_session_does_not_bypass(self) -> None:
+        detached = subprocess.Popen(
+            ["sleep", "5"],
+            start_new_session=True,
+        )
+        try:
+            completed = self.run_in_tmux_pty(
+                ["ha", "apps", "update", "demo"],
+                pane_pid=detached.pid,
+            )
+        finally:
+            detached.kill()
+            detached.wait(timeout=5)
+        self.assertEqual(completed.returncode, 1, completed.stderr)
+        self.assertIn("Confirmation did not match", completed.stderr)
+
+    def test_human_marker_from_an_unregistered_tmux_pane_does_not_bypass(self) -> None:
+        completed = self.run_in_tmux_pty(
+            ["ha", "apps", "update", "demo"],
+            lane="other",
+        )
+        self.assertEqual(completed.returncode, 1, completed.stderr)
+        self.assertIn("Confirmation did not match", completed.stderr)
+
+    def test_verified_human_pane_survives_stdout_redirection(self) -> None:
+        completed = self.run_in_tmux_pty(
+            ["ha", "apps", "update", "demo"],
+            stdout_is_tty=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertNotIn("Type exactly", completed.stderr)
+
+    def test_verified_human_pane_survives_stdin_pipeline(self) -> None:
+        completed = self.run_in_tmux_pty(
+            ["ha", "apps", "update", "demo"],
+            stdin_is_tty=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertNotIn("Type exactly", completed.stderr)
+
+    def test_verified_human_pane_survives_all_standard_streams_redirected(self) -> None:
+        completed = self.run_in_tmux_pty(
+            ["ha", "core", "restart"],
+            stdin_is_tty=False,
+            stdout_is_tty=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertNotIn("Refusing non-interactive", completed.stderr)
+        self.assertNotIn("Type exactly", completed.stderr)
+
+    def test_session_picker_primary_pane_is_a_registered_human_lane(self) -> None:
+        completed = self.run_in_tmux_pty(
+            ["ha", "core", "restart"],
+            lane="primary",
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertNotIn("Type exactly", completed.stderr)
+
+    def test_codex_child_delegates_to_native_approval_policy_without_second_prompt(self) -> None:
+        self.env["CODEX_TERMINAL_AGENT_EXECUTION"] = "1"
+        for arguments in (
+            ["ha", "apps", "update", "demo"],
+            ["rest", "POST", "/host/reboot"],
+        ):
+            with self.subTest(arguments=arguments):
+                completed = self.run_command([str(self.script), *arguments])
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                self.assertNotIn("Refusing non-interactive", completed.stderr)
+
+        audit = self.audit_log.read_text(encoding="utf-8")
+        self.assertEqual(audit.count("reason=codex-approval-policy"), 2)
+
+    def test_codex_identity_wins_if_a_child_also_inherits_the_human_marker(self) -> None:
+        completed = self.run_in_tmux_pty(
+            ["ha", "apps", "update", "demo"],
+            extra_env={"CODEX_TERMINAL_AGENT_EXECUTION": "1"},
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        audit = self.audit_log.read_text(encoding="utf-8")
+        self.assertIn("reason=codex-approval-policy", audit)
+        self.assertNotIn("reason=human-terminal", audit)
 
     def test_destructive_cli_aliases_and_nested_store_commands_are_tier_two(self) -> None:
         commands = (

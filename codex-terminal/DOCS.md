@@ -176,7 +176,7 @@ When auto-launch is disabled, or after Codex exits, the menu provides:
 3. Codex auth: check/login/import
 4. Run Home Assistant config check, if available
 5. Reload Home Assistant YAML, if available
-6. Restart Home Assistant, only after confirmation
+6. Restart Home Assistant (selecting it is the confirmation)
 7. Exit
 
 ## Persistent State
@@ -270,14 +270,12 @@ persistent_pip_packages: []
 out of the way. On every boot the add-on sets `approval_policy = "never"` and
 `sandbox_mode = "danger-full-access"` in `/data/.codex/config.toml`. The add-on
 container is the operating boundary: only `/config` and `/data` are mapped,
-ingress is admin-only, and management-capable `ha` and `supervisor-api`
-commands still stop at the human-answered Supervisor broker challenge. Without
-this, Codex's inner sandbox blocks the bundled helpers (they need Home
-Assistant API network access and `/data` state) and sessions stall on
-automatic approval reviews with no human in the loop. Change Desk's Mall Cop
-is unaffected: it always runs `codex exec` with `--ignore-user-config
---sandbox read-only` inside its jail. Set `codex_full_access: false` to leave
-those two keys under your own control in `/data/.codex/config.toml`.
+and ingress is admin-only. With this option enabled, model-initiated commands
+run as Full access without approval prompts. Set `codex_full_access: false` to
+leave Codex's native approval policy, Auto-review choice, and sandbox settings
+under your control; the add-on does not add a second prompt after Codex admits
+a command. Change Desk's Mall Cop is unaffected: it always runs `codex exec`
+with `--ignore-user-config --sandbox read-only` inside its jail.
 
 Terminal transcript logging stays enabled by default for debugging, but the log
 rotates under `/data/logs`. Uploaded images stay in `/data/images` long enough
@@ -394,27 +392,29 @@ Common support tools include `sqlite3`, `mosquitto_sub`, `mosquitto_pub`, `dig`,
 ## Supervisor Broker Guardrail
 
 The add-on keeps `hassio_role: manager` so legitimate Home Assistant management
-workflows continue to function, but it routes the default `ha` command through a
-confirmation broker.
+workflows continue to function. The default `ha` and `supervisor-api` wrappers
+retain fixed destinations, managed-token handling, classification, and audit.
 
 - Read-only commands such as `ha core check`, info, list, logs, and stats are
   allowed automatically.
-- Routine management commands such as restart, reload, start, stop, update,
-  rebuild, and options require a typed confirmation.
-- High-risk host, OS, backup, install, uninstall, and delete operations require
-  a fresh nonce and a reason.
-- Non-interactive risky operations are refused.
+- Commands from either registered operator tmux lane execute directly only
+  when the pane ID and operating-system session match the live tmux pane. This
+  remains true even when a command redirects its input and output.
+- Normal Codex launches carry an agent-routing marker. The wrapper therefore
+  treats Codex's native policy as the single approval owner; Auto-review and
+  Full access work as selected without a duplicate prompt.
+- Unknown management callers still use the fallback typed challenge, while
+  unknown non-interactive callers are refused.
 - Direct Supervisor calls should use `supervisor-api`, which applies the same
-  broker policy.
-- The `,,` prefix dispatches into the Shell pane but does not bypass the broker.
-  Read-only work runs directly; management operations still require the human
-  to answer the visible challenge.
+  provenance and argument validation.
 
-The broker writes decisions to `/data/logs/supervisor-broker.log`. This log is
+The broker writes provenance and decisions to
+`/data/logs/supervisor-broker.log`. This log is
 for accountability and troubleshooting, not tamper-proof audit. A determined
 root process can bypass the broker, read `/data/.supervisor/token`, call the
 real CLI, alter PATH, or edit logs. This is a guardrail, not a security
-boundary.
+boundary. The pane identity and Codex marker are routing signals inside the
+shared root container, not cryptographic authentication.
 
 ## Modbus Toolbox
 

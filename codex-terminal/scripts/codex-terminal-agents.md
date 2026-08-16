@@ -57,9 +57,10 @@ You are running inside the Codex Terminal Pro Home Assistant add-on.
   asynchronous Codex write.
 - Do not reconstruct or print the Supervisor token.
 - Do not read `/data/.supervisor/token` unless you are maintaining the broker.
-- Never auto-answer a Supervisor broker challenge if one appears. Shell mode
-  and `,,` do not bypass the broker; stop and let the human answer any visible
-  management challenge.
+- Human Shell and `,,` commands run without a second app-specific confirmation.
+  Model-initiated commands are governed by Codex's current approval policy. If
+  a fallback broker challenge still appears, stop and identify the unmarked
+  caller instead of answering it automatically.
 - Treat `/data/.codex/auth.json` and `/data/logs/codex-terminal.log` as
   sensitive files.
 - Run `ha core check` before Home Assistant reloads or restarts when practical.

@@ -108,6 +108,45 @@ test('the bundled loopback shell dispatcher is narrowly allowed without browser 
     assert.equal(unrelatedWrite.status, 403);
 });
 
+test('shell dispatch preserves loopback Codex versus same-origin browser provenance', async (t) => {
+    let bufferFile;
+    const { baseUrl } = await startServer(t, false, (directory) => {
+        const binDirectory = path.join(directory, 'bin');
+        fs.mkdirSync(binDirectory);
+        bufferFile = path.join(directory, 'fake-tmux-buffer');
+        fs.writeFileSync(path.join(binDirectory, 'tmux'), `#!/bin/sh
+case "$1" in
+    list-windows) printf 'raw-shell\\n' ;;
+    display-message) printf '0\\n' ;;
+    load-buffer) cat > "$FAKE_TMUX_BUFFER" ;;
+    capture-pane)
+        start=$(awk 'match($0, /__CTP_SHELL_START_[A-Za-z0-9_]+__/) { print substr($0, RSTART, RLENGTH); exit }' "$FAKE_TMUX_BUFFER")
+        end=$(awk 'match($0, /__CTP_SHELL_END_[A-Za-z0-9_]+__/) { print substr($0, RSTART, RLENGTH); exit }' "$FAKE_TMUX_BUFFER")
+        printf '%s\\ncomplete\\n%s:0\\n' "$start" "$end"
+        ;;
+esac
+`, { mode: 0o755 });
+        return {
+            PATH: `${binDirectory}:${process.env.PATH}`,
+            FAKE_TMUX_BUFFER: bufferFile
+        };
+    });
+
+    const dispatch = (headers) => fetch(`${baseUrl}/terminal-shell-command`, {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command: 'ha store reload' })
+    });
+
+    const loopbackResponse = await dispatch({});
+    assert.equal(loopbackResponse.status, 200);
+    assert.match(fs.readFileSync(bufferFile, 'utf8'), /CODEX_TERMINAL_AGENT_EXECUTION=1/);
+
+    const browserResponse = await dispatch({ Origin: baseUrl });
+    assert.equal(browserResponse.status, 200);
+    assert.doesNotMatch(fs.readFileSync(bufferFile, 'utf8'), /CODEX_TERMINAL_AGENT_EXECUTION=1/);
+});
+
 test('explicit loopback development mode still enforces same-origin upload checks', async (t) => {
     const { baseUrl, directory } = await startServer(t, true);
     const withoutOrigin = new FormData();
@@ -406,26 +445,43 @@ test('an early Codex exit during Mall Cop input returns an error without crashin
 
 test('timed-out shell work is hard-stopped before the request completes', async (t) => {
     let stateFile;
+    let newWindowArgsFile;
+    let respawnArgsFile;
     const { baseUrl } = await startServer(t, true, (directory) => {
         const binDirectory = path.join(directory, 'bin');
         fs.mkdirSync(binDirectory);
         stateFile = path.join(directory, 'fake-tmux-state');
+        newWindowArgsFile = path.join(directory, 'fake-tmux-new-window-args');
+        respawnArgsFile = path.join(directory, 'fake-tmux-respawn-args');
+        const windowStateFile = path.join(directory, 'fake-tmux-window-state');
         const fakeTmux = path.join(binDirectory, 'tmux');
         fs.writeFileSync(fakeTmux, `#!/bin/sh
 case "$1" in
-    list-windows) printf 'raw-shell\\n' ;;
+    list-windows)
+        if [ -f "$FAKE_TMUX_WINDOW_STATE" ]; then printf 'raw-shell\\n'; fi
+        ;;
+    new-window)
+        printf '%s\\n' "$@" > "$FAKE_TMUX_NEW_WINDOW_ARGS"
+        : > "$FAKE_TMUX_WINDOW_STATE"
+        ;;
     display-message) printf '0\\n' ;;
     load-buffer) cat > "$FAKE_TMUX_STATE" ;;
     capture-pane)
         marker=$(awk 'match($0, /__CTP_SHELL_START_[A-Za-z0-9_]+__/) { print substr($0, RSTART, RLENGTH); exit }' "$FAKE_TMUX_STATE")
         if [ -n "$marker" ]; then printf '%s\\nstill running\\n' "$marker"; fi
         ;;
-    respawn-pane) printf '\\nrespawned\\n' >> "$FAKE_TMUX_STATE" ;;
+    respawn-pane)
+        printf '%s\\n' "$@" > "$FAKE_TMUX_RESPAWN_ARGS"
+        printf '\\nrespawned\\n' >> "$FAKE_TMUX_STATE"
+        ;;
 esac
 `, { mode: 0o755 });
         return {
             PATH: `${binDirectory}:${process.env.PATH}`,
+            FAKE_TMUX_NEW_WINDOW_ARGS: newWindowArgsFile,
+            FAKE_TMUX_RESPAWN_ARGS: respawnArgsFile,
             FAKE_TMUX_STATE: stateFile,
+            FAKE_TMUX_WINDOW_STATE: windowStateFile,
             RAW_SHELL_COMMAND_TIMEOUT_MS: '0',
             RAW_SHELL_TERMINATION_GRACE_MS: '0'
         };
@@ -444,6 +500,29 @@ esac
     assert.equal(result.timedOut, true);
     assert.equal(result.terminated, true);
     assert.match(fs.readFileSync(stateFile, 'utf8'), /respawned/);
+
+    const readArgs = (file) => fs.readFileSync(file, 'utf8').trim().split('\n');
+    const expectedLaunch =
+        'env -u CODEX_TERMINAL_AGENT_EXECUTION CODEX_TERMINAL_HUMAN_SHELL=1 /bin/bash -l';
+    assert.deepEqual(readArgs(newWindowArgsFile), [
+        'new-window', '-d',
+        '-t', 'codex-terminal',
+        '-n', 'raw-shell',
+        '-c', '/config',
+        expectedLaunch
+    ]);
+    assert.deepEqual(readArgs(respawnArgsFile), [
+        'respawn-pane', '-k',
+        '-t', 'codex-terminal:raw-shell.0',
+        '-c', '/config',
+        expectedLaunch
+    ]);
+    for (const file of [newWindowArgsFile, respawnArgsFile]) {
+        const launch = readArgs(file).at(-1);
+        assert.match(launch, /\bCODEX_TERMINAL_HUMAN_SHELL=1\b/);
+        assert.match(launch, /\benv -u CODEX_TERMINAL_AGENT_EXECUTION\b/);
+        assert.doesNotMatch(launch, /\bCODEX_TERMINAL_AGENT_EXECUTION=1\b/);
+    }
 });
 
 test('an interrupt failure still hard-respawns before releasing the shell queue', async (t) => {

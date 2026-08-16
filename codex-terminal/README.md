@@ -80,10 +80,10 @@ example `,, ha store reload` or `,,ha store reload`. Completed commands stay in
 Codex mode and return their output in the Codex view. Long-running commands
 switch to Shell mode so they can be controlled interactively.
 
-The `,,` prefix authorizes dispatch to the Shell pane; it does not authorize a
-Home Assistant management operation. Read-only commands run immediately.
-Routine and high-risk `ha` or `supervisor-api` commands still show the broker's
-typed challenge in the Shell pane, where only the human should answer it.
+The Shell pane and `,,` are explicit human command surfaces. Commands entered
+there run without a second app-specific confirmation. Model-initiated shell
+commands are governed by Codex's current approval policy; Auto-review or Full
+access can approve them without an additional terminal challenge.
 
 If browser interception ever misses a `,,` line and Codex sees it as a prompt,
 the shipped `codex-shell-dispatch` helper is the fallback path Codex should use
@@ -347,10 +347,11 @@ persistent_pip_packages: []
 - `ha_monitor_reasoning_daily_budget`: Scheduled reasoning-call cap recorded in
   the budget gate for future or explicit workflows.
 - `ha_monitor_dispatch_max_chars`: Maximum prepared dispatch packet text size.
-- `supervisor_broker_enabled`: Require confirmation for risky Home Assistant
-  management operations from every command surface.
-- `supervisor_broker_t1_ttl_seconds`: Short reuse window for routine
-  management confirmations.
+- `supervisor_broker_enabled`: Keep the fallback broker enabled for unmarked
+  background callers. Verified human terminal commands and commands already
+  admitted by Codex's approval policy do not receive a second prompt.
+- `supervisor_broker_t1_ttl_seconds`: Short reuse window for routine fallback
+  broker confirmations from unknown callers.
 - `persistent_apk_packages`: APK package names to keep in the persistent
   manifest and reinstall as complete system packages at startup.
 - `persistent_pip_packages`: Python packages to install into the persistent
@@ -393,19 +394,21 @@ alone, and does not synthesize or copy a token.
 - Run `ha core check` before reloads or restarts.
 - Only restart Home Assistant after explicit confirmation.
 
-Codex Terminal Pro includes a Supervisor broker guardrail. Read-only `ha`
-commands such as info, logs, stats, and checks run normally. Routine management
-commands such as restart, reload, start, stop, update, rebuild, and options ask
-for a typed confirmation. High-risk host, OS, backup, install, uninstall, and
-delete operations require a fresh nonce and a reason.
-Commands typed in the Shell pane or sent from Codex with `,,` use that same
-guardrail. Read-only work runs directly; management operations require the
-human to answer the visible broker challenge.
+Codex Terminal Pro keeps a Supervisor broker guardrail for unknown background
+callers. Read-only `ha` commands run normally. The two registered operator tmux
+lanes must match their live pane ID and operating-system session before running
+directly, including when a command redirects its input and output.
+Normal Codex launches carry an agent-routing marker, so Codex's native policy
+is the single approval owner; Ask-for-approval, Auto-review, and Full access
+remain the places where model-initiated execution is decided. Unmarked
+management callers still receive the fallback broker challenge or fail closed
+when they are non-interactive.
 
 This prevents many accidental agent-driven operations during normal use. It
 does not prevent a determined root process from bypassing the wrapper, reading
 the token file, editing the broker, or tampering with logs. It is a guardrail,
-not a security boundary.
+not a security boundary. The pane identity and Codex marker are routing signals
+inside that shared root container, not cryptographic authentication.
 
 Clipboard support depends on browser security rules. Nabu Casa and HTTPS
 contexts can use browser clipboard APIs; plain HTTP LAN access may need the
