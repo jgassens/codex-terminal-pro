@@ -81,9 +81,10 @@ def claude_args(prompt: str, model: str, effort: str) -> list[str]:
 
 
 def kimi_args(prompt: str, model: str, effort: str) -> list[str]:
-    # Plan mode is Kimi's read-only posture; the uid drop is what actually
-    # enforces it. Kimi has no effort setting, so it is ignored here.
-    args = ["kimi", "--plan", "-p", prompt]
+    # No --plan here: Kimi refuses to combine it with --prompt. Read-only is
+    # enforced by the uid drop rather than by asking the CLI nicely, so
+    # nothing is lost. Kimi has no effort setting, so it is ignored.
+    args = ["kimi", "-p", prompt]
     if model:
         args += ["--model", model]
     return args

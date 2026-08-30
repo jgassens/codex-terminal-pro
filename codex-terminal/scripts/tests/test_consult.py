@@ -76,8 +76,10 @@ class ConsultantSpecTests(unittest.TestCase):
 
         kimi = consult.CONSULTANTS["kimi"]["build_args"]("why is this failing?", "", "")
         self.assertEqual(kimi[0], "kimi")
-        self.assertIn("--plan", kimi)
         self.assertIn("why is this failing?", kimi)
+        # Kimi rejects --plan alongside --prompt; the uid drop is what makes
+        # a consult read-only, so the flag is not needed.
+        self.assertNotIn("--plan", kimi)
 
 
 class ConsultModelSettingsTests(unittest.TestCase):
@@ -97,6 +99,7 @@ class ConsultModelSettingsTests(unittest.TestCase):
         self.assertFalse(consult.CONSULTANTS["kimi"]["supports_effort"])
         args = consult.CONSULTANTS["kimi"]["build_args"]("q", "kimi-k2", "high")
         self.assertNotIn("--effort", args)
+        self.assertNotIn("--plan", args)
         self.assertEqual(args[args.index("--model") + 1], "kimi-k2")
 
     def test_preferences_are_read_per_consultant(self) -> None:

@@ -31,8 +31,14 @@ colleague who has not seen the conversation: state the goal, what you already
 tried, and what specifically you want judged. Name the files worth reading;
 the consultant can open them itself.
 
-A consult can take a minute or two. Use `--timeout SECONDS` to allow longer,
-up to 1800.
+A consult usually takes one to three minutes, because the consultant is
+reading files before it answers. That is longer than a normal command, so
+expect to wait rather than assuming it has hung. If your own command timeout
+fires first, the consult is still running: wait for it to finish instead of
+starting a second one, which would only pay the cost twice.
+
+Use `--timeout SECONDS` to allow longer than the configured default, up to
+1800.
 
 ## What the consultant can see
 
@@ -41,10 +47,14 @@ read the Home Assistant configuration to answer, and cannot modify anything.
 It does not see your conversation with the user, your session history, or any
 credential file.
 
-Two things follow. First, give it the context it needs in the question itself,
-because it cannot ask a follow-up. Second, the user's configuration is being
-sent to a third-party model, so do not consult over trivia, and do not paste
-secrets into the question.
+Three things follow. First, give it the context it needs in the question
+itself, because it cannot ask a follow-up. Second, the user's configuration is
+being sent to a third-party model, so do not consult over trivia, and do not
+paste secrets into the question. Third, `/config` can hold real credentials,
+such as `secrets.yaml` and tokens under `.storage`, and a consultant may read
+them while answering. Point it at the files the question needs rather than
+inviting a broad search, and if a consultant reports having seen a credential,
+tell the user plainly instead of burying it.
 
 ## Using the answer
 
