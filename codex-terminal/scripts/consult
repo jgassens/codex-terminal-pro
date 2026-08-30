@@ -213,6 +213,31 @@ def consultant_preferences(settings: dict, agent: str) -> tuple[str, str]:
     )
 
 
+def framed_prompt(spec: dict, prompt: str, model: str, effort: str) -> str:
+    """Tell the consultant what it was actually started as.
+
+    A consultant does not know its own invocation: asked which model it is
+    running, it reads its config file and reports the default there, which is
+    wrong whenever --model overrides it. Stating the facts up front keeps a
+    consultant from confidently misreporting itself.
+    """
+    facts = []
+    if model:
+        facts.append(f'the model "{model}"')
+    if effort and spec["supports_effort"]:
+        facts.append(f'reasoning effort "{effort}"')
+    if not facts:
+        return prompt
+    return (
+        "[Consultation context: you were started non-interactively with "
+        + " and ".join(facts)
+        + ". This overrides any default named in your own configuration "
+        "file. You are answering a single question and cannot ask a "
+        "follow-up.]\n\n"
+        + prompt
+    )
+
+
 class ConsultError(RuntimeError):
     """Raised when a consult cannot be run as specified."""
 
@@ -325,7 +350,7 @@ def run_consult(agent: str, prompt: str, timeout: int, model: str = "", effort: 
                     copy_credential(entry, target_dir / entry.name)
 
         completed = subprocess.run(
-            spec["build_args"](prompt, model, effort),
+            spec["build_args"](framed_prompt(spec, prompt, model, effort), model, effort),
             cwd=WORKSPACE,
             env=build_environment(spec, sandbox),
             preexec_fn=drop_privileges,

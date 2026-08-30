@@ -322,3 +322,28 @@ class KimiAuthHelperTests(unittest.TestCase):
         text = self.HELPER.read_text(encoding="utf-8")
         for form in ("default_model", r"\[models", r"\[providers"):
             self.assertIn(form, text)
+
+
+class ConsultPromptFramingTests(unittest.TestCase):
+    """A consultant cannot see its own invocation unless told."""
+
+    def test_model_and_effort_are_stated_to_the_consultant(self) -> None:
+        framed = consult.framed_prompt(
+            consult.CONSULTANTS["claude"], "why is this failing?", "opus", "high"
+        )
+        self.assertIn('the model "opus"', framed)
+        self.assertIn('reasoning effort "high"', framed)
+        self.assertIn("why is this failing?", framed)
+        # The override must be called out, since the config says otherwise.
+        self.assertIn("overrides any default", framed)
+
+    def test_effort_is_omitted_for_a_consultant_without_one(self) -> None:
+        framed = consult.framed_prompt(
+            consult.CONSULTANTS["kimi"], "question", "kimi-code/k3", "high"
+        )
+        self.assertIn('the model "kimi-code/k3"', framed)
+        self.assertNotIn("reasoning effort", framed)
+
+    def test_an_unconfigured_consult_is_left_alone(self) -> None:
+        for spec in consult.CONSULTANTS.values():
+            self.assertEqual(consult.framed_prompt(spec, "plain question", "", ""), "plain question")
