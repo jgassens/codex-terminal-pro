@@ -14,7 +14,9 @@
 const SIGN_IN_URL_HINT = /oauth|authorize|login|device|activate|verify|\bauth\./i;
 const NON_SIGN_IN_URL = /\/docs\/|\/help\/|(^|\/\/)(docs|help|support)\./i;
 const URL_CHAR = /[^\s"'`<>\])]/;
-const CONTINUATION_LINE = /^[!-~]{2,}$/;
+// One or more printable, non-space characters: a URL can wrap so that its
+// final fragment is a single character, and dropping it truncates the link.
+const CONTINUATION_LINE = /^[!-~]+$/;
 
 // A TUI hard-wraps a long URL at exactly the pane's width, so "this line is
 // wrapped" means "this line fills the pane", not any fixed number: the shared

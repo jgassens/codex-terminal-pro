@@ -10,9 +10,11 @@ Isolation, in order of how much it is relied on:
   1. The consultant runs as uid/gid 65534. Everything in /config is
      root-owned mode 644/755, so the kernel grants read and refuses every
      write. This is the guarantee, and it does not depend on CLI behaviour.
-  2. Credentials are copied into a throwaway home rather than shared, so a
-     consultant cannot read another agent's login (all are 0600 root) and
-     cannot rewrite the real credential store.
+  2. Credentials are copied into a throwaway home rather than shared. Each
+     sandbox lives under a root-owned base directory that the unprivileged
+     uid can enter but not list, has a random name, and is removed when the
+     consult ends (including on SIGTERM), so a consultant cannot discover or
+     read another agent's login, nor rewrite the real credential store.
   3. The environment is an allowlist, so no provider API key, Supervisor
      token, or GitHub PAT reaches the consultant.
   4. The CLI's own read-only flags are asked for as well. They are the least
@@ -26,6 +28,7 @@ import ctypes
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -37,6 +40,10 @@ UNPRIVILEGED_UID = 65534
 UNPRIVILEGED_GID = 65534
 PR_SET_NO_NEW_PRIVS = 38
 MAX_CREDENTIAL_BYTES = 1024 * 1024
+# Sandboxes live under this root-owned directory. It is mode 0711, so the
+# unprivileged consultant can traverse into its own (randomly named) sandbox
+# but cannot list the directory to discover a sibling's.
+SANDBOX_BASE = "/tmp/consult"
 DEFAULT_TIMEOUT_SECONDS = 300
 DEFAULT_AGENT = "claude"
 SETTINGS_FILE = os.environ.get("CONSULT_SETTINGS_FILE", "/data/settings.json")
@@ -385,6 +392,21 @@ def build_environment(spec: dict, sandbox_home: Path) -> dict:
     return env
 
 
+def ensure_sandbox_base() -> Path:
+    """Root-owned parent for sandboxes, mode 0711.
+
+    The unprivileged consultant can traverse into its own randomly named
+    sandbox but cannot list this directory, so it cannot enumerate or reach a
+    sibling consult's copied credentials.
+    """
+    base = Path(SANDBOX_BASE)
+    base.mkdir(mode=0o711, exist_ok=True)
+    # mkdir honours umask and is a no-op when the directory already exists, so
+    # assert the mode explicitly either way.
+    os.chmod(base, 0o711)
+    return base
+
+
 def run_consult(agent: str, prompt: str, timeout: int, model: str = "", effort: str = "") -> int:
     spec = CONSULTANTS[agent]
     if effort and not spec["supports_effort"]:
@@ -406,10 +428,33 @@ def run_consult(agent: str, prompt: str, timeout: int, model: str = "", effort: 
     if not is_configured(spec):
         raise ConsultError(
             f"{spec['label']} is not set up yet. Run {spec['auth_helper']} in a "
-            f"shell, or use the session picker's consultant setup entry, to sign in."
+            f"shell, or open the add-on's Settings panel and use its consultant "
+            f"setup, to sign in."
         )
 
-    sandbox = Path(tempfile.mkdtemp(prefix="consult-"))
+    sandbox = Path(tempfile.mkdtemp(prefix="consult-", dir=str(ensure_sandbox_base())))
+    proc = None
+
+    def terminate_child() -> None:
+        if proc is None or proc.poll() is not None:
+            return
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+    def cleanup() -> None:
+        terminate_child()
+        shutil.rmtree(sandbox, ignore_errors=True)
+
+    def on_signal(signum, _frame):
+        # A cancel or shutdown must not orphan the consultant or leave its
+        # copied credentials behind in the sandbox.
+        cleanup()
+        os._exit(128 + signum)
+
+    previous_term = signal.signal(signal.SIGTERM, on_signal)
+    previous_hup = signal.signal(signal.SIGHUP, on_signal)
     try:
         os.chmod(sandbox, 0o700)
         os.chown(sandbox, UNPRIVILEGED_UID, UNPRIVILEGED_GID)
@@ -430,30 +475,43 @@ def run_consult(agent: str, prompt: str, timeout: int, model: str = "", effort: 
         if effort and spec.get("effort_via_config"):
             run_model = spec["effort_via_config"](sandbox, model, effort)
 
-        completed = subprocess.run(
+        # start_new_session puts the consultant and anything it spawns in their
+        # own process group, so a timeout or cancel kills the whole tree rather
+        # than orphaning children under a deleted sandbox.
+        proc = subprocess.Popen(
             spec["build_args"](framed_prompt(spec, prompt, model, effort), run_model, effort),
             cwd=WORKSPACE,
             env=build_environment(spec, sandbox),
             preexec_fn=drop_privileges,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout,
-            check=False,
+            start_new_session=True,
         )
-    except subprocess.TimeoutExpired:
-        raise ConsultError(f"{spec['label']} did not answer within {timeout}s")
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            terminate_child()
+            proc.communicate()
+            raise ConsultError(f"{spec['label']} did not answer within {timeout}s")
+        returncode = proc.returncode
     finally:
-        shutil.rmtree(sandbox, ignore_errors=True)
+        signal.signal(signal.SIGTERM, previous_term)
+        signal.signal(signal.SIGHUP, previous_hup)
+        cleanup()
 
-    answer = (completed.stdout or "").strip()
-    if answer:
-        print(answer)
-    if completed.returncode != 0 and not answer:
-        detail = (completed.stderr or "").strip().splitlines()
+    if returncode != 0:
+        # A consultant that failed must never be reported as a successful
+        # answer: surface the exit code and the last line of its stderr, and
+        # drop any partial stdout rather than passing it off as the opinion.
+        detail = (stderr or "").strip().splitlines()
         raise ConsultError(
-            f"{spec['label']} exited {completed.returncode}"
+            f"{spec['label']} exited {returncode}"
             + (f": {detail[-1]}" if detail else "")
         )
+    answer = (stdout or "").strip()
+    if answer:
+        print(answer)
     return 0
 
 
@@ -462,9 +520,20 @@ def status_records() -> list[dict]:
     records = []
     for agent, spec in CONSULTANTS.items():
         installed = shutil.which(spec["binary"]) is not None
+        home = consultant_home(spec)
         signed_in = installed and is_configured(spec)
-        ready, note = spec["ready_check"](consultant_home(spec)) if signed_in else (False, "")
+        ready, note = spec["ready_check"](home) if signed_in else (False, "")
         model, effort = consultant_preferences(settings, agent)
+        models = spec["list_models"](home) if installed else []
+        # Effort levels can depend on the chosen model (Kimi's are per model),
+        # so report them per model - keyed by model name, with "" for the CLI
+        # default - and keep the stored model's list under effortLevels for the
+        # first render. effortDependsOnModel tells a validator whether an
+        # unlisted (custom) model's efforts can be checked here at all.
+        effort_by_model = (
+            {name: spec["list_efforts"](home, name) for name in ([""] + models)}
+            if installed else {}
+        )
         records.append({
             "id": agent,
             "label": spec["label"],
@@ -475,9 +544,11 @@ def status_records() -> list[dict]:
             "authHelper": spec["auth_helper"],
             "supportsModel": spec["supports_model"],
             "supportsEffort": spec["supports_effort"],
-            "effortLevels": spec["list_efforts"](consultant_home(spec), model) if installed else [],
+            "effortDependsOnModel": spec.get("effort_via_config") is not None,
+            "effortLevels": spec["list_efforts"](home, model) if installed else [],
+            "effortLevelsByModel": effort_by_model,
             "modelHint": spec["model_hint"],
-            "models": spec["list_models"](consultant_home(spec)) if installed else [],
+            "models": models,
             "model": model,
             "effort": effort,
         })

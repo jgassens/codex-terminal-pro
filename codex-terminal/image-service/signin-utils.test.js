@@ -55,6 +55,24 @@ test('extractSignInUrl reassembles wraps at any pane width', () => {
     }
 });
 
+test('extractSignInUrl keeps a single-character final wrapped fragment', () => {
+    // A URL whose length is one past a multiple of the pane width wraps to a
+    // last line of exactly one character; that character must not be dropped.
+    const width = 40;
+    let fullUrl = 'https://claude.com/cai/oauth/authorize?code=true&state=';
+    while (fullUrl.length % width !== 0) {
+        fullUrl += 'a';
+    }
+    fullUrl += 'Z';
+    const chunks = [];
+    for (let i = 0; i < fullUrl.length; i += width) {
+        chunks.push(fullUrl.slice(i, i + width));
+    }
+    assert.equal(chunks[chunks.length - 1], 'Z', 'last fragment should be one char');
+    const pane = ['Welcome to Claude Code', '', ...chunks, '', ' Paste code here >'].join('\n');
+    assert.equal(extractSignInUrl(pane, { paneWidth: width }), fullUrl);
+});
+
 test('extractSignInUrl ignores documentation links on post-login screens', () => {
     // Claude Code's security-notes screen after a successful sign-in: this
     // must not be mistaken for a pending authorization prompt.

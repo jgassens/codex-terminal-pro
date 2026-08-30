@@ -237,10 +237,6 @@ class ConsultCliTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class ConsultReadinessTests(unittest.TestCase):
     """A token is not the same as being able to answer."""
 
@@ -427,3 +423,7 @@ class KimiEffortTests(unittest.TestCase):
         ])
         parsed = tomllib.loads(rendered)["t"]
         self.assertEqual(parsed, {"s": "a b", "n": 42, "b": True, "l": ["x", "y"], "q": 'say "hi"'})
+
+
+if __name__ == "__main__":
+    unittest.main()

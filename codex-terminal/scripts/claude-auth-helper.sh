@@ -4,8 +4,6 @@ set -euo pipefail
 
 CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-/data/.claude}"
 AUTH_FILE="$CLAUDE_CONFIG_DIR/.credentials.json"
-TOKEN_ENV_FILE="$CLAUDE_CONFIG_DIR/oauth-token.env"
-AUTH_CODE_FILE="/config/auth-code.txt"
 
 ensure_claude_home() {
     mkdir -p "$CLAUDE_CONFIG_DIR"
@@ -59,27 +57,15 @@ check_auth() {
         echo "Credentials file: missing"
         echo "Status: not authenticated yet, or credentials are stored elsewhere"
     fi
-
-    if [ -f "$TOKEN_ENV_FILE" ]; then
-        echo "Long-lived OAuth token file: present ($TOKEN_ENV_FILE)"
-    fi
 }
 
 fix_permissions() {
     ensure_claude_home
 
-    local fixed=1
     if [ -f "$AUTH_FILE" ]; then
         chmod 600 "$AUTH_FILE"
         echo "Fixed permissions on $AUTH_FILE"
-        fixed=0
-    fi
-    if [ -f "$TOKEN_ENV_FILE" ]; then
-        chmod 600 "$TOKEN_ENV_FILE"
-        echo "Fixed permissions on $TOKEN_ENV_FILE"
-        fixed=0
-    fi
-    if [ "$fixed" -ne 0 ]; then
+    else
         echo "No credential files found under $CLAUDE_CONFIG_DIR"
         return 1
     fi
@@ -109,10 +95,8 @@ interactive_login() {
     echo "Tips for pasting in the web terminal:"
     echo "  - Try Ctrl+Shift+V or right-click paste"
     echo "  - Use the Paste panel in the add-on web page header"
+    echo "  - Use the sign-in dialog's code field on the add-on web page"
     echo "  - On mobile, long-press usually shows a paste option"
-    echo ""
-    echo "If pasting refuses to work, exit Claude Code, save the code to"
-    echo "$AUTH_CODE_FILE and use the paste-from-file option instead."
     echo ""
     printf "Press Enter to launch Claude Code..." >&2
     read -r _
@@ -125,83 +109,12 @@ interactive_login() {
     fi
 }
 
-login_code_from_file() {
-    ensure_claude_home
-
-    if ! command -v claude >/dev/null 2>&1; then
-        echo "claude command was not found in PATH."
-        return 1
-    fi
-
-    echo "Looking for a login code in: $AUTH_CODE_FILE"
-    echo ""
-
-    if [ ! -f "$AUTH_CODE_FILE" ]; then
-        echo "File not found: $AUTH_CODE_FILE"
-        echo ""
-        echo "To use this method:"
-        echo "  1. Start the login option first and open the printed URL"
-        echo "  2. Save the code you receive into $AUTH_CODE_FILE"
-        echo "     (create the file in Home Assistant's config share)"
-        echo "  3. Run this option again"
-        return 1
-    fi
-
-    local auth_code
-    auth_code=$(head -n 1 "$AUTH_CODE_FILE" | tr -d '[:space:]')
-    if [ -z "$auth_code" ]; then
-        echo "File exists but is empty: $AUTH_CODE_FILE"
-        return 1
-    fi
-
-    echo "Code found. Feeding it to Claude Code..."
-    printf '%s\n' "$auth_code" | claude || true
-
-    rm -f "$AUTH_CODE_FILE"
-    echo "Removed $AUTH_CODE_FILE"
-
-    if [ -f "$AUTH_FILE" ]; then
-        chmod 600 "$AUTH_FILE"
-        echo "Credentials file exists and permissions were set to 600."
-    fi
-}
-
-store_long_lived_token() {
-    ensure_claude_home
-
-    echo "Long-lived token: mint on a trusted machine, store here"
-    echo ""
-    echo "On a trusted local machine with a browser:"
-    echo "  1. Run: claude setup-token"
-    echo "  2. Complete the browser sign-in with your Claude subscription"
-    echo "  3. Copy the token it prints (it is shown once)"
-    echo ""
-    echo "The token will be stored with permissions 600 at:"
-    echo "  $TOKEN_ENV_FILE"
-    echo ""
-    printf "Paste the token now (input is hidden; empty cancels): " >&2
-    local token
-    read -r -s token
-    echo ""
-
-    if [ -z "$token" ]; then
-        echo "Cancelled; nothing was stored."
-        return 1
-    fi
-
-    umask 177
-    printf 'export CLAUDE_CODE_OAUTH_TOKEN="%s"\n' "$token" > "$TOKEN_ENV_FILE"
-    chmod 600 "$TOKEN_ENV_FILE"
-    echo "Token stored. New shells pick it up automatically; restart the"
-    echo "add-on (or reload the session) so the terminal pane sees it."
-}
-
 show_import_instructions() {
     ensure_claude_home
 
     echo "Fallback: authenticate locally and copy the credentials file"
     echo ""
-    echo "On a trusted local machine with a browser:"
+    echo "On a trusted local Linux/WSL machine with a browser:"
     echo "  1. Run: claude"
     echo "  2. Complete the sign-in with your Claude subscription"
     echo "  3. Confirm this file exists:"
@@ -209,6 +122,10 @@ show_import_instructions() {
     echo "  4. Copy that file into this add-on's Claude home:"
     echo "       $AUTH_FILE"
     echo "  5. In this helper, choose the permissions fix option."
+    echo ""
+    echo "On macOS, Claude Code stores credentials in the login Keychain"
+    echo "rather than in ~/.claude/.credentials.json, so this file-copy"
+    echo "method does not apply there - use the launch-and-paste option above."
     echo ""
     echo "Do not print, paste, commit, or share .credentials.json. It"
     echo "contains access tokens."
@@ -228,13 +145,11 @@ main() {
         echo "Options:"
         echo "  1) Check credentials/status"
         echo "  2) Sign in: launch Claude Code and paste the code"
-        echo "  3) Sign in with a code saved to $AUTH_CODE_FILE"
-        echo "  4) Store a long-lived token from: claude setup-token"
-        echo "  5) Show fallback import instructions"
-        echo "  6) Fix credential file permissions to 600"
-        echo "  7) Exit"
+        echo "  3) Show fallback import instructions"
+        echo "  4) Fix credential file permissions to 600"
+        echo "  5) Exit"
         echo ""
-        printf "Enter your choice [1-7]: " >&2
+        printf "Enter your choice [1-5]: " >&2
         read -r choice
 
         case "$choice" in
@@ -250,25 +165,15 @@ main() {
                 ;;
             3)
                 echo ""
-                login_code_from_file || true
+                show_import_instructions
                 pause
                 ;;
             4)
                 echo ""
-                store_long_lived_token || true
-                pause
-                ;;
-            5)
-                echo ""
-                show_import_instructions
-                pause
-                ;;
-            6)
-                echo ""
                 fix_permissions || true
                 pause
                 ;;
-            7)
+            5)
                 exit 0
                 ;;
             *)
@@ -279,4 +184,8 @@ main() {
     done
 }
 
-main "$@"
+# Skip the interactive menu when sourced (so the file's functions can be
+# exercised without entering the read-eval loop).
+if [ -z "${CLAUDE_AUTH_HELPER_NO_MAIN:-}" ]; then
+    main "$@"
+fi

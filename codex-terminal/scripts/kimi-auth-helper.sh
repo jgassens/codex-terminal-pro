@@ -12,6 +12,12 @@ token_files() {
     find "$CRED_DIR" -maxdepth 1 -type f -name '*.json' 2>/dev/null
 }
 
+# Tighten every token file. find -exec keeps filenames intact, so a name with
+# a space or glob character is chmod'd rather than word-split into failures.
+chmod_token_files() {
+    find "$CRED_DIR" -maxdepth 1 -type f -name '*.json' -exec chmod 600 {} + 2>/dev/null
+}
+
 has_token() {
     [ -n "$(token_files)" ]
 }
@@ -28,7 +34,9 @@ ensure_kimi_home() {
 
 auth_mode() {
     if has_token; then
-        stat -c "%a" $(token_files) 2>/dev/null | head -n 1 || echo "unknown"
+        local first
+        first=$(token_files | head -n 1)
+        stat -c "%a" "$first" 2>/dev/null || echo "unknown"
     else
         echo "missing"
     fi
@@ -82,7 +90,7 @@ fix_permissions() {
         return 1
     fi
 
-    chmod 600 $(token_files)
+    chmod_token_files
     echo "Fixed permissions on the credentials in $CRED_DIR"
 }
 
@@ -145,7 +153,7 @@ device_login() {
     kimi login $region_flag || true
 
     if has_token; then
-        chmod 600 $(token_files)
+        chmod_token_files
         echo ""
         echo "Credentials are present and permissions were set to 600."
         if ! has_model; then
@@ -159,19 +167,21 @@ device_login() {
 show_import_instructions() {
     ensure_kimi_home
 
-    echo "Fallback: authenticate locally and copy the credentials file"
+    echo "Fallback: authenticate locally and copy the credential files"
     echo ""
     echo "On a trusted local machine with a browser:"
     echo "  1. Run: kimi login"
     echo "  2. Complete the device-code sign-in"
-    echo "  3. Confirm this file exists:"
-    echo "       ~/.kimi-code/credentials.json"
-    echo "  4. Copy that file into this add-on's Kimi home:"
+    echo "  3. Find the credentials directory Kimi wrote (one JSON file"
+    echo "     per account):"
+    echo "       ~/.kimi-code/credentials/"
+    echo "  4. Copy the *.json file(s) from there into this add-on's Kimi"
+    echo "     credentials directory:"
     echo "       $CRED_DIR/"
     echo "  5. In this helper, choose the permissions fix option."
     echo ""
-    echo "Do not print, paste, commit, or share credentials.json. It"
-    echo "contains access tokens."
+    echo "Do not print, paste, commit, or share these files. They contain"
+    echo "access tokens."
 }
 
 pause() {
@@ -189,7 +199,7 @@ main() {
         echo "  1) Check credentials/status"
         echo "  2) Start device-code login: kimi login"
         echo "  3) Show fallback import instructions"
-        echo "  4) Fix credentials.json permissions to 600"
+        echo "  4) Fix credential file permissions to 600"
         echo "  5) Exit"
         echo ""
         printf "Enter your choice [1-5]: " >&2
@@ -227,4 +237,8 @@ main() {
     done
 }
 
-main "$@"
+# Skip the interactive menu when sourced (the test suite sources this file to
+# exercise its functions without entering the read-eval loop).
+if [ -z "${KIMI_AUTH_HELPER_NO_MAIN:-}" ]; then
+    main "$@"
+fi

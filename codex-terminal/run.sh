@@ -35,7 +35,7 @@ init_environment() {
     bashio::log.info "Initializing Codex environment in /data..."
 
     if ! mkdir -p "$data_home" "$config_dir" "$cache_dir" "$local_dir" "$state_dir" "$data_dir" \
-                  "$codex_home" "$gh_config_dir" "$persist_bin" \
+                  "$codex_home" "$claude_home" "$kimi_home" "$gh_config_dir" "$persist_bin" \
                   "$persist_python" "$guard_bin" "$guard_libexec" "$image_dir" "$log_dir" \
                   "$monitor_dir/tasks.d" "$supervisor_dir/confirm"; then
         bashio::log.error "Failed to create directories in /data"
@@ -570,13 +570,18 @@ ensure_consultant_defaults() {
         /opt/scripts/claude-config-set "$claude_settings" env.USE_BUILTIN_RIPGREP '"0"' 2>/dev/null || true
     fi
 
-    local cred
-    for cred in "${CLAUDE_CONFIG_DIR:-/data/.claude}/.credentials.json" \
-                "${KIMI_CODE_HOME:-/data/.kimi-code}/credentials.json"; do
-        if [ -f "$cred" ]; then
-            chmod 600 "$cred" 2>/dev/null || true
-        fi
-    done
+    local claude_cred="${CLAUDE_CONFIG_DIR:-/data/.claude}/.credentials.json"
+    if [ -f "$claude_cred" ]; then
+        chmod 600 "$claude_cred" 2>/dev/null || true
+    fi
+
+    # Kimi stores one JSON token file per account in a credentials/ directory,
+    # not a single credentials.json, so tighten each file it actually wrote.
+    local kimi_cred_dir="${KIMI_CODE_HOME:-/data/.kimi-code}/credentials"
+    if [ -d "$kimi_cred_dir" ]; then
+        find "$kimi_cred_dir" -maxdepth 1 -type f -name '*.json' \
+            -exec chmod 600 {} + 2>/dev/null || true
+    fi
 }
 
 setup_shell_dispatch_profile() {

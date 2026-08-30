@@ -4559,6 +4559,8 @@
         let renderedSignInUrl = null;
         let dismissedSignInUrl = null;
         let loadedUiBuildId = null;
+        let signInSubmitInFlight = false;
+        let consultantSetupInFlight = false;
 
         // An add-on update replaces this page, but the terminal iframe's
         // beforeunload handler can swallow a reload, leaving an old UI on
@@ -4678,6 +4680,13 @@
                 signinCodeInput.focus();
                 return;
             }
+            // A second Enter or click while the first submission is in flight
+            // would type the code into the login TUI twice; disabling the
+            // button alone does not stop the Enter-key path.
+            if (signInSubmitInFlight) {
+                return;
+            }
+            signInSubmitInFlight = true;
             signinCodeSubmit.disabled = true;
             try {
                 // A pasted localhost callback goes to the CLI's own listener
@@ -4710,7 +4719,11 @@
                 dismissedSignInUrl = renderedSignInUrl;
                 closeSignInPanel();
                 setStatus('Code submitted — finishing sign-in…', 'success');
+            } catch (err) {
+                console.error('Sign-in code submit failed:', err);
+                setStatus('Could not submit the code. Check your connection and try again.', 'error');
             } finally {
+                signInSubmitInFlight = false;
                 signinCodeSubmit.disabled = false;
             }
         }
@@ -4739,6 +4752,19 @@
             return controls.modelSelect.value === CUSTOM_MODEL
                 ? controls.modelCustom.value.trim()
                 : controls.modelSelect.value;
+        }
+
+        function effortLevelsFor(consultant, model) {
+            const byModel = consultant.effortLevelsByModel || {};
+            if (Object.prototype.hasOwnProperty.call(byModel, model)) {
+                return byModel[model] || [];
+            }
+            if (!consultant.effortDependsOnModel) {
+                return consultant.effortLevels || [];
+            }
+            // A custom model with model-dependent effort: the real options are
+            // unknown until the CLI runs, so offer the default model's as a hint.
+            return byModel[''] || consultant.effortLevels || [];
         }
 
         function renderConsultantRow(consultant) {
@@ -4781,6 +4807,7 @@
             block.appendChild(row);
 
             const controls = { modelSelect: null, modelCustom: null, effort: null };
+            let repopulateEffort = null;
 
             if (consultant.supportsModel) {
                 const available = consultant.models || [];
@@ -4832,6 +4859,9 @@
                 modelCustom.style.display = modelSelect.value === CUSTOM_MODEL ? '' : 'none';
                 modelSelect.addEventListener('change', () => {
                     modelCustom.style.display = modelSelect.value === CUSTOM_MODEL ? '' : 'none';
+                    if (repopulateEffort) {
+                        repopulateEffort();
+                    }
                 });
 
                 controls.modelSelect = modelSelect;
@@ -4861,18 +4891,28 @@
 
                 const effortSelect = document.createElement('select');
                 effortSelect.className = 'settings-input';
-                const blank = document.createElement('option');
-                blank.value = '';
-                blank.textContent = 'Default';
-                effortSelect.appendChild(blank);
-                for (const level of consultant.effortLevels || []) {
-                    const option = document.createElement('option');
-                    option.value = level;
-                    option.textContent = level;
-                    effortSelect.appendChild(option);
-                }
-                effortSelect.value = consultant.effort || '';
                 controls.effort = effortSelect;
+
+                // Effort options track the selected model (Kimi's efforts are
+                // per model), so rebuild them whenever the model changes and
+                // keep the current choice when the new model still allows it.
+                repopulateEffort = () => {
+                    const desired = effortSelect.value || consultant.effort || '';
+                    const levels = effortLevelsFor(consultant, consultantModelValue(controls));
+                    effortSelect.textContent = '';
+                    const blank = document.createElement('option');
+                    blank.value = '';
+                    blank.textContent = 'Default';
+                    effortSelect.appendChild(blank);
+                    for (const level of levels) {
+                        const option = document.createElement('option');
+                        option.value = level;
+                        option.textContent = level;
+                        effortSelect.appendChild(option);
+                    }
+                    effortSelect.value = levels.includes(desired) ? desired : '';
+                };
+                repopulateEffort();
 
                 effortRow.append(effortLabel, effortSelect);
                 block.appendChild(effortRow);
@@ -4882,7 +4922,28 @@
             return block;
         }
 
+        async function syncTerminalModeFromServer() {
+            // Reconcile the UI's mode with the server's actual mode. Used after a
+            // consultant-setup failure, where the server may have switched (or
+            // rolled back) the shared window while the UI still shows Codex.
+            try {
+                const res = await protectedIngressFetch('config');
+                const config = await res.json().catch(() => null);
+                if (config && (config.terminalMode === 'raw' || config.terminalMode === 'codex')) {
+                    setTerminalModeState(config.terminalMode, false);
+                }
+            } catch {
+                // Leave the mode as-is; the next explicit switch corrects it.
+            }
+        }
+
         async function startConsultantSetup(consultant) {
+            // One setup at a time: a second click (or reopening Settings and
+            // clicking again) must not fire a concurrent setup into the pane.
+            if (consultantSetupInFlight) {
+                return;
+            }
+            consultantSetupInFlight = true;
             setStatus(`Starting ${consultant.label} sign-in…`);
             try {
                 const res = await protectedIngressFetch('consultant-setup', {
@@ -4900,6 +4961,11 @@
             } catch (err) {
                 console.error('Consultant setup failed:', err);
                 setStatus(`Could not start ${consultant.label} sign-in.`, 'error');
+                // The server may have switched the shared window before failing,
+                // so realign the UI's mode with whatever the server ended on.
+                await syncTerminalModeFromServer();
+            } finally {
+                consultantSetupInFlight = false;
             }
         }
 
@@ -4975,6 +5041,9 @@
                 // confirmation has to come after it.
                 await loadSettings();
                 setStatus('✓ Settings saved and applied.', 'success');
+            } catch (err) {
+                console.error('Settings save failed:', err);
+                setStatus('Could not save settings. Check your connection and try again.', 'error');
             } finally {
                 settingsSave.disabled = false;
             }

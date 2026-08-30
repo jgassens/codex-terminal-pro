@@ -352,6 +352,13 @@ function capturePaneText(target, callback) {
     ], callback);
 }
 
+// Only the visible screen, no scrollback. A pending sign-in prompt is on the
+// current screen; scanning history would keep matching a completed sign-in's
+// URL (or any old auth-looking line) long after it stopped being live.
+function capturePaneVisible(target, callback) {
+    runTmux(['capture-pane', '-p', '-J', '-t', target], callback);
+}
+
 function truncateShellOutput(output) {
     if (output.length <= RAW_SHELL_OUTPUT_MAX_CHARS) {
         return { output, truncated: false };
@@ -2808,10 +2815,21 @@ app.post('/settings', (req, res) => {
                             error: `${known.label} has no reasoning effort setting`
                         });
                     }
-                    if (!(known.effortLevels || []).includes(effort)) {
+                    // Validate against the model being saved, not the one stored
+                    // earlier: for Kimi the levels are per model. An unlisted
+                    // (custom) model whose levels are unknown here is left for
+                    // the consult CLI to validate at run time.
+                    const byModel = known.effortLevelsByModel || {};
+                    let levels = known.effortLevels || [];
+                    if (Object.prototype.hasOwnProperty.call(byModel, model)) {
+                        levels = byModel[model];
+                    } else if (known.effortDependsOnModel) {
+                        levels = null;
+                    }
+                    if (levels && !levels.includes(effort)) {
                         return res.status(400).json({
                             success: false,
-                            error: `Effort for ${known.label} must be one of: ${(known.effortLevels || []).join(', ')}`
+                            error: `Effort for ${known.label} with that model must be one of: ${levels.join(', ')}`
                         });
                     }
                 }
@@ -2825,6 +2843,14 @@ app.post('/settings', (req, res) => {
     });
 });
 
+// Programs that mean the shell pane is mid-flow and must not be typed into: a
+// consultant login TUI runs as node, and codex is the agent itself. The auth
+// helpers are bash, so an idle shell or a waiting helper menu is not busy.
+const BUSY_PANE_COMMANDS = new Set(['node', 'codex', 'claude', 'kimi', 'python', 'python3']);
+function isBusyPaneCommand(name) {
+    return BUSY_PANE_COMMANDS.has(String(name || '').replace(/^-/, ''));
+}
+
 // Start a consultant's sign-in helper. It runs in the shell pane rather than
 // the agent pane so it never types into a working Codex session; the sign-in
 // dialog then picks the printed URL up from whichever pane is on screen.
@@ -2834,6 +2860,7 @@ app.post('/consultant-setup', (req, res) => {
     }
 
     const requested = typeof req.body?.agent === 'string' ? req.body.agent : '';
+    const previousMode = activeTerminalMode;
 
     readConsultantStatus((statusErr, consultants) => {
         if (statusErr) {
@@ -2852,24 +2879,54 @@ app.post('/consultant-setup', (req, res) => {
             });
         }
 
-        selectTerminalMode('raw', (modeErr) => {
-            if (modeErr) {
-                console.error('Failed to select the shell pane for consultant setup:', modeErr.message);
+        ensureRawTerminal((ensureErr) => {
+            if (ensureErr) {
+                console.error('Failed to open the shell pane for consultant setup:', ensureErr.message);
                 return res.status(502).json({ success: false, error: 'Failed to open the shell pane' });
             }
 
-            runTmux(['send-keys', '-t', RAW_TMUX_TARGET, 'C-u'], () => {
-                pasteTextToTarget(consultant.authHelper, RAW_TMUX_TARGET, 'consultant setup', (pasteErr) => {
-                    if (pasteErr) {
-                        console.error('Failed to stage the consultant setup command:', pasteErr.message);
-                        return res.status(502).json({ success: false, error: 'Failed to start the setup helper' });
+            // Refuse if a program already holds the shell pane (e.g. another
+            // consultant's login TUI waiting for a code): typing the helper
+            // command there would submit it as that program's input instead.
+            runTmux(['display-message', '-p', '-t', RAW_TMUX_TARGET, '#{pane_current_command}'], (cmdErr, cmdOut) => {
+                const current = cmdErr ? '' : String(cmdOut).trim();
+                if (isBusyPaneCommand(current)) {
+                    return res.status(409).json({
+                        success: false,
+                        error: `The Shell pane is busy running ${current}. Finish or cancel that sign-in before starting another.`
+                    });
+                }
+
+                selectTerminalMode('raw', (modeErr) => {
+                    if (modeErr) {
+                        console.error('Failed to select the shell pane for consultant setup:', modeErr.message);
+                        return res.status(502).json({ success: false, error: 'Failed to open the shell pane' });
                     }
-                    runTmux(['send-keys', '-t', RAW_TMUX_TARGET, 'Enter'], (enterErr) => {
-                        if (enterErr) {
-                            console.error('Failed to run the consultant setup command:', enterErr.message);
-                            return res.status(502).json({ success: false, error: 'Failed to start the setup helper' });
+
+                    // Any failure after the switch rolls the mode back, so a
+                    // half-done setup never strands the shared window on the
+                    // shell pane while the UI still believes it is in Codex mode.
+                    const fail = (message) => selectTerminalMode(previousMode, (restoreErr) => {
+                        if (restoreErr) {
+                            console.error(`Failed to restore terminal mode ${previousMode}:`, restoreErr.message);
                         }
-                        res.json({ success: true, mode: 'raw', consultant });
+                        res.status(502).json({ success: false, error: message });
+                    });
+
+                    runTmux(['send-keys', '-t', RAW_TMUX_TARGET, 'C-u'], () => {
+                        pasteTextToTarget(consultant.authHelper, RAW_TMUX_TARGET, 'consultant setup', (pasteErr) => {
+                            if (pasteErr) {
+                                console.error('Failed to stage the consultant setup command:', pasteErr.message);
+                                return fail('Failed to start the setup helper');
+                            }
+                            runTmux(['send-keys', '-t', RAW_TMUX_TARGET, 'Enter'], (enterErr) => {
+                                if (enterErr) {
+                                    console.error('Failed to run the consultant setup command:', enterErr.message);
+                                    return fail('Failed to start the setup helper');
+                                }
+                                res.json({ success: true, mode: 'raw', consultant });
+                            });
+                        });
                     });
                 });
             });
@@ -2900,7 +2957,7 @@ app.get('/agent-login-url', (req, res) => {
         const paneWidth = Number.parseInt(widthRaw || '', 10);
         const panePid = Number.parseInt(pidRaw || '', 10);
 
-        capturePaneText(target, (err, output) => {
+        capturePaneVisible(target, (err, output) => {
             if (err) {
                 console.error(`Failed to capture ${target} for the sign-in link:`, err.message);
                 return res.status(502).json({ success: false, error: 'Failed to read the terminal pane' });
@@ -2909,14 +2966,25 @@ app.get('/agent-login-url', (req, res) => {
             const url = extractSignInUrl(output || '', {
                 paneWidth: Number.isNaN(paneWidth) ? null : paneWidth
             });
+            // Only a URL whose host is a known consultant/Codex sign-in host is
+            // treated as pending. An arbitrary auth-looking URL the agent merely
+            // printed must never be dressed up as a trusted sign-in prompt.
+            const label = url ? signInUrlLabel(url) : null;
+            const pending = Boolean(url && label);
             const finish = (qrSvg, running) => res.json({
                 success: true,
-                found: Boolean(url),
-                url: url || null,
-                sourceLabel: url ? signInUrlLabel(url) : null,
+                found: pending,
+                url: pending ? url : null,
+                sourceLabel: label,
                 qrSvg: qrSvg || null,
                 running: running || null
             });
+
+            // Nothing pending: answer without scanning the process table.
+            if (!pending) {
+                return finish(null, null);
+            }
+
             const respond = (qrSvg) => {
                 if (!Number.isInteger(panePid)) {
                     return finish(qrSvg, null);
@@ -2926,9 +2994,6 @@ app.get('/agent-login-url', (req, res) => {
                 });
             };
 
-            if (!url) {
-                return respond(null);
-            }
             // The browser polls this endpoint, so cache the last rendering.
             // A QR failure must never break the link itself.
             if (signInQrCache.url === url) {
@@ -2971,15 +3036,22 @@ app.post('/agent-callback-forward', (req, res) => {
         timeout: 10000
     }, (upstream) => {
         upstream.resume();
-        res.json({ success: true, forwarded: true, status: upstream.statusCode });
+        // The listener can still reset the socket or time out after sending
+        // headers, so guard every send: a second one would throw
+        // ERR_HTTP_HEADERS_SENT from an event callback and crash the service.
+        if (!res.headersSent) {
+            res.json({ success: true, forwarded: true, status: upstream.statusCode });
+        }
     });
     forward.on('timeout', () => forward.destroy(new Error('timed out')));
     forward.on('error', (err) => {
         console.warn('Sign-in callback forward failed:', err.message);
-        res.status(502).json({
-            success: false,
-            error: 'No sign-in is waiting for this callback - restart the sign-in and try again'
-        });
+        if (!res.headersSent) {
+            res.status(502).json({
+                success: false,
+                error: 'No sign-in is waiting for this callback - restart the sign-in and try again'
+            });
+        }
     });
 });
 
@@ -3028,39 +3100,54 @@ app.post('/terminal-cancel-signin', (req, res) => {
     }
 
     const target = activeTmuxTarget();
-    runTmux(['display-message', '-p', '-t', target, '#{pane_pid}'], (paneErr, paneOut) => {
-        const panePid = paneErr ? NaN : Number.parseInt(String(paneOut).trim(), 10);
-        if (!Number.isInteger(panePid)) {
+    // Cancel only when a sign-in is genuinely on screen in this pane. Without
+    // this, a stray click when a consultant merely printed an auth-looking URL
+    // (or the dialog lingered) would SIGKILL whatever runs in the pane - in
+    // Codex mode, the user's working Codex session.
+    capturePaneVisible(target, (capErr, paneText) => {
+        if (capErr) {
+            console.error(`Failed to capture ${target} to confirm a pending sign-in:`, capErr.message);
             return res.status(502).json({ success: false, error: 'Failed to inspect the terminal pane' });
         }
+        const pendingUrl = extractSignInUrl(paneText || '', {});
+        if (!pendingUrl || !signInUrlLabel(pendingUrl)) {
+            return res.json({ success: true, cancelled: false, reason: 'No sign-in is currently pending' });
+        }
 
-        findCancelTarget(panePid, (findErr, found) => {
-            if (findErr) {
-                console.error('Sign-in cancel process scan failed:', findErr.message);
+        runTmux(['display-message', '-p', '-t', target, '#{pane_pid}'], (paneErr, paneOut) => {
+            const panePid = paneErr ? NaN : Number.parseInt(String(paneOut).trim(), 10);
+            if (!Number.isInteger(panePid)) {
                 return res.status(502).json({ success: false, error: 'Failed to inspect the terminal pane' });
             }
-            if (!found) {
-                return res.json({ success: true, cancelled: false, reason: 'Nothing is running to cancel' });
-            }
 
-            try {
-                process.kill(found.pid, 'SIGTERM');
-            } catch (killErr) {
-                console.error(`Sign-in cancel SIGTERM to ${found.pid} failed:`, killErr.message);
-                return res.status(502).json({ success: false, error: 'Failed to stop the running program' });
-            }
-
-            // Escalate only if the CLI ignores SIGTERM.
-            setTimeout(() => {
-                try {
-                    process.kill(found.pid, 0);
-                    process.kill(found.pid, 'SIGKILL');
-                    console.warn(`Sign-in cancel escalated to SIGKILL for ${found.name} (${found.pid})`);
-                } catch {
-                    // Already exited, which is the normal case.
+            findCancelTarget(panePid, (findErr, found) => {
+                if (findErr) {
+                    console.error('Sign-in cancel process scan failed:', findErr.message);
+                    return res.status(502).json({ success: false, error: 'Failed to inspect the terminal pane' });
                 }
-                res.json({ success: true, cancelled: true, program: found.name });
-            }, 1500);
+                if (!found) {
+                    return res.json({ success: true, cancelled: false, reason: 'Nothing is running to cancel' });
+                }
+
+                try {
+                    process.kill(found.pid, 'SIGTERM');
+                } catch (killErr) {
+                    console.error(`Sign-in cancel SIGTERM to ${found.pid} failed:`, killErr.message);
+                    return res.status(502).json({ success: false, error: 'Failed to stop the running program' });
+                }
+
+                // Escalate only if the CLI ignores SIGTERM.
+                setTimeout(() => {
+                    try {
+                        process.kill(found.pid, 0);
+                        process.kill(found.pid, 'SIGKILL');
+                        console.warn(`Sign-in cancel escalated to SIGKILL for ${found.name} (${found.pid})`);
+                    } catch {
+                        // Already exited, which is the normal case.
+                    }
+                    res.json({ success: true, cancelled: true, program: found.name });
+                }, 1500);
+            });
         });
     });
 });
