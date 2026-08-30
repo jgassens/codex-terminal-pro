@@ -94,8 +94,8 @@ device_login() {
 
     echo ""
     echo "Follow the URL and one-time code printed by Kimi Code."
-    echo "If the URL is hard to copy from the terminal, use the 'Sign-in link'"
-    echo "button in the add-on web page header to open it as a real link."
+    echo "The URL is hard to copy from the terminal, so the add-on web page"
+    echo "opens a dialog with it as a real link and a QR code."
     echo "Press Ctrl+C (or that panel's 'Cancel sign-in' button) to abort and"
     echo "return to this menu."
     echo ""

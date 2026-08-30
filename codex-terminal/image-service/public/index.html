@@ -1054,10 +1054,6 @@
                     <span>▣</span>
                     <span>Select Text</span>
                 </button>
-                <button id="signin-link-btn" class="header-btn" title="Show the sign-in link a consultant is waiting on as a real link">
-                    <span>🔑</span>
-                    <span>Sign-in link</span>
-                </button>
                 <button id="settings-btn" class="header-btn" title="Add-on settings and consultant setup">
                     <span>⚙</span>
                     <span>Settings</span>
@@ -1479,7 +1475,6 @@
         const shellOutputText = document.getElementById('shell-output-text');
         const shellOutputCopy = document.getElementById('shell-output-copy');
         const shellOutputDismiss = document.getElementById('shell-output-dismiss');
-        const signinLinkBtn = document.getElementById('signin-link-btn');
         const signinLinkPanel = document.getElementById('signin-link-panel');
         const signinLinkMessage = document.getElementById('signin-link-message');
         const signinLinkAnchor = document.getElementById('signin-link-anchor');
@@ -4593,27 +4588,6 @@
             renderedSignInUrl = null;
         }
 
-        signinLinkBtn.addEventListener('click', async () => {
-            setStatus('Looking for a sign-in link…');
-            dismissedSignInUrl = null;
-            try {
-                const res = await protectedIngressFetch('agent-login-url');
-                const data = await res.json().catch(() => null);
-                if (!res.ok || !data || !data.success) {
-                    throw new Error((data && data.error) || `HTTP ${res.status}`);
-                }
-                if (!data.found) {
-                    setStatus('No sign-in link is on the terminal screen right now.', 'error');
-                    return;
-                }
-                renderSignInPanel(data);
-                setStatus('');
-            } catch (err) {
-                console.error('Sign-in link lookup failed:', err);
-                setStatus('Could not read the sign-in link from the terminal.', 'error');
-            }
-        });
-
         // Pop the dialog on its own when a sign-in link appears, and drop it
         // once the flow moves on. A dismissed link stays dismissed until a
         // different one shows up.
@@ -4785,6 +4759,9 @@
         }
 
         async function loadSettings() {
+            // Coming to Settings is intent to manage sign-in, so let a dialog
+            // that was dismissed earlier reappear for the pending link.
+            dismissedSignInUrl = null;
             settingsConsultants.textContent = 'Loading…';
             try {
                 const res = await protectedIngressFetch('settings');
