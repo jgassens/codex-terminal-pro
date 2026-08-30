@@ -74,6 +74,17 @@ const CODEX_TMUX_TARGET = process.env.CODEX_TMUX_TARGET || process.env.TMUX_TARG
 const TMUX_SESSION = process.env.TMUX_SESSION || CODEX_TMUX_TARGET.split(':')[0] || 'codex-terminal';
 const RAW_TERMINAL_WINDOW = process.env.RAW_TERMINAL_WINDOW || 'raw-shell';
 const RAW_TMUX_TARGET = `${TMUX_SESSION}:${RAW_TERMINAL_WINDOW}.0`;
+// Identifies the served UI so a page left open across an add-on update can
+// notice it is out of date. The terminal iframe registers a beforeunload
+// handler, so a reload can be swallowed and stale pages linger silently.
+const UI_BUILD_ID = (() => {
+    try {
+        const source = fs.readFileSync(path.join(__dirname, 'public', 'index.html'));
+        return crypto.createHash('sha256').update(source).digest('hex').slice(0, 12);
+    } catch {
+        return 'unknown';
+    }
+})();
 const SETTINGS_FILE = process.env.SETTINGS_FILE || '/data/settings.json';
 const CONSULT_BIN = process.env.CONSULT_BIN || '/usr/local/bin/consult';
 const UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
@@ -2634,7 +2645,8 @@ app.get('/config', (req, res) => {
         ttydPort: TTYD_PORT,
         uploadDir: UPLOAD_DIR,
         workspace: CONFIG_ROOT,
-        terminalMode: activeTerminalMode
+        terminalMode: activeTerminalMode,
+        uiBuildId: UI_BUILD_ID
     });
 });
 

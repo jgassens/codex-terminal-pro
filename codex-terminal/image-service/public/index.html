@@ -1337,6 +1337,7 @@
             .then(config => {
                 ttydPort = config.ttydPort;
                 uploadDir = config.uploadDir;
+                loadedUiBuildId = config.uiBuildId || null;
                 setTerminalModeState(config.terminalMode || 'codex', false);
                 console.log('Config loaded:', config);
                 // Load ttyd via proxy endpoint
@@ -4557,6 +4558,25 @@
 
         let renderedSignInUrl = null;
         let dismissedSignInUrl = null;
+        let loadedUiBuildId = null;
+
+        // An add-on update replaces this page, but the terminal iframe's
+        // beforeunload handler can swallow a reload, leaving an old UI on
+        // screen that looks broken rather than stale. Say so plainly.
+        setInterval(async () => {
+            if (document.hidden || !loadedUiBuildId) {
+                return;
+            }
+            try {
+                const res = await protectedIngressFetch('config');
+                const config = await res.json().catch(() => null);
+                if (config && config.uiBuildId && config.uiBuildId !== loadedUiBuildId) {
+                    setStatus('This page is from an older add-on version — reload to update it.', 'error', true);
+                }
+            } catch {
+                // Offline or restarting; the next tick tries again.
+            }
+        }, 60000);
 
         function renderSignInPanel(data) {
             signinLinkAnchor.href = data.url;
