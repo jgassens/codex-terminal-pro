@@ -463,8 +463,110 @@
             box-shadow: 0 18px 45px var(--shadow);
         }
 
+        #signin-link-anchor {
+            color: var(--accent, #79c7c5);
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 0.85rem;
+            overflow-wrap: anywhere;
+            word-break: break-all;
+        }
+
+        #signin-link-qr {
+            align-self: center;
+            background: #ffffff;
+            border-radius: 8px;
+            padding: 10px;
+            width: min(220px, 55vw);
+        }
+
+        #signin-link-qr:empty {
+            display: none;
+        }
+
+        #signin-link-qr svg {
+            display: block;
+            height: auto;
+            width: 100%;
+        }
+
+        #signin-code-row {
+            display: flex;
+            gap: 8px;
+        }
+
+        #signin-code-row.hidden {
+            display: none;
+        }
+
+        #signin-code-input,
+        .settings-input {
+            background: rgba(10, 13, 14, 0.9);
+            border: 1px solid rgba(121, 199, 197, 0.45);
+            border-radius: 6px;
+            color: var(--text, #d7e0df);
+            flex: 1;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 0.9rem;
+            min-width: 0;
+            padding: 8px 10px;
+        }
+
+        .settings-section {
+            border-top: 1px solid var(--border-soft, rgba(121, 199, 197, 0.25));
+            padding-top: 12px;
+        }
+
+        .settings-section:first-of-type {
+            border-top: none;
+            padding-top: 0;
+        }
+
+        .settings-section h3 {
+            font-size: 0.95rem;
+            margin: 0 0 4px;
+        }
+
+        .settings-hint {
+            color: var(--text-dim, #9fb0af);
+            font-size: 0.8rem;
+            margin-bottom: 10px;
+        }
+
+        .settings-row {
+            align-items: center;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            justify-content: space-between;
+            padding: 6px 0;
+        }
+
+        .settings-row-label {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .settings-state {
+            font-size: 0.8rem;
+        }
+
+        .settings-state.ready {
+            color: #7fd18c;
+        }
+
+        .settings-state.pending {
+            color: #e0b46a;
+        }
+
+        .settings-state.missing {
+            color: #d98a8a;
+        }
+
         #manual-copy-panel,
         #manual-paste-panel,
+        #signin-link-panel,
+        #settings-panel,
         #shell-output-panel {
             position: fixed;
             left: 16px;
@@ -485,6 +587,8 @@
 
         #manual-copy-panel.active,
         #manual-paste-panel.active,
+        #signin-link-panel.active,
+        #settings-panel.active,
         #shell-output-panel.active {
             display: flex;
         }
@@ -950,6 +1054,14 @@
                     <span>▣</span>
                     <span>Select Text</span>
                 </button>
+                <button id="signin-link-btn" class="header-btn" title="Show the sign-in link a consultant is waiting on as a real link">
+                    <span>🔑</span>
+                    <span>Sign-in link</span>
+                </button>
+                <button id="settings-btn" class="header-btn" title="Add-on settings and consultant setup">
+                    <span>⚙</span>
+                    <span>Settings</span>
+                </button>
                 <button id="paste-btn" class="header-btn" title="Paste text or an image from the clipboard into the terminal">
                     <span>📋</span>
                     <span>Paste</span>
@@ -997,6 +1109,45 @@
         <div class="modal-buttons">
             <button id="manual-paste-insert" class="modal-btn modal-btn-primary">Insert</button>
             <button id="manual-paste-dismiss" class="modal-btn modal-btn-secondary">Dismiss</button>
+        </div>
+    </div>
+
+    <div id="signin-link-panel" aria-live="polite">
+        <div id="signin-link-message">Open this link on any signed-in device.</div>
+        <div id="signin-link-qr" aria-label="Sign-in link QR code"></div>
+        <a id="signin-link-anchor" href="#" target="_blank" rel="noopener noreferrer"></a>
+        <div id="signin-code-row">
+            <input id="signin-code-input" type="text" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="Paste the code from the authorize page here">
+            <button type="button" id="signin-code-submit" class="modal-btn modal-btn-primary">Submit code</button>
+        </div>
+        <div class="modal-buttons">
+            <button type="button" id="signin-link-cancel" class="modal-btn modal-btn-secondary" title="Abort the pending sign-in and return the terminal to its menu">Cancel sign-in</button>
+            <button type="button" id="signin-link-copy" class="modal-btn modal-btn-primary">Copy link</button>
+            <button type="button" id="signin-link-dismiss" class="modal-btn modal-btn-secondary">Dismiss</button>
+        </div>
+    </div>
+
+    <div id="settings-panel" aria-live="polite">
+        <div class="settings-section">
+            <h3>Consultants</h3>
+            <div class="settings-hint">Codex runs this terminal. Consultants are optional second opinions Codex can ask, using your own subscription. Setting one up opens its sign-in in the Shell pane.</div>
+            <div id="settings-consultants"></div>
+        </div>
+        <div class="settings-section">
+            <h3>Consult defaults</h3>
+            <div class="settings-hint">Used when Codex asks a consultant without naming one.</div>
+            <div class="settings-row">
+                <div class="settings-row-label"><span>Default consultant</span></div>
+                <select id="settings-default-consultant" class="settings-input"></select>
+            </div>
+            <div class="settings-row">
+                <div class="settings-row-label"><span>Answer timeout (seconds)</span></div>
+                <input id="settings-consult-timeout" class="settings-input" type="number" min="30" max="1800" step="10">
+            </div>
+        </div>
+        <div class="modal-buttons">
+            <button type="button" id="settings-save" class="modal-btn modal-btn-primary">Save</button>
+            <button type="button" id="settings-dismiss" class="modal-btn modal-btn-secondary">Close</button>
         </div>
     </div>
 
@@ -1328,6 +1479,24 @@
         const shellOutputText = document.getElementById('shell-output-text');
         const shellOutputCopy = document.getElementById('shell-output-copy');
         const shellOutputDismiss = document.getElementById('shell-output-dismiss');
+        const signinLinkBtn = document.getElementById('signin-link-btn');
+        const signinLinkPanel = document.getElementById('signin-link-panel');
+        const signinLinkMessage = document.getElementById('signin-link-message');
+        const signinLinkAnchor = document.getElementById('signin-link-anchor');
+        const signinLinkQr = document.getElementById('signin-link-qr');
+        const signinLinkCopy = document.getElementById('signin-link-copy');
+        const signinLinkCancel = document.getElementById('signin-link-cancel');
+        const signinLinkDismiss = document.getElementById('signin-link-dismiss');
+        const signinCodeRow = document.getElementById('signin-code-row');
+        const signinCodeInput = document.getElementById('signin-code-input');
+        const signinCodeSubmit = document.getElementById('signin-code-submit');
+        const settingsBtn = document.getElementById('settings-btn');
+        const settingsPanel = document.getElementById('settings-panel');
+        const settingsConsultants = document.getElementById('settings-consultants');
+        const settingsDefaultConsultant = document.getElementById('settings-default-consultant');
+        const settingsConsultTimeout = document.getElementById('settings-consult-timeout');
+        const settingsSave = document.getElementById('settings-save');
+        const settingsDismiss = document.getElementById('settings-dismiss');
         const mobileInputRow = document.getElementById('mobile-input-row');
         const mobileTerminalInput = document.getElementById('mobile-terminal-input');
         const mobileSendBtn = document.getElementById('mobile-send-btn');
@@ -4380,6 +4549,305 @@
             updateViewportMetrics();
             manualPasteText.focus({ preventScroll: true });
         }
+
+        // ---------------------------------------------------------------
+        // Consultant sign-in links
+        // ---------------------------------------------------------------
+        // A consultant CLI prints an OAuth URL into the terminal, where it is
+        // wrapped and unselectable. The server recovers it; this presents it
+        // as a real link plus a QR code so the sign-in can be finished on a
+        // phone, and takes the returned code back without terminal typing.
+
+        let renderedSignInUrl = null;
+        let dismissedSignInUrl = null;
+
+        function renderSignInPanel(data) {
+            signinLinkAnchor.href = data.url;
+            signinLinkAnchor.textContent = data.url;
+            signinLinkQr.innerHTML = data.qrSvg || '';
+            const source = data.sourceLabel;
+            const who = source || 'The consultant';
+            // Claude Code hands back a code to paste here. Codex normally
+            // takes its code on the website, but its browser-flow fallback
+            // dead ends on a localhost:1455 URL that can be pasted instead.
+            signinCodeRow.classList.toggle('hidden', source !== 'Claude Code' && source !== 'Codex');
+            if (source === 'Claude Code') {
+                signinCodeInput.placeholder = 'Paste the code from the authorize page here';
+                signinLinkMessage.textContent =
+                    `${who} is waiting on this sign-in link. Click it to open it in this browser, or scan the QR code with your phone. When the authorize page gives you a code, paste it in the field below.`;
+            } else if (source === 'Codex') {
+                signinCodeInput.placeholder = 'Or paste a failed localhost:1455 URL here';
+                signinLinkMessage.textContent =
+                    `${who} is waiting on this sign-in link. Open it and enter the one-time code shown in the terminal. If your browser instead ends on a localhost:1455 "can't connect" page, copy that address and paste it below to finish.`;
+            } else {
+                signinLinkMessage.textContent =
+                    `${who} is waiting on this sign-in link. Click it to open it in this browser, or scan the QR code with your phone, and enter the one-time code shown in the terminal there.`;
+            }
+            signinLinkPanel.classList.add('active');
+            renderedSignInUrl = data.url;
+        }
+
+        function closeSignInPanel() {
+            signinLinkPanel.classList.remove('active');
+            signinLinkQr.innerHTML = '';
+            renderedSignInUrl = null;
+        }
+
+        signinLinkBtn.addEventListener('click', async () => {
+            setStatus('Looking for a sign-in link…');
+            dismissedSignInUrl = null;
+            try {
+                const res = await protectedIngressFetch('agent-login-url');
+                const data = await res.json().catch(() => null);
+                if (!res.ok || !data || !data.success) {
+                    throw new Error((data && data.error) || `HTTP ${res.status}`);
+                }
+                if (!data.found) {
+                    setStatus('No sign-in link is on the terminal screen right now.', 'error');
+                    return;
+                }
+                renderSignInPanel(data);
+                setStatus('');
+            } catch (err) {
+                console.error('Sign-in link lookup failed:', err);
+                setStatus('Could not read the sign-in link from the terminal.', 'error');
+            }
+        });
+
+        // Pop the dialog on its own when a sign-in link appears, and drop it
+        // once the flow moves on. A dismissed link stays dismissed until a
+        // different one shows up.
+        setInterval(async () => {
+            if (document.hidden) {
+                return;
+            }
+            try {
+                const res = await protectedIngressFetch('agent-login-url');
+                const data = await res.json().catch(() => null);
+                if (!data || !data.success) {
+                    return;
+                }
+                if (data.found) {
+                    if (data.url !== dismissedSignInUrl && data.url !== renderedSignInUrl) {
+                        renderSignInPanel(data);
+                    }
+                } else if (renderedSignInUrl && signinLinkPanel.classList.contains('active')) {
+                    closeSignInPanel();
+                }
+            } catch {
+                // Transient polling failures are fine; the button still works.
+            }
+        }, 5000);
+
+        signinLinkCopy.addEventListener('click', async () => {
+            const url = signinLinkAnchor.href;
+            if (!url || url.endsWith('#')) {
+                return;
+            }
+            if (await copyToClipboard(url)) {
+                setStatus('✓ Sign-in link copied!', 'success');
+            } else {
+                showManualCopy(url, 'Tap and hold the link to Copy, then open it on a signed-in device.');
+            }
+        });
+
+        signinLinkDismiss.addEventListener('click', () => {
+            dismissedSignInUrl = renderedSignInUrl;
+            closeSignInPanel();
+        });
+
+        signinLinkCancel.addEventListener('click', async () => {
+            setStatus('Cancelling sign-in…');
+            try {
+                const res = await protectedIngressFetch('terminal-cancel-signin', { method: 'POST' });
+                const data = await res.json().catch(() => null);
+                if (!res.ok || !data || !data.success) {
+                    throw new Error((data && data.error) || `HTTP ${res.status}`);
+                }
+                dismissedSignInUrl = renderedSignInUrl;
+                closeSignInPanel();
+                setStatus(data.cancelled
+                    ? 'Sign-in cancelled — the terminal is back at a prompt.'
+                    : 'Nothing was running to cancel.', 'success');
+            } catch (err) {
+                console.error('Sign-in cancel failed:', err);
+                setStatus('Could not cancel the sign-in from here.', 'error');
+            }
+        });
+
+        async function submitSignInCode() {
+            const value = signinCodeInput.value.trim();
+            if (!value) {
+                setStatus('Paste the code from the authorize page first.', 'error');
+                signinCodeInput.focus();
+                return;
+            }
+            signinCodeSubmit.disabled = true;
+            try {
+                // A pasted localhost callback goes to the CLI's own listener
+                // inside the container rather than into the terminal.
+                if (/^(https?:\/\/)?(localhost|127\.0\.0\.1):1455\/auth\/callback\?/i.test(value)) {
+                    const res = await protectedIngressFetch('agent-callback-forward', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ url: value })
+                    });
+                    const data = await res.json().catch(() => null);
+                    if (!res.ok || !data || !data.success) {
+                        setStatus((data && data.error) || 'Could not deliver the sign-in callback.', 'error');
+                        return;
+                    }
+                    signinCodeInput.value = '';
+                    dismissedSignInUrl = renderedSignInUrl;
+                    closeSignInPanel();
+                    setStatus('Sign-in callback delivered — check the terminal.', 'success');
+                    return;
+                }
+
+                const inserted = await insertTextIntoTerminal(value);
+                const entered = inserted && await sendTerminalControl('enter');
+                if (!inserted || !entered) {
+                    setStatus('Could not send the code to the terminal.', 'error');
+                    return;
+                }
+                signinCodeInput.value = '';
+                dismissedSignInUrl = renderedSignInUrl;
+                closeSignInPanel();
+                setStatus('Code submitted — finishing sign-in…', 'success');
+            } finally {
+                signinCodeSubmit.disabled = false;
+            }
+        }
+
+        signinCodeSubmit.addEventListener('click', submitSignInCode);
+        signinCodeInput.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                submitSignInCode();
+            }
+        });
+
+        // ---------------------------------------------------------------
+        // Settings
+        // ---------------------------------------------------------------
+
+        function renderConsultantRow(consultant) {
+            const row = document.createElement('div');
+            row.className = 'settings-row';
+
+            const label = document.createElement('div');
+            label.className = 'settings-row-label';
+            const name = document.createElement('span');
+            name.textContent = consultant.label;
+            const state = document.createElement('span');
+            if (!consultant.installed) {
+                state.className = 'settings-state missing';
+                state.textContent = 'Not installed in this add-on';
+            } else if (consultant.signedIn) {
+                state.className = 'settings-state ready';
+                state.textContent = 'Signed in and ready';
+            } else {
+                state.className = 'settings-state pending';
+                state.textContent = 'Not signed in';
+            }
+            label.append(name, state);
+
+            const action = document.createElement('button');
+            action.type = 'button';
+            action.className = 'modal-btn modal-btn-primary';
+            action.textContent = consultant.signedIn ? 'Sign in again' : 'Set up';
+            action.disabled = !consultant.installed;
+            action.addEventListener('click', () => startConsultantSetup(consultant));
+
+            row.append(label, action);
+            return row;
+        }
+
+        async function startConsultantSetup(consultant) {
+            setStatus(`Starting ${consultant.label} sign-in…`);
+            try {
+                const res = await protectedIngressFetch('consultant-setup', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ agent: consultant.id })
+                });
+                const data = await res.json().catch(() => null);
+                if (!res.ok || !data || !data.success) {
+                    throw new Error((data && data.error) || `HTTP ${res.status}`);
+                }
+                settingsPanel.classList.remove('active');
+                setTerminalModeState('raw', false);
+                setStatus(`${consultant.label} sign-in started in the Shell pane.`, 'success');
+            } catch (err) {
+                console.error('Consultant setup failed:', err);
+                setStatus(`Could not start ${consultant.label} sign-in.`, 'error');
+            }
+        }
+
+        async function loadSettings() {
+            settingsConsultants.textContent = 'Loading…';
+            try {
+                const res = await protectedIngressFetch('settings');
+                const data = await res.json().catch(() => null);
+                if (!res.ok || !data || !data.success) {
+                    throw new Error((data && data.error) || `HTTP ${res.status}`);
+                }
+
+                settingsConsultants.textContent = '';
+                for (const consultant of data.consultants) {
+                    settingsConsultants.appendChild(renderConsultantRow(consultant));
+                }
+
+                settingsDefaultConsultant.textContent = '';
+                for (const consultant of data.consultants) {
+                    const option = document.createElement('option');
+                    option.value = consultant.id;
+                    option.textContent = consultant.label;
+                    settingsDefaultConsultant.appendChild(option);
+                }
+                settingsDefaultConsultant.value = data.preferences.defaultConsultant;
+                settingsConsultTimeout.value = data.preferences.consultTimeoutSeconds;
+                if (data.limits && data.limits.consultTimeoutSeconds) {
+                    settingsConsultTimeout.min = data.limits.consultTimeoutSeconds.min;
+                    settingsConsultTimeout.max = data.limits.consultTimeoutSeconds.max;
+                }
+                settingsPanel.classList.add('active');
+                setStatus('');
+            } catch (err) {
+                console.error('Settings load failed:', err);
+                settingsConsultants.textContent = 'Could not load settings.';
+                setStatus('Could not load settings.', 'error');
+            }
+        }
+
+        settingsBtn.addEventListener('click', loadSettings);
+
+        settingsDismiss.addEventListener('click', () => {
+            settingsPanel.classList.remove('active');
+        });
+
+        settingsSave.addEventListener('click', async () => {
+            settingsSave.disabled = true;
+            try {
+                const res = await protectedIngressFetch('settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        defaultConsultant: settingsDefaultConsultant.value,
+                        consultTimeoutSeconds: Number(settingsConsultTimeout.value)
+                    })
+                });
+                const data = await res.json().catch(() => null);
+                if (!res.ok || !data || !data.success) {
+                    setStatus((data && data.error) || 'Could not save settings.', 'error');
+                    return;
+                }
+                settingsPanel.classList.remove('active');
+                setStatus('✓ Settings saved.', 'success');
+            } finally {
+                settingsSave.disabled = false;
+            }
+        });
 
         changeDeskBtn.addEventListener('click', () => {
             loadChangeDesk();

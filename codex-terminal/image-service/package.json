@@ -19,7 +19,8 @@
   "dependencies": {
     "express": "4.22.2",
     "http-proxy-middleware": "2.0.10",
-    "multer": "2.2.0"
+    "multer": "2.2.0",
+    "qrcode": "^1.5.4"
   },
   "overrides": {
     "path-to-regexp": "0.1.13"

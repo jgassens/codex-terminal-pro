@@ -1,0 +1,298 @@
+#!/usr/bin/python3
+"""Ask a consultant CLI a question, read-only and unprivileged.
+
+Codex is this add-on's principal agent. Claude Code and Kimi Code are
+optional consultants the user may authenticate; this runs one of them for a
+single question and prints its answer.
+
+Isolation, in order of how much it is relied on:
+
+  1. The consultant runs as uid/gid 65534. Everything in /config is
+     root-owned mode 644/755, so the kernel grants read and refuses every
+     write. This is the guarantee, and it does not depend on CLI behaviour.
+  2. Credentials are copied into a throwaway home rather than shared, so a
+     consultant cannot read another agent's login (all are 0600 root) and
+     cannot rewrite the real credential store.
+  3. The environment is an allowlist, so no provider API key, Supervisor
+     token, or GitHub PAT reaches the consultant.
+  4. The CLI's own read-only flags are asked for as well. They are the least
+     load-bearing layer here, being model-level rather than kernel-level.
+"""
+
+from __future__ import annotations
+
+import argparse
+import ctypes
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+WORKSPACE = "/config"
+UNPRIVILEGED_UID = 65534
+UNPRIVILEGED_GID = 65534
+PR_SET_NO_NEW_PRIVS = 38
+MAX_CREDENTIAL_BYTES = 1024 * 1024
+DEFAULT_TIMEOUT_SECONDS = 300
+
+# Stripped from the consultant's environment no matter which one runs, so a
+# consultant can never bill or impersonate through another provider's key.
+BLOCKED_ENV = (
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "MOONSHOT_API_KEY",
+    "KIMI_API_KEY",
+    "SUPERVISOR_TOKEN",
+    "GITHUB_PAT_TOKEN",
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+)
+
+PASSTHROUGH_ENV = ("TERM", "LANG", "LC_ALL", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY",
+                   "https_proxy", "http_proxy", "no_proxy")
+
+
+def claude_args(prompt: str) -> list[str]:
+    # Deny-by-default permissions with only read tools offered, no MCP servers
+    # started from settings, and no session files written for a one-shot.
+    #
+    # Note: --bare looks like the natural choice here and is not usable. It
+    # skips the stored state that carries the login, so every consult fails
+    # with "Not logged in" even when the CLI is signed in.
+    return [
+        "claude", "-p", prompt,
+        "--permission-mode", "dontAsk",
+        "--allowedTools", "Read,Glob,Grep",
+        "--strict-mcp-config",
+        "--no-session-persistence",
+    ]
+
+
+def kimi_args(prompt: str) -> list[str]:
+    # Plan mode is Kimi's read-only posture; the uid drop is what actually
+    # enforces it.
+    return ["kimi", "--plan", "-p", prompt]
+
+
+CONSULTANTS = {
+    "claude": {
+        "label": "Claude Code",
+        "binary": "claude",
+        "home_env": "CLAUDE_CONFIG_DIR",
+        "default_home": "/data/.claude",
+        # .credentials.json alone is a token with no account attached: Claude
+        # reports "Not logged in" without .claude.json, and settings.json
+        # carries the update/ripgrep settings seeded at boot. First entry is
+        # the one that proves a completed sign-in.
+        "credential_files": (".credentials.json", ".claude.json", "settings.json"),
+        "extra_env": {"DISABLE_AUTOUPDATER": "1", "USE_BUILTIN_RIPGREP": "0"},
+        "build_args": claude_args,
+        "auth_helper": "claude-auth-helper",
+    },
+    "kimi": {
+        "label": "Kimi Code",
+        "binary": "kimi",
+        "home_env": "KIMI_CODE_HOME",
+        "default_home": "/data/.kimi-code",
+        # Kimi's on-disk layout is not yet verified against a signed-in
+        # account; missing entries are skipped rather than failing the run.
+        "credential_files": ("credentials.json", "config.toml", "auth.json"),
+        "extra_env": {},
+        "build_args": kimi_args,
+        "auth_helper": "kimi-auth-helper",
+    },
+}
+
+
+class ConsultError(RuntimeError):
+    """Raised when a consult cannot be run as specified."""
+
+
+def consultant_home(spec: dict) -> Path:
+    return Path(os.environ.get(spec["home_env"], spec["default_home"]))
+
+
+def is_configured(spec: dict) -> bool:
+    if shutil.which(spec["binary"]) is None:
+        return False
+    home = consultant_home(spec)
+    # The first credential file is the one that proves a completed login.
+    return (home / spec["credential_files"][0]).is_file()
+
+
+def copy_credential(source: Path, destination: Path) -> bool:
+    """Copy one credential file without following symlinks, 0600, nobody-owned."""
+    try:
+        fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
+    except (FileNotFoundError, OSError):
+        return False
+    try:
+        info = os.fstat(fd)
+        if info.st_size > MAX_CREDENTIAL_BYTES:
+            raise ConsultError(f"{source} is larger than expected for a credential file")
+        payload = os.read(fd, MAX_CREDENTIAL_BYTES)
+    finally:
+        os.close(fd)
+
+    out = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        os.write(out, payload)
+        os.fchown(out, UNPRIVILEGED_UID, UNPRIVILEGED_GID)
+    finally:
+        os.close(out)
+    return True
+
+
+def set_no_new_privileges() -> None:
+    libc = ctypes.CDLL("libc.so.6", use_errno=True)
+    if libc.prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0:
+        error_number = ctypes.get_errno()
+        raise OSError(error_number, os.strerror(error_number))
+
+
+def drop_privileges() -> None:
+    os.setgroups([])
+    os.setgid(UNPRIVILEGED_GID)
+    os.setuid(UNPRIVILEGED_UID)
+    set_no_new_privileges()
+
+
+def build_environment(spec: dict, sandbox_home: Path) -> dict:
+    env = {
+        "PATH": "/usr/local/bin:/usr/bin:/bin",
+        "HOME": str(sandbox_home),
+        "TMPDIR": str(sandbox_home),
+        "NO_COLOR": "1",
+        # The consultant's home points at the throwaway copy, so a refreshed
+        # token is written there and discarded rather than into the real store.
+        spec["home_env"]: str(sandbox_home),
+    }
+    for name in PASSTHROUGH_ENV:
+        value = os.environ.get(name)
+        if value:
+            env[name] = value
+    env.update(spec["extra_env"])
+    for name in BLOCKED_ENV:
+        env.pop(name, None)
+    return env
+
+
+def run_consult(agent: str, prompt: str, timeout: int) -> int:
+    spec = CONSULTANTS[agent]
+    if shutil.which(spec["binary"]) is None:
+        raise ConsultError(f"{spec['label']} is not installed in this add-on")
+
+    home = consultant_home(spec)
+    if not (home / spec["credential_files"][0]).is_file():
+        raise ConsultError(
+            f"{spec['label']} is not set up yet. Run {spec['auth_helper']} in a "
+            f"shell, or use the session picker's consultant setup entry, to sign in."
+        )
+
+    sandbox = Path(tempfile.mkdtemp(prefix="consult-"))
+    try:
+        os.chmod(sandbox, 0o700)
+        os.chown(sandbox, UNPRIVILEGED_UID, UNPRIVILEGED_GID)
+        for name in spec["credential_files"]:
+            copy_credential(home / name, sandbox / name)
+
+        completed = subprocess.run(
+            spec["build_args"](prompt),
+            cwd=WORKSPACE,
+            env=build_environment(spec, sandbox),
+            preexec_fn=drop_privileges,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        raise ConsultError(f"{spec['label']} did not answer within {timeout}s")
+    finally:
+        shutil.rmtree(sandbox, ignore_errors=True)
+
+    answer = (completed.stdout or "").strip()
+    if answer:
+        print(answer)
+    if completed.returncode != 0 and not answer:
+        detail = (completed.stderr or "").strip().splitlines()
+        raise ConsultError(
+            f"{spec['label']} exited {completed.returncode}"
+            + (f": {detail[-1]}" if detail else "")
+        )
+    return 0
+
+
+def status_records() -> list[dict]:
+    records = []
+    for agent, spec in CONSULTANTS.items():
+        installed = shutil.which(spec["binary"]) is not None
+        records.append({
+            "id": agent,
+            "label": spec["label"],
+            "installed": installed,
+            "signedIn": installed and is_configured(spec),
+            "authHelper": spec["auth_helper"],
+        })
+    return records
+
+
+def print_status(as_json: bool) -> int:
+    records = status_records()
+    if as_json:
+        print(json.dumps({"consultants": records}))
+        return 0
+    for record in records:
+        if not record["installed"]:
+            state = "not installed"
+        elif record["signedIn"]:
+            state = "ready"
+        else:
+            state = f"not signed in (run {record['authHelper']})"
+        print(f"{record['id']:8} {record['label']:12} {state}")
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="consult",
+        description="Ask a consultant CLI a question about this Home Assistant config.",
+    )
+    parser.add_argument("--agent", choices=sorted(CONSULTANTS), default="claude",
+                        help="which consultant to ask (default: claude)")
+    parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_SECONDS,
+                        help=f"seconds to wait for an answer (default: {DEFAULT_TIMEOUT_SECONDS})")
+    parser.add_argument("--list", action="store_true",
+                        help="show which consultants are installed and signed in")
+    parser.add_argument("--json", action="store_true",
+                        help="with --list, report status as JSON")
+    parser.add_argument("question", nargs="*",
+                        help="the question; omit to read it from stdin")
+    return parser
+
+
+def main(argv: list[str]) -> int:
+    args = build_parser().parse_args(argv)
+    if args.list:
+        return print_status(args.json)
+
+    prompt = " ".join(args.question).strip() if args.question else sys.stdin.read().strip()
+    if not prompt:
+        raise ConsultError("No question given")
+    if args.timeout <= 0:
+        raise ConsultError("--timeout must be positive")
+    return run_consult(args.agent, prompt, args.timeout)
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except ConsultError as error:
+        print(f"consult: {error}", file=sys.stderr)
+        sys.exit(2)
+    except KeyboardInterrupt:
+        sys.exit(130)

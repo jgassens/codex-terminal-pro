@@ -1,7 +1,7 @@
 FROM ghcr.io/home-assistant/base:3.22-2026.04.0@sha256:eed9b5eff1441d4db22d5036b7802610e7fc94af8c0448439ae6dda9942d5230
 
 LABEL \
-    io.hass.version="2.6.9" \
+    io.hass.version="2.8.0" \
     io.hass.type="addon" \
     io.hass.arch="aarch64|amd64" \
     org.opencontainers.image.title="Home Assistant Add-on: Codex Terminal Pro" \
@@ -63,6 +63,24 @@ RUN npm install -g "@openai/codex@${CODEX_CLI_VERSION}" \
     && chmod -R go-w /opt/mall-cop-jail/etc \
     && rm -rf /root/.npm
 
+# Install the optional consultant CLIs. They are inert without credentials:
+# Codex remains this add-on's agent, and these are only reachable through the
+# `consult` command, which runs them read-only as an unprivileged user.
+ARG CLAUDE_CODE_VERSION=2.1.251
+RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+    && DISABLE_AUTOUPDATER=1 claude --version \
+    && rm -rf /root/.npm
+
+ARG KIMI_CODE_VERSION=0.39.1
+RUN npm install -g "@moonshot-ai/kimi-code@${KIMI_CODE_VERSION}" \
+    && kimi --version \
+    && rm -rf /root/.npm
+
+# Never self-update inside a pinned image, and use the apk ripgrep because the
+# vendored one is glibc-linked.
+ENV DISABLE_AUTOUPDATER=1 \
+    USE_BUILTIN_RIPGREP=0
+
 # Install read-only Modbus Python tooling into an isolated import path.
 RUN PIP_ROOT_USER_ACTION=ignore python3 -m pip install --no-cache-dir --target /opt/modbus-python \
         'pymodbus[serial]==3.13.0' \
@@ -123,6 +141,7 @@ COPY MODBUS.md /opt/modbus/MODBUS.md
 COPY modbus/ /opt/modbus/
 COPY SOLAR.md /opt/solar/SOLAR.md
 COPY HA.md /opt/home-assistant/HA.md
+COPY skills/ /opt/skills/
 
 # Copy and install image service.
 COPY image-service/ /opt/image-service/
@@ -144,6 +163,8 @@ RUN mkdir -p /usr/libexec/codex-terminal \
     && chmod +x /opt/scripts/codex-disable-github-mcp \
     && chmod +x /opt/scripts/codex-disable-codex-security-mcp \
     && chmod +x /opt/scripts/codex-config-set \
+    && chmod +x /opt/scripts/claude-config-set \
+    && chmod +x /opt/scripts/consult \
     && chmod +x /opt/scripts/codex-config-tui \
     && chmod +x /opt/scripts/codex-terminal-config-files.py \
     && chmod +x /opt/scripts/persist-install \
@@ -161,6 +182,7 @@ RUN mkdir -p /usr/libexec/codex-terminal \
     && chmod +x /opt/scripts/ha-site-memory \
     && chmod +x /opt/scripts/modbus-* \
     && chmod +x /opt/scripts/solar-* \
+    && ln -sf /opt/scripts/consult /usr/local/bin/consult \
     && ln -sf /opt/scripts/codex-shell-dispatch /usr/local/bin/codex-shell-dispatch \
     && ln -sf /opt/scripts/codex-terminal-briefing /usr/local/bin/codex-terminal-briefing \
     && ln -sf /opt/scripts/ha-toolbox /usr/local/bin/ha-toolbox \
