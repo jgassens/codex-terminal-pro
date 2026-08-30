@@ -51,8 +51,15 @@ class ConsultantSpecTests(unittest.TestCase):
         home_envs = [spec["home_env"] for spec in consult.CONSULTANTS.values()]
         self.assertEqual(len(home_envs), len(set(home_envs)))
 
+    def test_login_proof_is_the_token_not_a_config_file(self) -> None:
+        # Kimi writes config.toml before any sign-in, so only the token in
+        # credentials/ can prove a completed login.
+        self.assertEqual(consult.CONSULTANTS["kimi"]["login_proof"], "credentials/*.json")
+        self.assertIn("credentials", consult.CONSULTANTS["kimi"]["credential_dirs"])
+        self.assertEqual(consult.CONSULTANTS["claude"]["login_proof"], ".credentials.json")
+
     def test_argument_builders_request_read_only_behaviour(self) -> None:
-        claude = consult.CONSULTANTS["claude"]["build_args"]("why is this failing?")
+        claude = consult.CONSULTANTS["claude"]["build_args"]("why is this failing?", "", "")
         self.assertEqual(claude[0], "claude")
         self.assertIn("why is this failing?", claude)
         self.assertIn("--permission-mode", claude)
@@ -67,10 +74,41 @@ class ConsultantSpecTests(unittest.TestCase):
         for tool in allowed.split(","):
             self.assertIn(tool, {"Read", "Glob", "Grep"})
 
-        kimi = consult.CONSULTANTS["kimi"]["build_args"]("why is this failing?")
+        kimi = consult.CONSULTANTS["kimi"]["build_args"]("why is this failing?", "", "")
         self.assertEqual(kimi[0], "kimi")
         self.assertIn("--plan", kimi)
         self.assertIn("why is this failing?", kimi)
+
+
+class ConsultModelSettingsTests(unittest.TestCase):
+    def test_model_and_effort_reach_the_command_line(self) -> None:
+        claude = consult.CONSULTANTS["claude"]["build_args"]("q", "opus", "high")
+        self.assertEqual(claude[claude.index("--model") + 1], "opus")
+        self.assertEqual(claude[claude.index("--effort") + 1], "high")
+
+    def test_blank_settings_leave_the_cli_defaults_alone(self) -> None:
+        for agent, spec in consult.CONSULTANTS.items():
+            args = spec["build_args"]("q", "", "")
+            self.assertNotIn("--model", args, agent)
+            self.assertNotIn("--effort", args, agent)
+
+    def test_kimi_has_no_effort_flag(self) -> None:
+        # Kimi exposes no effort setting; asking for one must not invent a flag.
+        self.assertFalse(consult.CONSULTANTS["kimi"]["supports_effort"])
+        args = consult.CONSULTANTS["kimi"]["build_args"]("q", "kimi-k2", "high")
+        self.assertNotIn("--effort", args)
+        self.assertEqual(args[args.index("--model") + 1], "kimi-k2")
+
+    def test_preferences_are_read_per_consultant(self) -> None:
+        settings = {"consultants": {"claude": {"model": "sonnet", "effort": "max"}}}
+        self.assertEqual(consult.consultant_preferences(settings, "claude"), ("sonnet", "max"))
+        self.assertEqual(consult.consultant_preferences(settings, "kimi"), ("", ""))
+        self.assertEqual(consult.consultant_preferences({}, "claude"), ("", ""))
+        self.assertEqual(consult.consultant_preferences({"consultants": None}, "claude"), ("", ""))
+
+    def test_unsupported_effort_is_rejected(self) -> None:
+        with self.assertRaises(consult.ConsultError):
+            consult.run_consult("claude", "q", 60, "", "turbo")
 
 
 class ConsultEnvironmentTests(unittest.TestCase):
@@ -190,3 +228,37 @@ class ConsultCliTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ConsultReadinessTests(unittest.TestCase):
+    """A token is not the same as being able to answer."""
+
+    def test_kimi_needs_a_model_not_just_a_token(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            (home / "config.toml").write_text("default_yolo = true\n")
+            ready, note = consult.kimi_ready(home)
+            self.assertFalse(ready)
+            self.assertIn("no model is configured", note)
+
+    def test_kimi_is_ready_once_a_model_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            (home / "config.toml").write_text('default_model = "kimi-k2"\n')
+            self.assertEqual(consult.kimi_ready(home), (True, ""))
+
+    def test_kimi_is_ready_with_a_providers_table(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            (home / "config.toml").write_text('[providers.kimi]\nurl = "https://example.invalid"\n')
+            ready, _ = consult.kimi_ready(home)
+            self.assertTrue(ready)
+
+    def test_missing_config_is_reported_not_crashed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            ready, note = consult.kimi_ready(Path(directory))
+            self.assertFalse(ready)
+            self.assertTrue(note)
+
+    def test_claude_needs_no_extra_configuration(self) -> None:
+        self.assertEqual(consult.always_ready(Path("/nonexistent")), (True, ""))

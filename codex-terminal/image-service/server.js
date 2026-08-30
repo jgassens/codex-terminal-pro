@@ -2662,8 +2662,12 @@ function readConsultantStatus(callback) {
 
 const DEFAULT_PREFERENCES = Object.freeze({
     defaultConsultant: 'claude',
-    consultTimeoutSeconds: 300
+    consultTimeoutSeconds: 300,
+    consultants: {}
 });
+// Model names vary by provider and account, so this is a shape check rather
+// than a list: the value is passed to the CLI as a single argv entry.
+const MODEL_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:\/-]{0,99}$/;
 const CONSULT_TIMEOUT_MIN_SECONDS = 30;
 const CONSULT_TIMEOUT_MAX_SECONDS = 1800;
 
@@ -2676,11 +2680,14 @@ function readPreferences() {
                 : DEFAULT_PREFERENCES.defaultConsultant,
             consultTimeoutSeconds: Number.isInteger(stored.consultTimeoutSeconds)
                 ? stored.consultTimeoutSeconds
-                : DEFAULT_PREFERENCES.consultTimeoutSeconds
+                : DEFAULT_PREFERENCES.consultTimeoutSeconds,
+            consultants: stored.consultants && typeof stored.consultants === 'object'
+                ? stored.consultants
+                : {}
         };
     } catch {
         // No settings file yet, or it is unreadable: defaults are correct.
-        return { ...DEFAULT_PREFERENCES };
+        return { ...DEFAULT_PREFERENCES, consultants: {} };
     }
 }
 
@@ -2729,6 +2736,7 @@ app.post('/settings', (req, res) => {
     }
 
     const requestedConsultant = req.body?.defaultConsultant;
+    const requestedConsultants = req.body?.consultants;
     const finish = () => {
         try {
             writeFileAtomic(SETTINGS_FILE, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
@@ -2739,20 +2747,68 @@ app.post('/settings', (req, res) => {
         res.json({ success: true, preferences: next });
     };
 
-    if (requestedConsultant === undefined) {
+    if (requestedConsultant === undefined && requestedConsultants === undefined) {
         return finish();
     }
 
-    // Only a consultant this add-on actually ships may be made the default.
+    // Anything naming a consultant is checked against the ones this add-on
+    // actually ships, and an effort level against what that CLI accepts.
     readConsultantStatus((err, consultants) => {
         if (err) {
             console.error('Consultant status lookup failed:', err.message);
             return res.status(502).json({ success: false, error: 'Failed to read consultant status' });
         }
-        if (!consultants.some((entry) => entry.id === requestedConsultant)) {
-            return res.status(400).json({ success: false, error: 'Unknown consultant' });
+
+        if (requestedConsultant !== undefined) {
+            if (!consultants.some((entry) => entry.id === requestedConsultant)) {
+                return res.status(400).json({ success: false, error: 'Unknown consultant' });
+            }
+            next.defaultConsultant = requestedConsultant;
         }
-        next.defaultConsultant = requestedConsultant;
+
+        if (requestedConsultants !== undefined) {
+            if (!requestedConsultants || typeof requestedConsultants !== 'object') {
+                return res.status(400).json({ success: false, error: 'Consultant settings must be an object' });
+            }
+            const merged = { ...next.consultants };
+            for (const [id, value] of Object.entries(requestedConsultants)) {
+                const known = consultants.find((entry) => entry.id === id);
+                if (!known) {
+                    return res.status(400).json({ success: false, error: `Unknown consultant: ${id}` });
+                }
+                if (!value || typeof value !== 'object') {
+                    return res.status(400).json({ success: false, error: `Settings for ${known.label} must be an object` });
+                }
+
+                const model = typeof value.model === 'string' ? value.model.trim() : '';
+                if (model && !MODEL_NAME_PATTERN.test(model)) {
+                    return res.status(400).json({
+                        success: false,
+                        error: `That does not look like a model name for ${known.label}`
+                    });
+                }
+
+                const effort = typeof value.effort === 'string' ? value.effort.trim() : '';
+                if (effort) {
+                    if (!known.supportsEffort) {
+                        return res.status(400).json({
+                            success: false,
+                            error: `${known.label} has no reasoning effort setting`
+                        });
+                    }
+                    if (!(known.effortLevels || []).includes(effort)) {
+                        return res.status(400).json({
+                            success: false,
+                            error: `Effort for ${known.label} must be one of: ${(known.effortLevels || []).join(', ')}`
+                        });
+                    }
+                }
+
+                merged[id] = { model, effort };
+            }
+            next.consultants = merged;
+        }
+
         finish();
     });
 });

@@ -4705,7 +4705,13 @@
         // Settings
         // ---------------------------------------------------------------
 
+        // Model and effort inputs are collected per consultant so `consult`
+        // can apply them; they are keyed by id in consultantControls.
+        const consultantControls = new Map();
+
         function renderConsultantRow(consultant) {
+            const block = document.createElement('div');
+
             const row = document.createElement('div');
             row.className = 'settings-row';
 
@@ -4717,9 +4723,15 @@
             if (!consultant.installed) {
                 state.className = 'settings-state missing';
                 state.textContent = 'Not installed in this add-on';
-            } else if (consultant.signedIn) {
+            } else if (consultant.ready) {
                 state.className = 'settings-state ready';
                 state.textContent = 'Signed in and ready';
+            } else if (consultant.signedIn) {
+                // A token on its own does not always mean it can answer.
+                state.className = 'settings-state pending';
+                state.textContent = consultant.readyNote
+                    ? consultant.readyNote.charAt(0).toUpperCase() + consultant.readyNote.slice(1)
+                    : 'Signed in, but not usable yet';
             } else {
                 state.className = 'settings-state pending';
                 state.textContent = 'Not signed in';
@@ -4734,7 +4746,69 @@
             action.addEventListener('click', () => startConsultantSetup(consultant));
 
             row.append(label, action);
-            return row;
+            block.appendChild(row);
+
+            const controls = { model: null, effort: null };
+
+            if (consultant.supportsModel) {
+                const modelRow = document.createElement('div');
+                modelRow.className = 'settings-row';
+                const modelLabel = document.createElement('div');
+                modelLabel.className = 'settings-row-label';
+                const modelName = document.createElement('span');
+                modelName.textContent = 'Model';
+                const modelHint = document.createElement('span');
+                modelHint.className = 'settings-state';
+                modelHint.textContent = 'Blank uses the CLI default';
+                modelLabel.append(modelName, modelHint);
+
+                const modelInput = document.createElement('input');
+                modelInput.className = 'settings-input';
+                modelInput.type = 'text';
+                modelInput.autocapitalize = 'off';
+                modelInput.autocomplete = 'off';
+                modelInput.spellcheck = false;
+                modelInput.placeholder = consultant.modelHint || '';
+                modelInput.value = consultant.model || '';
+                controls.model = modelInput;
+
+                modelRow.append(modelLabel, modelInput);
+                block.appendChild(modelRow);
+            }
+
+            if (consultant.supportsEffort) {
+                const effortRow = document.createElement('div');
+                effortRow.className = 'settings-row';
+                const effortLabel = document.createElement('div');
+                effortLabel.className = 'settings-row-label';
+                const effortName = document.createElement('span');
+                effortName.textContent = 'Reasoning effort';
+                const effortHint = document.createElement('span');
+                effortHint.className = 'settings-state';
+                effortHint.textContent = 'Blank uses the CLI default';
+                effortLabel.append(effortName, effortHint);
+
+                const effortSelect = document.createElement('select');
+                effortSelect.className = 'settings-input';
+                const blank = document.createElement('option');
+                blank.value = '';
+                blank.textContent = 'Default';
+                effortSelect.appendChild(blank);
+                for (const level of consultant.effortLevels || []) {
+                    const option = document.createElement('option');
+                    option.value = level;
+                    option.textContent = level;
+                    effortSelect.appendChild(option);
+                }
+                effortSelect.value = consultant.effort || '';
+                controls.effort = effortSelect;
+
+                effortRow.append(effortLabel, effortSelect);
+                block.appendChild(effortRow);
+            }
+
+            consultantControls.set(consultant.id, controls);
+            return block;
         }
 
         async function startConsultantSetup(consultant) {
@@ -4771,6 +4845,7 @@
                 }
 
                 settingsConsultants.textContent = '';
+                consultantControls.clear();
                 for (const consultant of data.consultants) {
                     settingsConsultants.appendChild(renderConsultantRow(consultant));
                 }
@@ -4811,7 +4886,13 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         defaultConsultant: settingsDefaultConsultant.value,
-                        consultTimeoutSeconds: Number(settingsConsultTimeout.value)
+                        consultTimeoutSeconds: Number(settingsConsultTimeout.value),
+                        consultants: Object.fromEntries(
+                            [...consultantControls].map(([id, controls]) => [id, {
+                                model: controls.model ? controls.model.value.trim() : '',
+                                effort: controls.effort ? controls.effort.value : ''
+                            }])
+                        )
                     })
                 });
                 const data = await res.json().catch(() => null);

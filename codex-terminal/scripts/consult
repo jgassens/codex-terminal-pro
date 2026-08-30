@@ -29,6 +29,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 from pathlib import Path
 
 WORKSPACE = "/config"
@@ -37,6 +38,8 @@ UNPRIVILEGED_GID = 65534
 PR_SET_NO_NEW_PRIVS = 38
 MAX_CREDENTIAL_BYTES = 1024 * 1024
 DEFAULT_TIMEOUT_SECONDS = 300
+DEFAULT_AGENT = "claude"
+SETTINGS_FILE = os.environ.get("CONSULT_SETTINGS_FILE", "/data/settings.json")
 
 # Stripped from the consultant's environment no matter which one runs, so a
 # consultant can never bill or impersonate through another provider's key.
@@ -56,26 +59,55 @@ PASSTHROUGH_ENV = ("TERM", "LANG", "LC_ALL", "HTTPS_PROXY", "HTTP_PROXY", "NO_PR
                    "https_proxy", "http_proxy", "no_proxy")
 
 
-def claude_args(prompt: str) -> list[str]:
+def claude_args(prompt: str, model: str, effort: str) -> list[str]:
     # Deny-by-default permissions with only read tools offered, no MCP servers
     # started from settings, and no session files written for a one-shot.
     #
     # Note: --bare looks like the natural choice here and is not usable. It
     # skips the stored state that carries the login, so every consult fails
     # with "Not logged in" even when the CLI is signed in.
-    return [
+    args = [
         "claude", "-p", prompt,
         "--permission-mode", "dontAsk",
         "--allowedTools", "Read,Glob,Grep",
         "--strict-mcp-config",
         "--no-session-persistence",
     ]
+    if model:
+        args += ["--model", model]
+    if effort:
+        args += ["--effort", effort]
+    return args
 
 
-def kimi_args(prompt: str) -> list[str]:
+def kimi_args(prompt: str, model: str, effort: str) -> list[str]:
     # Plan mode is Kimi's read-only posture; the uid drop is what actually
-    # enforces it.
-    return ["kimi", "--plan", "-p", prompt]
+    # enforces it. Kimi has no effort setting, so it is ignored here.
+    args = ["kimi", "--plan", "-p", prompt]
+    if model:
+        args += ["--model", model]
+    return args
+
+
+def always_ready(home: Path) -> tuple[bool, str]:
+    return True, ""
+
+
+def kimi_ready(home: Path) -> tuple[bool, str]:
+    """Kimi needs a provider and model, registered after the token is issued.
+
+    That registration is a separate server call during sign-in, so a valid
+    token can sit next to an empty config when it fails. Reporting such an
+    install as ready sends people to a confusing runtime error instead.
+    """
+    try:
+        with open(home / "config.toml", "rb") as handle:
+            data = tomllib.load(handle)
+    except (OSError, ValueError):
+        return False, "signed in, but its configuration could not be read"
+    if data.get("default_model") or data.get("models") or data.get("providers"):
+        return True, ""
+    return False, "signed in, but no model is configured yet - sign in again to finish setup"
 
 
 CONSULTANTS = {
@@ -89,23 +121,66 @@ CONSULTANTS = {
         # carries the update/ripgrep settings seeded at boot. First entry is
         # the one that proves a completed sign-in.
         "credential_files": (".credentials.json", ".claude.json", "settings.json"),
+        "credential_dirs": (),
+        "login_proof": ".credentials.json",
+        "ready_check": always_ready,
         "extra_env": {"DISABLE_AUTOUPDATER": "1", "USE_BUILTIN_RIPGREP": "0"},
         "build_args": claude_args,
         "auth_helper": "claude-auth-helper",
+        # Which knobs the UI should offer. Claude takes an effort level;
+        # Kimi has no equivalent flag.
+        "supports_model": True,
+        "supports_effort": True,
+        "effort_levels": ("low", "medium", "high", "xhigh", "max"),
+        "model_hint": "opus, sonnet, or a full model id",
     },
     "kimi": {
         "label": "Kimi Code",
         "binary": "kimi",
         "home_env": "KIMI_CODE_HOME",
         "default_home": "/data/.kimi-code",
-        # Kimi's on-disk layout is not yet verified against a signed-in
-        # account; missing entries are skipped rather than failing the run.
-        "credential_files": ("credentials.json", "config.toml", "auth.json"),
+        # Verified against a signed-in account: the token lives in a
+        # credentials/ directory rather than a single file, and config.toml
+        # carries the provider and default_model the token is useless without.
+        "credential_dirs": ("credentials",),
+        "credential_files": ("config.toml", "device_id"),
+        # config.toml exists before any sign-in, so the token itself is the
+        # only honest proof.
+        "login_proof": "credentials/*.json",
+        "ready_check": kimi_ready,
         "extra_env": {},
         "build_args": kimi_args,
         "auth_helper": "kimi-auth-helper",
+        "supports_model": True,
+        "supports_effort": False,
+        "effort_levels": (),
+        "model_hint": "a model alias from your Kimi provider",
     },
 }
+
+
+def load_settings() -> dict:
+    """Read the add-on settings written by the web UI. Absent is normal."""
+    try:
+        with open(SETTINGS_FILE, encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def consultant_preferences(settings: dict, agent: str) -> tuple[str, str]:
+    """Model and effort chosen for one consultant, blank when unset."""
+    consultants = settings.get("consultants")
+    entry = consultants.get(agent) if isinstance(consultants, dict) else None
+    if not isinstance(entry, dict):
+        return "", ""
+    model = entry.get("model")
+    effort = entry.get("effort")
+    return (
+        model.strip() if isinstance(model, str) else "",
+        effort.strip() if isinstance(effort, str) else "",
+    )
 
 
 class ConsultError(RuntimeError):
@@ -120,8 +195,7 @@ def is_configured(spec: dict) -> bool:
     if shutil.which(spec["binary"]) is None:
         return False
     home = consultant_home(spec)
-    # The first credential file is the one that proves a completed login.
-    return (home / spec["credential_files"][0]).is_file()
+    return any(path.is_file() for path in home.glob(spec["login_proof"]))
 
 
 def copy_credential(source: Path, destination: Path) -> bool:
@@ -181,13 +255,23 @@ def build_environment(spec: dict, sandbox_home: Path) -> dict:
     return env
 
 
-def run_consult(agent: str, prompt: str, timeout: int) -> int:
+def run_consult(agent: str, prompt: str, timeout: int, model: str = "", effort: str = "") -> int:
     spec = CONSULTANTS[agent]
+    if effort and not spec["supports_effort"]:
+        effort = ""
+    if effort and effort not in spec["effort_levels"]:
+        raise ConsultError(
+            f"{spec['label']} effort must be one of: {', '.join(spec['effort_levels'])}"
+        )
     if shutil.which(spec["binary"]) is None:
         raise ConsultError(f"{spec['label']} is not installed in this add-on")
 
     home = consultant_home(spec)
-    if not (home / spec["credential_files"][0]).is_file():
+    if is_configured(spec):
+        ready, note = spec["ready_check"](home)
+        if not ready:
+            raise ConsultError(f"{spec['label']} is {note}")
+    if not is_configured(spec):
         raise ConsultError(
             f"{spec['label']} is not set up yet. Run {spec['auth_helper']} in a "
             f"shell, or use the session picker's consultant setup entry, to sign in."
@@ -199,9 +283,19 @@ def run_consult(agent: str, prompt: str, timeout: int) -> int:
         os.chown(sandbox, UNPRIVILEGED_UID, UNPRIVILEGED_GID)
         for name in spec["credential_files"]:
             copy_credential(home / name, sandbox / name)
+        for name in spec.get("credential_dirs", ()):
+            source_dir = home / name
+            if not source_dir.is_dir():
+                continue
+            target_dir = sandbox / name
+            os.mkdir(target_dir, 0o700)
+            os.chown(target_dir, UNPRIVILEGED_UID, UNPRIVILEGED_GID)
+            for entry in sorted(source_dir.iterdir()):
+                if entry.is_file():
+                    copy_credential(entry, target_dir / entry.name)
 
         completed = subprocess.run(
-            spec["build_args"](prompt),
+            spec["build_args"](prompt, model, effort),
             cwd=WORKSPACE,
             env=build_environment(spec, sandbox),
             preexec_fn=drop_privileges,
@@ -228,15 +322,27 @@ def run_consult(agent: str, prompt: str, timeout: int) -> int:
 
 
 def status_records() -> list[dict]:
+    settings = load_settings()
     records = []
     for agent, spec in CONSULTANTS.items():
         installed = shutil.which(spec["binary"]) is not None
+        signed_in = installed and is_configured(spec)
+        ready, note = spec["ready_check"](consultant_home(spec)) if signed_in else (False, "")
+        model, effort = consultant_preferences(settings, agent)
         records.append({
             "id": agent,
             "label": spec["label"],
             "installed": installed,
-            "signedIn": installed and is_configured(spec),
+            "signedIn": signed_in,
+            "ready": signed_in and ready,
+            "readyNote": note,
             "authHelper": spec["auth_helper"],
+            "supportsModel": spec["supports_model"],
+            "supportsEffort": spec["supports_effort"],
+            "effortLevels": list(spec["effort_levels"]),
+            "modelHint": spec["model_hint"],
+            "model": model,
+            "effort": effort,
         })
     return records
 
@@ -249,8 +355,10 @@ def print_status(as_json: bool) -> int:
     for record in records:
         if not record["installed"]:
             state = "not installed"
-        elif record["signedIn"]:
+        elif record["ready"]:
             state = "ready"
+        elif record["signedIn"]:
+            state = record["readyNote"] or "signed in, but not usable"
         else:
             state = f"not signed in (run {record['authHelper']})"
         print(f"{record['id']:8} {record['label']:12} {state}")
@@ -262,10 +370,14 @@ def build_parser() -> argparse.ArgumentParser:
         prog="consult",
         description="Ask a consultant CLI a question about this Home Assistant config.",
     )
-    parser.add_argument("--agent", choices=sorted(CONSULTANTS), default="claude",
-                        help="which consultant to ask (default: claude)")
-    parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_SECONDS,
-                        help=f"seconds to wait for an answer (default: {DEFAULT_TIMEOUT_SECONDS})")
+    parser.add_argument("--agent", choices=sorted(CONSULTANTS), default=None,
+                        help="which consultant to ask (default: from Settings)")
+    parser.add_argument("--timeout", type=int, default=None,
+                        help="seconds to wait for an answer (default: from Settings)")
+    parser.add_argument("--model", default=None,
+                        help="model to ask for (default: from Settings)")
+    parser.add_argument("--effort", default=None,
+                        help="reasoning effort, where the consultant supports it")
     parser.add_argument("--list", action="store_true",
                         help="show which consultants are installed and signed in")
     parser.add_argument("--json", action="store_true",
@@ -283,9 +395,23 @@ def main(argv: list[str]) -> int:
     prompt = " ".join(args.question).strip() if args.question else sys.stdin.read().strip()
     if not prompt:
         raise ConsultError("No question given")
-    if args.timeout <= 0:
+
+    settings = load_settings()
+    agent = args.agent or settings.get("defaultConsultant") or DEFAULT_AGENT
+    if agent not in CONSULTANTS:
+        raise ConsultError(f"Unknown consultant: {agent}")
+
+    timeout = args.timeout
+    if timeout is None:
+        stored = settings.get("consultTimeoutSeconds")
+        timeout = stored if isinstance(stored, int) else DEFAULT_TIMEOUT_SECONDS
+    if timeout <= 0:
         raise ConsultError("--timeout must be positive")
-    return run_consult(args.agent, prompt, args.timeout)
+
+    stored_model, stored_effort = consultant_preferences(settings, agent)
+    model = args.model if args.model is not None else stored_model
+    effort = args.effort if args.effort is not None else stored_effort
+    return run_consult(agent, prompt, timeout, model, effort)
 
 
 if __name__ == "__main__":
