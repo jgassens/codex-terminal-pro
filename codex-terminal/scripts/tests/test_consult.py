@@ -285,3 +285,37 @@ class ConsultModelListingTests(unittest.TestCase):
             (home / "config.toml").write_text("default_yolo = true\n")
             self.assertEqual(consult.CONSULTANTS["kimi"]["list_models"](home), [])
             self.assertEqual(consult.CONSULTANTS["kimi"]["list_models"](Path("/nonexistent")), [])
+
+
+class KimiAuthHelperTests(unittest.TestCase):
+    """The helper must recognise Kimi's real layout and the half-signed state."""
+
+    HELPER = SCRIPTS / "kimi-auth-helper.sh"
+
+    def source_helper(self, home: Path, snippet: str) -> str:
+        script = (
+            f'KIMI_CODE_HOME="{home}"\n'
+            f'. "{self.HELPER}" >/dev/null 2>&1 || true\n'
+            f'{snippet}\n'
+        )
+        result = subprocess.run(
+            ["bash", "-c", script], capture_output=True, text=True, check=False,
+            env={**os.environ, "KIMI_AUTH_HELPER_NO_MAIN": "1"},
+        )
+        return result.stdout.strip()
+
+    def test_helper_targets_the_credentials_directory(self) -> None:
+        text = self.HELPER.read_text(encoding="utf-8")
+        # The single-file path was a guess and never existed.
+        self.assertNotIn('AUTH_FILE="$KIMI_CODE_HOME/credentials.json"', text)
+        self.assertIn('CRED_DIR="$KIMI_CODE_HOME/credentials"', text)
+
+    def test_helper_offers_to_clear_a_half_finished_sign_in(self) -> None:
+        text = self.HELPER.read_text(encoding="utf-8")
+        self.assertIn("has_token && ! has_model", text)
+        self.assertIn("superseded-", text)
+
+    def test_model_detection_matches_configured_forms(self) -> None:
+        text = self.HELPER.read_text(encoding="utf-8")
+        for form in ("default_model", r"\[models", r"\[providers"):
+            self.assertIn(form, text)

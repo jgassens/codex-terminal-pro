@@ -3,7 +3,23 @@
 set -euo pipefail
 
 KIMI_CODE_HOME="${KIMI_CODE_HOME:-/data/.kimi-code}"
-AUTH_FILE="$KIMI_CODE_HOME/credentials.json"
+# Kimi keeps its token in a directory, one JSON file per signed-in account,
+# and records the provider and model it can use in config.toml.
+CRED_DIR="$KIMI_CODE_HOME/credentials"
+CONFIG_FILE="$KIMI_CODE_HOME/config.toml"
+
+token_files() {
+    find "$CRED_DIR" -maxdepth 1 -type f -name '*.json' 2>/dev/null
+}
+
+has_token() {
+    [ -n "$(token_files)" ]
+}
+
+has_model() {
+    [ -f "$CONFIG_FILE" ] || return 1
+    grep -qE '^[[:space:]]*(default_model[[:space:]]*=|\[models|\[providers)' "$CONFIG_FILE"
+}
 
 ensure_kimi_home() {
     mkdir -p "$KIMI_CODE_HOME"
@@ -11,8 +27,8 @@ ensure_kimi_home() {
 }
 
 auth_mode() {
-    if [ -f "$AUTH_FILE" ]; then
-        stat -c "%a" "$AUTH_FILE" 2>/dev/null || echo "unknown"
+    if has_token; then
+        stat -c "%a" $(token_files) 2>/dev/null | head -n 1 || echo "unknown"
     else
         echo "missing"
     fi
@@ -25,7 +41,7 @@ show_header() {
     echo "================================================================"
     echo ""
     echo "Codex Terminal Pro stores Kimi Code account credentials at:"
-    echo "  $AUTH_FILE"
+    echo "  $CRED_DIR/"
     echo ""
     echo "Kimi Code uses a device-code login: it prints a link you open on"
     echo "any device with a browser and a code you enter there. No localhost"
@@ -42,7 +58,7 @@ check_auth() {
     echo "Kimi Code home: $KIMI_CODE_HOME"
     echo ""
 
-    if [ -f "$AUTH_FILE" ]; then
+    if has_token; then
         local mode
         mode=$(auth_mode)
         echo "Credentials file: present"
@@ -61,13 +77,13 @@ check_auth() {
 fix_permissions() {
     ensure_kimi_home
 
-    if [ ! -f "$AUTH_FILE" ]; then
-        echo "No credentials file found at $AUTH_FILE"
+    if ! has_token; then
+        echo "No credentials found in $CRED_DIR"
         return 1
     fi
 
-    chmod 600 "$AUTH_FILE"
-    echo "Fixed permissions on $AUTH_FILE"
+    chmod 600 $(token_files)
+    echo "Fixed permissions on the credentials in $CRED_DIR"
 }
 
 device_login() {
@@ -76,6 +92,32 @@ device_login() {
     if ! command -v kimi >/dev/null 2>&1; then
         echo "kimi command was not found in PATH."
         return 1
+    fi
+
+    if has_token && ! has_model; then
+        echo "A previous sign-in left a token behind but never registered a"
+        echo "model, which is why Kimi cannot answer. Kimi sends that token"
+        echo "when signing in again, and its server rejects the attempt, so"
+        echo "the stale token has to be set aside first."
+        echo ""
+        printf "Set the old token aside and sign in fresh? [Y/n]: " >&2
+        local reset_choice
+        read -r reset_choice
+        case "$reset_choice" in
+            n|N|no|NO)
+                echo "Keeping it. The sign-in below will most likely fail."
+                ;;
+            *)
+                local backup="${CRED_DIR}.superseded-$(date +%Y%m%d-%H%M%S)"
+                if mv "$CRED_DIR" "$backup"; then
+                    echo "Moved the old token to $backup"
+                    echo "It can be deleted once the new sign-in works."
+                else
+                    echo "Could not move $CRED_DIR; sign-in may fail."
+                fi
+                ;;
+        esac
+        echo ""
     fi
 
     local region_flag=""
@@ -102,10 +144,15 @@ device_login() {
     # shellcheck disable=SC2086
     kimi login $region_flag || true
 
-    if [ -f "$AUTH_FILE" ]; then
-        chmod 600 "$AUTH_FILE"
+    if has_token; then
+        chmod 600 $(token_files)
         echo ""
-        echo "Credentials file exists and permissions were set to 600."
+        echo "Credentials are present and permissions were set to 600."
+        if ! has_model; then
+            echo ""
+            echo "Warning: no model is configured yet, so consulting Kimi will"
+            echo "still fail. Sign in again to let it finish registering one."
+        fi
     fi
 }
 
@@ -120,7 +167,7 @@ show_import_instructions() {
     echo "  3. Confirm this file exists:"
     echo "       ~/.kimi-code/credentials.json"
     echo "  4. Copy that file into this add-on's Kimi home:"
-    echo "       $AUTH_FILE"
+    echo "       $CRED_DIR/"
     echo "  5. In this helper, choose the permissions fix option."
     echo ""
     echo "Do not print, paste, commit, or share credentials.json. It"
