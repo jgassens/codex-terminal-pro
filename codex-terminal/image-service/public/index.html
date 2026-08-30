@@ -464,7 +464,7 @@
         }
 
         #signin-link-anchor {
-            color: var(--accent, #79c7c5);
+            color: var(--accent-cool);
             font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
             font-size: 0.85rem;
             overflow-wrap: anywhere;
@@ -500,10 +500,10 @@
 
         #signin-code-input,
         .settings-input {
-            background: rgba(10, 13, 14, 0.9);
-            border: 1px solid rgba(121, 199, 197, 0.45);
+            background: var(--bg);
+            border: 1px solid var(--border);
             border-radius: 6px;
-            color: var(--text, #d7e0df);
+            color: var(--text);
             flex: 1;
             font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
             font-size: 0.9rem;
@@ -512,7 +512,7 @@
         }
 
         .settings-section {
-            border-top: 1px solid var(--border-soft, rgba(121, 199, 197, 0.25));
+            border-top: 1px solid var(--border-soft);
             padding-top: 12px;
         }
 
@@ -522,12 +522,13 @@
         }
 
         .settings-section h3 {
+            color: var(--text);
             font-size: 0.95rem;
             margin: 0 0 4px;
         }
 
         .settings-hint {
-            color: var(--text-dim, #9fb0af);
+            color: var(--muted);
             font-size: 0.8rem;
             margin-bottom: 10px;
         }
@@ -542,6 +543,7 @@
         }
 
         .settings-row-label {
+            color: var(--text);
             display: flex;
             flex-direction: column;
             gap: 2px;
@@ -552,15 +554,15 @@
         }
 
         .settings-state.ready {
-            color: #7fd18c;
+            color: var(--success);
         }
 
         .settings-state.pending {
-            color: #e0b46a;
+            color: var(--accent);
         }
 
         .settings-state.missing {
-            color: #d98a8a;
+            color: var(--danger);
         }
 
         #manual-copy-panel,
@@ -577,9 +579,9 @@
             gap: 10px;
             flex-direction: column;
             padding: 12px;
-            border: 1px solid rgba(121, 199, 197, 0.45);
+            border: 1px solid var(--border);
             border-radius: 8px;
-            background: rgba(23, 27, 29, 0.98);
+            background: var(--panel);
             box-shadow: 0 18px 45px var(--shadow);
             max-height: calc(var(--app-height, 100vh) - 32px);
             overflow: auto;
@@ -602,9 +604,9 @@
             display: none;
             flex-direction: column;
             width: min(760px, calc(100vw - 32px));
-            border: 1px solid rgba(121, 199, 197, 0.45);
+            border: 1px solid var(--border);
             border-radius: 8px;
-            background: rgba(23, 27, 29, 0.98);
+            background: var(--panel);
             box-shadow: 0 24px 60px var(--shadow);
             overflow: hidden;
         }
