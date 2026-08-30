@@ -18,6 +18,8 @@ init_environment() {
     local state_dir="/data/.local/state"
     local data_dir="/data/.local/share"
     local codex_home="/data/.codex"
+    local claude_home="/data/.claude"
+    local kimi_home="/data/.kimi-code"
     local gh_config_dir="/data/.config/gh"
     local persist_root="/data/packages"
     local guard_root="$persist_root/guard"
@@ -33,7 +35,7 @@ init_environment() {
     bashio::log.info "Initializing Codex environment in /data..."
 
     if ! mkdir -p "$data_home" "$config_dir" "$cache_dir" "$local_dir" "$state_dir" "$data_dir" \
-                  "$codex_home" "$gh_config_dir" "$persist_bin" \
+                  "$codex_home" "$claude_home" "$kimi_home" "$gh_config_dir" "$persist_bin" \
                   "$persist_python" "$guard_bin" "$guard_libexec" "$image_dir" "$log_dir" \
                   "$monitor_dir/tasks.d" "$supervisor_dir/confirm"; then
         bashio::log.error "Failed to create directories in /data"
@@ -41,7 +43,7 @@ init_environment() {
     fi
 
     chmod 700 "$data_home" "$config_dir" "$cache_dir" "$local_dir" "$state_dir" \
-              "$data_dir" "$codex_home" "$gh_config_dir" "$guard_root" "$guard_bin" \
+              "$data_dir" "$codex_home" "$claude_home" "$kimi_home" "$gh_config_dir" "$guard_root" "$guard_bin" \
               "$guard_libexec" "$monitor_dir" "$monitor_dir/tasks.d" "$supervisor_dir" "$supervisor_dir/confirm"
     chmod 755 "$persist_root" "$persist_bin" "$persist_python" "$image_dir"
     chmod 700 "$log_dir"
@@ -52,6 +54,12 @@ init_environment() {
     export XDG_STATE_HOME="$state_dir"
     export XDG_DATA_HOME="$data_dir"
     export CODEX_HOME="$codex_home"
+    # Consultant homes. These exist whether or not the user ever signs one in;
+    # the CLIs are installed but inert until they have credentials.
+    export CLAUDE_CONFIG_DIR="$claude_home"
+    export KIMI_CODE_HOME="$kimi_home"
+    export DISABLE_AUTOUPDATER=1
+    export USE_BUILTIN_RIPGREP=0
     export GH_CONFIG_DIR="$gh_config_dir"
     if [ -d "/opt/modbus-python" ]; then
         export PYTHONPATH="/opt/modbus-python:${PYTHONPATH:-}"
@@ -91,6 +99,10 @@ export XDG_CACHE_HOME="/data/.cache"
 export XDG_STATE_HOME="/data/.local/state"
 export XDG_DATA_HOME="/data/.local/share"
 export CODEX_HOME="/data/.codex"
+export CLAUDE_CONFIG_DIR="/data/.claude"
+export KIMI_CODE_HOME="/data/.kimi-code"
+export DISABLE_AUTOUPDATER=1
+export USE_BUILTIN_RIPGREP=0
 export GH_CONFIG_DIR="/data/.config/gh"
 
 if [ -x "/data/packages/guard/bin/codex-terminal-disable-github-mcp" ]; then
@@ -385,7 +397,7 @@ install_tools() {
 
 log_startup_diagnostics() {
     local app_name="${APP_NAME:-${ADDON_NAME:-Codex Terminal Pro}}"
-    local app_version="${BUILD_VERSION:-${APP_VERSION:-2.6.9}}"
+    local app_version="${BUILD_VERSION:-${APP_VERSION:-2.8.0}}"
 
     bashio::log.info "Startup diagnostics:"
     bashio::log.info "  - Date: $(date)"
@@ -494,6 +506,81 @@ setup_session_picker() {
         fi
         chmod +x /usr/local/bin/codex-auth-helper
         bashio::log.info "Authentication helper installed: codex-auth-helper"
+    fi
+
+    # Consultant sign-in helpers. Consultants are optional, so a missing
+    # helper is not fatal.
+    local helper
+    for helper in claude kimi; do
+        if [ -f "/opt/scripts/${helper}-auth-helper.sh" ]; then
+            if cp "/opt/scripts/${helper}-auth-helper.sh" "/usr/local/bin/${helper}-auth-helper"; then
+                chmod +x "/usr/local/bin/${helper}-auth-helper"
+            else
+                bashio::log.warning "Failed to install ${helper}-auth-helper"
+            fi
+        fi
+    done
+
+    if [ -f "/opt/scripts/consult" ]; then
+        if cp /opt/scripts/consult /usr/local/bin/consult; then
+            chmod +x /usr/local/bin/consult
+            bashio::log.info "Consultant command installed: consult"
+        else
+            bashio::log.warning "Failed to install the consult command"
+        fi
+    fi
+}
+
+# Publish the bundled consult skill into CODEX_HOME so Codex can discover it,
+# and keep it in step with the add-on release rather than letting an old copy
+# linger. Only this add-on's own skill directory is touched.
+setup_consult_skill() {
+    local source_dir="/opt/skills/consult"
+    local skill_dir="${CODEX_HOME}/skills/consult"
+
+    if [ ! -f "${source_dir}/SKILL.md" ]; then
+        bashio::log.warning "Bundled consult skill not found; Codex will have no consult skill"
+        return
+    fi
+
+    if ! mkdir -p "$skill_dir"; then
+        bashio::log.warning "Failed to create ${skill_dir}"
+        return
+    fi
+
+    if cp "${source_dir}/SKILL.md" "${skill_dir}/SKILL.md"; then
+        chmod 644 "${skill_dir}/SKILL.md"
+        bashio::log.info "Consult skill published: ${skill_dir}/SKILL.md"
+    else
+        bashio::log.warning "Failed to publish the consult skill"
+    fi
+}
+
+# Consultants run read-only, so they get update and ripgrep settings only.
+# Deliberately no permission escalation here: the uid drop in `consult` is
+# what enforces read-only, and these CLIs should never assume more.
+ensure_consultant_defaults() {
+    local claude_settings="${CLAUDE_CONFIG_DIR:-/data/.claude}/settings.json"
+
+    if [ ! -f "$claude_settings" ] && [ -x /opt/scripts/claude-config-set ]; then
+        if ! /opt/scripts/claude-config-set "$claude_settings" env.DISABLE_AUTOUPDATER '"1"' 2>/dev/null; then
+            bashio::log.warning "Could not seed Claude consultant settings"
+            return
+        fi
+        /opt/scripts/claude-config-set "$claude_settings" env.USE_BUILTIN_RIPGREP '"0"' 2>/dev/null || true
+    fi
+
+    local claude_cred="${CLAUDE_CONFIG_DIR:-/data/.claude}/.credentials.json"
+    if [ -f "$claude_cred" ]; then
+        chmod 600 "$claude_cred" 2>/dev/null || true
+    fi
+
+    # Kimi stores one JSON token file per account in a credentials/ directory,
+    # not a single credentials.json, so tighten each file it actually wrote.
+    local kimi_cred_dir="${KIMI_CODE_HOME:-/data/.kimi-code}/credentials"
+    if [ -d "$kimi_cred_dir" ]; then
+        find "$kimi_cred_dir" -maxdepth 1 -type f -name '*.json' \
+            -exec chmod 600 {} + 2>/dev/null || true
     fi
 }
 
@@ -913,6 +1000,10 @@ export XDG_CACHE_HOME="${XDG_CACHE_HOME}"
 export XDG_STATE_HOME="${XDG_STATE_HOME}"
 export XDG_DATA_HOME="${XDG_DATA_HOME}"
 export CODEX_HOME="${CODEX_HOME}"
+export CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR}"
+export KIMI_CODE_HOME="${KIMI_CODE_HOME}"
+export DISABLE_AUTOUPDATER="${DISABLE_AUTOUPDATER:-1}"
+export USE_BUILTIN_RIPGREP="${USE_BUILTIN_RIPGREP:-0}"
 export GH_CONFIG_DIR="${GH_CONFIG_DIR}"
 export PYTHONPATH="${PYTHONPATH:-}"
 export TMUX_SESSION="${TMUX_SESSION}"
@@ -1340,6 +1431,8 @@ main() {
     setup_ha_tools
     log_startup_diagnostics
     setup_session_picker
+    setup_consult_skill
+    ensure_consultant_defaults
     setup_shell_dispatch_profile
     setup_host_ssh_attach_helper
     setup_persistent_packages

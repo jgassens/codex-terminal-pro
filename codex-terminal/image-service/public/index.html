@@ -463,8 +463,112 @@
             box-shadow: 0 18px 45px var(--shadow);
         }
 
+        #signin-link-anchor {
+            color: var(--accent-cool);
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 0.85rem;
+            overflow-wrap: anywhere;
+            word-break: break-all;
+        }
+
+        #signin-link-qr {
+            align-self: center;
+            background: #ffffff;
+            border-radius: 8px;
+            padding: 10px;
+            width: min(220px, 55vw);
+        }
+
+        #signin-link-qr:empty {
+            display: none;
+        }
+
+        #signin-link-qr svg {
+            display: block;
+            height: auto;
+            width: 100%;
+        }
+
+        #signin-code-row {
+            display: flex;
+            gap: 8px;
+        }
+
+        #signin-code-row.hidden {
+            display: none;
+        }
+
+        #signin-code-input,
+        .settings-input {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text);
+            flex: 1;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 0.9rem;
+            min-width: 0;
+            padding: 8px 10px;
+        }
+
+        .settings-section {
+            border-top: 1px solid var(--border-soft);
+            padding-top: 12px;
+        }
+
+        .settings-section:first-of-type {
+            border-top: none;
+            padding-top: 0;
+        }
+
+        .settings-section h3 {
+            color: var(--text);
+            font-size: 0.95rem;
+            margin: 0 0 4px;
+        }
+
+        .settings-hint {
+            color: var(--muted);
+            font-size: 0.8rem;
+            margin-bottom: 10px;
+        }
+
+        .settings-row {
+            align-items: center;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            justify-content: space-between;
+            padding: 6px 0;
+        }
+
+        .settings-row-label {
+            color: var(--text);
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .settings-state {
+            font-size: 0.8rem;
+        }
+
+        .settings-state.ready {
+            color: var(--success);
+        }
+
+        .settings-state.pending {
+            color: var(--accent);
+        }
+
+        .settings-state.missing {
+            color: var(--danger);
+        }
+
         #manual-copy-panel,
         #manual-paste-panel,
+        #signin-link-panel,
+        #settings-panel,
         #shell-output-panel {
             position: fixed;
             left: 16px;
@@ -475,9 +579,9 @@
             gap: 10px;
             flex-direction: column;
             padding: 12px;
-            border: 1px solid rgba(121, 199, 197, 0.45);
+            border: 1px solid var(--border);
             border-radius: 8px;
-            background: rgba(23, 27, 29, 0.98);
+            background: var(--panel);
             box-shadow: 0 18px 45px var(--shadow);
             max-height: calc(var(--app-height, 100vh) - 32px);
             overflow: auto;
@@ -485,6 +589,8 @@
 
         #manual-copy-panel.active,
         #manual-paste-panel.active,
+        #signin-link-panel.active,
+        #settings-panel.active,
         #shell-output-panel.active {
             display: flex;
         }
@@ -498,9 +604,9 @@
             display: none;
             flex-direction: column;
             width: min(760px, calc(100vw - 32px));
-            border: 1px solid rgba(121, 199, 197, 0.45);
+            border: 1px solid var(--border);
             border-radius: 8px;
-            background: rgba(23, 27, 29, 0.98);
+            background: var(--panel);
             box-shadow: 0 24px 60px var(--shadow);
             overflow: hidden;
         }
@@ -950,6 +1056,10 @@
                     <span>▣</span>
                     <span>Select Text</span>
                 </button>
+                <button id="settings-btn" class="header-btn" title="Add-on settings and consultant setup">
+                    <span>⚙</span>
+                    <span>Settings</span>
+                </button>
                 <button id="paste-btn" class="header-btn" title="Paste text or an image from the clipboard into the terminal">
                     <span>📋</span>
                     <span>Paste</span>
@@ -997,6 +1107,45 @@
         <div class="modal-buttons">
             <button id="manual-paste-insert" class="modal-btn modal-btn-primary">Insert</button>
             <button id="manual-paste-dismiss" class="modal-btn modal-btn-secondary">Dismiss</button>
+        </div>
+    </div>
+
+    <div id="signin-link-panel" aria-live="polite">
+        <div id="signin-link-message">Open this link on any signed-in device.</div>
+        <div id="signin-link-qr" aria-label="Sign-in link QR code"></div>
+        <a id="signin-link-anchor" href="#" target="_blank" rel="noopener noreferrer"></a>
+        <div id="signin-code-row">
+            <input id="signin-code-input" type="text" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="Paste the code from the authorize page here">
+            <button type="button" id="signin-code-submit" class="modal-btn modal-btn-primary">Submit code</button>
+        </div>
+        <div class="modal-buttons">
+            <button type="button" id="signin-link-cancel" class="modal-btn modal-btn-secondary" title="Abort the pending sign-in and return the terminal to its menu">Cancel sign-in</button>
+            <button type="button" id="signin-link-copy" class="modal-btn modal-btn-primary">Copy link</button>
+            <button type="button" id="signin-link-dismiss" class="modal-btn modal-btn-secondary">Dismiss</button>
+        </div>
+    </div>
+
+    <div id="settings-panel" aria-live="polite">
+        <div class="settings-section">
+            <h3>Consultants</h3>
+            <div class="settings-hint">Codex runs this terminal. Consultants are optional second opinions Codex can ask, using your own subscription. Setting one up opens its sign-in in the Shell pane.</div>
+            <div id="settings-consultants"></div>
+        </div>
+        <div class="settings-section">
+            <h3>Consult defaults</h3>
+            <div class="settings-hint">Used when Codex asks a consultant without naming one.</div>
+            <div class="settings-row">
+                <div class="settings-row-label"><span>Default consultant</span></div>
+                <select id="settings-default-consultant" class="settings-input"></select>
+            </div>
+            <div class="settings-row">
+                <div class="settings-row-label"><span>Answer timeout (seconds)</span></div>
+                <input id="settings-consult-timeout" class="settings-input" type="number" min="30" max="1800" step="10">
+            </div>
+        </div>
+        <div class="modal-buttons">
+            <button type="button" id="settings-save" class="modal-btn modal-btn-primary">Save</button>
+            <button type="button" id="settings-dismiss" class="modal-btn modal-btn-secondary">Close</button>
         </div>
     </div>
 
@@ -1188,6 +1337,7 @@
             .then(config => {
                 ttydPort = config.ttydPort;
                 uploadDir = config.uploadDir;
+                loadedUiBuildId = config.uiBuildId || null;
                 setTerminalModeState(config.terminalMode || 'codex', false);
                 console.log('Config loaded:', config);
                 // Load ttyd via proxy endpoint
@@ -1328,6 +1478,23 @@
         const shellOutputText = document.getElementById('shell-output-text');
         const shellOutputCopy = document.getElementById('shell-output-copy');
         const shellOutputDismiss = document.getElementById('shell-output-dismiss');
+        const signinLinkPanel = document.getElementById('signin-link-panel');
+        const signinLinkMessage = document.getElementById('signin-link-message');
+        const signinLinkAnchor = document.getElementById('signin-link-anchor');
+        const signinLinkQr = document.getElementById('signin-link-qr');
+        const signinLinkCopy = document.getElementById('signin-link-copy');
+        const signinLinkCancel = document.getElementById('signin-link-cancel');
+        const signinLinkDismiss = document.getElementById('signin-link-dismiss');
+        const signinCodeRow = document.getElementById('signin-code-row');
+        const signinCodeInput = document.getElementById('signin-code-input');
+        const signinCodeSubmit = document.getElementById('signin-code-submit');
+        const settingsBtn = document.getElementById('settings-btn');
+        const settingsPanel = document.getElementById('settings-panel');
+        const settingsConsultants = document.getElementById('settings-consultants');
+        const settingsDefaultConsultant = document.getElementById('settings-default-consultant');
+        const settingsConsultTimeout = document.getElementById('settings-consult-timeout');
+        const settingsSave = document.getElementById('settings-save');
+        const settingsDismiss = document.getElementById('settings-dismiss');
         const mobileInputRow = document.getElementById('mobile-input-row');
         const mobileTerminalInput = document.getElementById('mobile-terminal-input');
         const mobileSendBtn = document.getElementById('mobile-send-btn');
@@ -4380,6 +4547,507 @@
             updateViewportMetrics();
             manualPasteText.focus({ preventScroll: true });
         }
+
+        // ---------------------------------------------------------------
+        // Consultant sign-in links
+        // ---------------------------------------------------------------
+        // A consultant CLI prints an OAuth URL into the terminal, where it is
+        // wrapped and unselectable. The server recovers it; this presents it
+        // as a real link plus a QR code so the sign-in can be finished on a
+        // phone, and takes the returned code back without terminal typing.
+
+        let renderedSignInUrl = null;
+        let dismissedSignInUrl = null;
+        let loadedUiBuildId = null;
+        let signInSubmitInFlight = false;
+        let consultantSetupInFlight = false;
+
+        // An add-on update replaces this page, but the terminal iframe's
+        // beforeunload handler can swallow a reload, leaving an old UI on
+        // screen that looks broken rather than stale. Say so plainly.
+        setInterval(async () => {
+            if (document.hidden || !loadedUiBuildId) {
+                return;
+            }
+            try {
+                const res = await protectedIngressFetch('config');
+                const config = await res.json().catch(() => null);
+                if (config && config.uiBuildId && config.uiBuildId !== loadedUiBuildId) {
+                    setStatus('This page is from an older add-on version — reload to update it.', 'error', true);
+                }
+            } catch {
+                // Offline or restarting; the next tick tries again.
+            }
+        }, 60000);
+
+        function renderSignInPanel(data) {
+            signinLinkAnchor.href = data.url;
+            signinLinkAnchor.textContent = data.url;
+            signinLinkQr.innerHTML = data.qrSvg || '';
+            const source = data.sourceLabel;
+            const who = source || 'The consultant';
+            // Claude Code hands back a code to paste here. Codex normally
+            // takes its code on the website, but its browser-flow fallback
+            // dead ends on a localhost:1455 URL that can be pasted instead.
+            signinCodeRow.classList.toggle('hidden', source !== 'Claude Code' && source !== 'Codex');
+            if (source === 'Claude Code') {
+                signinCodeInput.placeholder = 'Paste the code from the authorize page here';
+                signinLinkMessage.textContent =
+                    `${who} is waiting on this sign-in link. Click it to open it in this browser, or scan the QR code with your phone. When the authorize page gives you a code, paste it in the field below.`;
+            } else if (source === 'Codex') {
+                signinCodeInput.placeholder = 'Or paste a failed localhost:1455 URL here';
+                signinLinkMessage.textContent =
+                    `${who} is waiting on this sign-in link. Open it and enter the one-time code shown in the terminal. If your browser instead ends on a localhost:1455 "can't connect" page, copy that address and paste it below to finish.`;
+            } else {
+                signinLinkMessage.textContent =
+                    `${who} is waiting on this sign-in link. Click it to open it in this browser, or scan the QR code with your phone, and enter the one-time code shown in the terminal there.`;
+            }
+            signinLinkPanel.classList.add('active');
+            renderedSignInUrl = data.url;
+        }
+
+        function closeSignInPanel() {
+            signinLinkPanel.classList.remove('active');
+            signinLinkQr.innerHTML = '';
+            renderedSignInUrl = null;
+        }
+
+        // Pop the dialog on its own when a sign-in link appears, and drop it
+        // once the flow moves on. A dismissed link stays dismissed until a
+        // different one shows up.
+        setInterval(async () => {
+            if (document.hidden) {
+                return;
+            }
+            try {
+                const res = await protectedIngressFetch('agent-login-url');
+                const data = await res.json().catch(() => null);
+                if (!data || !data.success) {
+                    return;
+                }
+                if (data.found) {
+                    if (data.url !== dismissedSignInUrl && data.url !== renderedSignInUrl) {
+                        renderSignInPanel(data);
+                    }
+                } else if (renderedSignInUrl && signinLinkPanel.classList.contains('active')) {
+                    closeSignInPanel();
+                }
+            } catch {
+                // Transient polling failures are fine; the button still works.
+            }
+        }, 5000);
+
+        signinLinkCopy.addEventListener('click', async () => {
+            const url = signinLinkAnchor.href;
+            if (!url || url.endsWith('#')) {
+                return;
+            }
+            if (await copyToClipboard(url)) {
+                setStatus('✓ Sign-in link copied!', 'success');
+            } else {
+                showManualCopy(url, 'Tap and hold the link to Copy, then open it on a signed-in device.');
+            }
+        });
+
+        signinLinkDismiss.addEventListener('click', () => {
+            dismissedSignInUrl = renderedSignInUrl;
+            closeSignInPanel();
+        });
+
+        signinLinkCancel.addEventListener('click', async () => {
+            setStatus('Cancelling sign-in…');
+            try {
+                const res = await protectedIngressFetch('terminal-cancel-signin', { method: 'POST' });
+                const data = await res.json().catch(() => null);
+                if (!res.ok || !data || !data.success) {
+                    throw new Error((data && data.error) || `HTTP ${res.status}`);
+                }
+                dismissedSignInUrl = renderedSignInUrl;
+                closeSignInPanel();
+                setStatus(data.cancelled
+                    ? 'Sign-in cancelled — the terminal is back at a prompt.'
+                    : 'Nothing was running to cancel.', 'success');
+            } catch (err) {
+                console.error('Sign-in cancel failed:', err);
+                setStatus('Could not cancel the sign-in from here.', 'error');
+            }
+        });
+
+        async function submitSignInCode() {
+            const value = signinCodeInput.value.trim();
+            if (!value) {
+                setStatus('Paste the code from the authorize page first.', 'error');
+                signinCodeInput.focus();
+                return;
+            }
+            // A second Enter or click while the first submission is in flight
+            // would type the code into the login TUI twice; disabling the
+            // button alone does not stop the Enter-key path.
+            if (signInSubmitInFlight) {
+                return;
+            }
+            signInSubmitInFlight = true;
+            signinCodeSubmit.disabled = true;
+            try {
+                // A pasted localhost callback goes to the CLI's own listener
+                // inside the container rather than into the terminal.
+                if (/^(https?:\/\/)?(localhost|127\.0\.0\.1):1455\/auth\/callback\?/i.test(value)) {
+                    const res = await protectedIngressFetch('agent-callback-forward', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ url: value })
+                    });
+                    const data = await res.json().catch(() => null);
+                    if (!res.ok || !data || !data.success) {
+                        setStatus((data && data.error) || 'Could not deliver the sign-in callback.', 'error');
+                        return;
+                    }
+                    signinCodeInput.value = '';
+                    dismissedSignInUrl = renderedSignInUrl;
+                    closeSignInPanel();
+                    setStatus('Sign-in callback delivered — check the terminal.', 'success');
+                    return;
+                }
+
+                const inserted = await insertTextIntoTerminal(value);
+                const entered = inserted && await sendTerminalControl('enter');
+                if (!inserted || !entered) {
+                    setStatus('Could not send the code to the terminal.', 'error');
+                    return;
+                }
+                signinCodeInput.value = '';
+                dismissedSignInUrl = renderedSignInUrl;
+                closeSignInPanel();
+                setStatus('Code submitted — finishing sign-in…', 'success');
+            } catch (err) {
+                console.error('Sign-in code submit failed:', err);
+                setStatus('Could not submit the code. Check your connection and try again.', 'error');
+            } finally {
+                signInSubmitInFlight = false;
+                signinCodeSubmit.disabled = false;
+            }
+        }
+
+        signinCodeSubmit.addEventListener('click', submitSignInCode);
+        signinCodeInput.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                submitSignInCode();
+            }
+        });
+
+        // ---------------------------------------------------------------
+        // Settings
+        // ---------------------------------------------------------------
+
+        // Model and effort inputs are collected per consultant so `consult`
+        // can apply them; they are keyed by id in consultantControls.
+        const consultantControls = new Map();
+        const CUSTOM_MODEL = '__custom__';
+
+        function consultantModelValue(controls) {
+            if (!controls.modelSelect) {
+                return '';
+            }
+            return controls.modelSelect.value === CUSTOM_MODEL
+                ? controls.modelCustom.value.trim()
+                : controls.modelSelect.value;
+        }
+
+        function effortLevelsFor(consultant, model) {
+            const byModel = consultant.effortLevelsByModel || {};
+            if (Object.prototype.hasOwnProperty.call(byModel, model)) {
+                return byModel[model] || [];
+            }
+            if (!consultant.effortDependsOnModel) {
+                return consultant.effortLevels || [];
+            }
+            // A custom model with model-dependent effort: the real options are
+            // unknown until the CLI runs, so offer the default model's as a hint.
+            return byModel[''] || consultant.effortLevels || [];
+        }
+
+        function renderConsultantRow(consultant) {
+            const block = document.createElement('div');
+
+            const row = document.createElement('div');
+            row.className = 'settings-row';
+
+            const label = document.createElement('div');
+            label.className = 'settings-row-label';
+            const name = document.createElement('span');
+            name.textContent = consultant.label;
+            const state = document.createElement('span');
+            if (!consultant.installed) {
+                state.className = 'settings-state missing';
+                state.textContent = 'Not installed in this add-on';
+            } else if (consultant.ready) {
+                state.className = 'settings-state ready';
+                state.textContent = 'Signed in and ready';
+            } else if (consultant.signedIn) {
+                // A token on its own does not always mean it can answer.
+                state.className = 'settings-state pending';
+                state.textContent = consultant.readyNote
+                    ? consultant.readyNote.charAt(0).toUpperCase() + consultant.readyNote.slice(1)
+                    : 'Signed in, but not usable yet';
+            } else {
+                state.className = 'settings-state pending';
+                state.textContent = 'Not signed in';
+            }
+            label.append(name, state);
+
+            const action = document.createElement('button');
+            action.type = 'button';
+            action.className = 'modal-btn modal-btn-primary';
+            action.textContent = consultant.signedIn ? 'Sign in again' : 'Set up';
+            action.disabled = !consultant.installed;
+            action.addEventListener('click', () => startConsultantSetup(consultant));
+
+            row.append(label, action);
+            block.appendChild(row);
+
+            const controls = { modelSelect: null, modelCustom: null, effort: null };
+            let repopulateEffort = null;
+
+            if (consultant.supportsModel) {
+                const available = consultant.models || [];
+                const modelRow = document.createElement('div');
+                modelRow.className = 'settings-row';
+                const modelLabel = document.createElement('div');
+                modelLabel.className = 'settings-row-label';
+                const modelName = document.createElement('span');
+                modelName.textContent = 'Model';
+                const modelHint = document.createElement('span');
+                modelHint.className = 'settings-state';
+                modelHint.textContent = available.length
+                    ? 'Default lets the CLI choose'
+                    : 'No models available until sign-in finishes';
+                modelLabel.append(modelName, modelHint);
+
+                const modelSelect = document.createElement('select');
+                modelSelect.className = 'settings-input';
+                const defaultOption = document.createElement('option');
+                defaultOption.value = '';
+                defaultOption.textContent = 'Default';
+                modelSelect.appendChild(defaultOption);
+                for (const model of available) {
+                    const option = document.createElement('option');
+                    option.value = model;
+                    option.textContent = model;
+                    modelSelect.appendChild(option);
+                }
+                const customOption = document.createElement('option');
+                customOption.value = CUSTOM_MODEL;
+                customOption.textContent = 'Custom…';
+                modelSelect.appendChild(customOption);
+
+                // A model saved earlier may not be in the list, either because
+                // it is a full id or because sign-in has not registered the
+                // aliases yet. Keep it visible rather than silently dropping it.
+                const saved = consultant.model || '';
+                const known = saved === '' || available.includes(saved);
+                modelSelect.value = known ? saved : CUSTOM_MODEL;
+
+                const modelCustom = document.createElement('input');
+                modelCustom.className = 'settings-input';
+                modelCustom.type = 'text';
+                modelCustom.autocapitalize = 'off';
+                modelCustom.autocomplete = 'off';
+                modelCustom.spellcheck = false;
+                modelCustom.placeholder = consultant.modelHint || '';
+                modelCustom.value = known ? '' : saved;
+                modelCustom.style.display = modelSelect.value === CUSTOM_MODEL ? '' : 'none';
+                modelSelect.addEventListener('change', () => {
+                    modelCustom.style.display = modelSelect.value === CUSTOM_MODEL ? '' : 'none';
+                    if (repopulateEffort) {
+                        repopulateEffort();
+                    }
+                });
+
+                controls.modelSelect = modelSelect;
+                controls.modelCustom = modelCustom;
+
+                modelRow.append(modelLabel, modelSelect);
+                block.appendChild(modelRow);
+
+                const customRow = document.createElement('div');
+                customRow.className = 'settings-row';
+                customRow.appendChild(document.createElement('div'));
+                customRow.appendChild(modelCustom);
+                block.appendChild(customRow);
+            }
+
+            if (consultant.supportsEffort) {
+                const effortRow = document.createElement('div');
+                effortRow.className = 'settings-row';
+                const effortLabel = document.createElement('div');
+                effortLabel.className = 'settings-row-label';
+                const effortName = document.createElement('span');
+                effortName.textContent = 'Reasoning effort';
+                const effortHint = document.createElement('span');
+                effortHint.className = 'settings-state';
+                effortHint.textContent = 'Blank uses the CLI default';
+                effortLabel.append(effortName, effortHint);
+
+                const effortSelect = document.createElement('select');
+                effortSelect.className = 'settings-input';
+                controls.effort = effortSelect;
+
+                // Effort options track the selected model (Kimi's efforts are
+                // per model), so rebuild them whenever the model changes and
+                // keep the current choice when the new model still allows it.
+                repopulateEffort = () => {
+                    const desired = effortSelect.value || consultant.effort || '';
+                    const levels = effortLevelsFor(consultant, consultantModelValue(controls));
+                    effortSelect.textContent = '';
+                    const blank = document.createElement('option');
+                    blank.value = '';
+                    blank.textContent = 'Default';
+                    effortSelect.appendChild(blank);
+                    for (const level of levels) {
+                        const option = document.createElement('option');
+                        option.value = level;
+                        option.textContent = level;
+                        effortSelect.appendChild(option);
+                    }
+                    effortSelect.value = levels.includes(desired) ? desired : '';
+                };
+                repopulateEffort();
+
+                effortRow.append(effortLabel, effortSelect);
+                block.appendChild(effortRow);
+            }
+
+            consultantControls.set(consultant.id, controls);
+            return block;
+        }
+
+        async function syncTerminalModeFromServer() {
+            // Reconcile the UI's mode with the server's actual mode. Used after a
+            // consultant-setup failure, where the server may have switched (or
+            // rolled back) the shared window while the UI still shows Codex.
+            try {
+                const res = await protectedIngressFetch('config');
+                const config = await res.json().catch(() => null);
+                if (config && (config.terminalMode === 'raw' || config.terminalMode === 'codex')) {
+                    setTerminalModeState(config.terminalMode, false);
+                }
+            } catch {
+                // Leave the mode as-is; the next explicit switch corrects it.
+            }
+        }
+
+        async function startConsultantSetup(consultant) {
+            // One setup at a time: a second click (or reopening Settings and
+            // clicking again) must not fire a concurrent setup into the pane.
+            if (consultantSetupInFlight) {
+                return;
+            }
+            consultantSetupInFlight = true;
+            setStatus(`Starting ${consultant.label} sign-in…`);
+            try {
+                const res = await protectedIngressFetch('consultant-setup', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ agent: consultant.id })
+                });
+                const data = await res.json().catch(() => null);
+                if (!res.ok || !data || !data.success) {
+                    throw new Error((data && data.error) || `HTTP ${res.status}`);
+                }
+                settingsPanel.classList.remove('active');
+                setTerminalModeState('raw', false);
+                setStatus(`${consultant.label} sign-in started in the Shell pane.`, 'success');
+            } catch (err) {
+                console.error('Consultant setup failed:', err);
+                setStatus(`Could not start ${consultant.label} sign-in.`, 'error');
+                // The server may have switched the shared window before failing,
+                // so realign the UI's mode with whatever the server ended on.
+                await syncTerminalModeFromServer();
+            } finally {
+                consultantSetupInFlight = false;
+            }
+        }
+
+        async function loadSettings() {
+            // Coming to Settings is intent to manage sign-in, so let a dialog
+            // that was dismissed earlier reappear for the pending link.
+            dismissedSignInUrl = null;
+            settingsConsultants.textContent = 'Loading…';
+            try {
+                const res = await protectedIngressFetch('settings');
+                const data = await res.json().catch(() => null);
+                if (!res.ok || !data || !data.success) {
+                    throw new Error((data && data.error) || `HTTP ${res.status}`);
+                }
+
+                settingsConsultants.textContent = '';
+                consultantControls.clear();
+                for (const consultant of data.consultants) {
+                    settingsConsultants.appendChild(renderConsultantRow(consultant));
+                }
+
+                settingsDefaultConsultant.textContent = '';
+                for (const consultant of data.consultants) {
+                    const option = document.createElement('option');
+                    option.value = consultant.id;
+                    option.textContent = consultant.label;
+                    settingsDefaultConsultant.appendChild(option);
+                }
+                settingsDefaultConsultant.value = data.preferences.defaultConsultant;
+                settingsConsultTimeout.value = data.preferences.consultTimeoutSeconds;
+                if (data.limits && data.limits.consultTimeoutSeconds) {
+                    settingsConsultTimeout.min = data.limits.consultTimeoutSeconds.min;
+                    settingsConsultTimeout.max = data.limits.consultTimeoutSeconds.max;
+                }
+                settingsPanel.classList.add('active');
+                setStatus('');
+            } catch (err) {
+                console.error('Settings load failed:', err);
+                settingsConsultants.textContent = 'Could not load settings.';
+                setStatus('Could not load settings.', 'error');
+            }
+        }
+
+        settingsBtn.addEventListener('click', loadSettings);
+
+        settingsDismiss.addEventListener('click', () => {
+            settingsPanel.classList.remove('active');
+        });
+
+        settingsSave.addEventListener('click', async () => {
+            settingsSave.disabled = true;
+            try {
+                const res = await protectedIngressFetch('settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        defaultConsultant: settingsDefaultConsultant.value,
+                        consultTimeoutSeconds: Number(settingsConsultTimeout.value),
+                        consultants: Object.fromEntries(
+                            [...consultantControls].map(([id, controls]) => [id, {
+                                model: consultantModelValue(controls),
+                                effort: controls.effort ? controls.effort.value : ''
+                            }])
+                        )
+                    })
+                });
+                const data = await res.json().catch(() => null);
+                if (!res.ok || !data || !data.success) {
+                    setStatus((data && data.error) || 'Could not save settings.', 'error');
+                    return;
+                }
+                // Refresh first: loadSettings clears the status line, so the
+                // confirmation has to come after it.
+                await loadSettings();
+                setStatus('✓ Settings saved and applied.', 'success');
+            } catch (err) {
+                console.error('Settings save failed:', err);
+                setStatus('Could not save settings. Check your connection and try again.', 'error');
+            } finally {
+                settingsSave.disabled = false;
+            }
+        });
 
         changeDeskBtn.addEventListener('click', () => {
             loadChangeDesk();

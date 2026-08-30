@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.8.0
+
+- Add optional consultants. Codex remains this add-on's agent; Claude Code and
+  Kimi Code ship alongside it and stay inert until the user signs one in.
+- Add the `consult` command and a bundled Codex skill so Codex can ask a
+  consultant for an independent opinion, either on its own or as `$consult`.
+  A consultant runs as an unprivileged user with read-only access to `/config`,
+  gets its credentials as a throwaway copy, and has every provider API key
+  stripped from its environment.
+- Add a Settings panel to the web UI covering consultant setup and consult
+  defaults. Starting a sign-in runs the helper in the Shell pane so it never
+  types into a working Codex session.
+- Recover consultant sign-in links from the terminal, where they are wrapped
+  and unselectable, and present them as a real link plus a QR code with a field
+  for the returned code. Links are reassembled at whatever width the active
+  viewer imposed on the shared window.
+- Let a Codex browser sign-in that dead-ends on `localhost:1455` be completed
+  by pasting the failed URL, which is delivered to the CLI's own in-container
+  listener. Only that fixed host, port, and path are forwardable.
+
 ## 2.6.9
 
 - Stop asking for a second Home Assistant confirmation after command intent is

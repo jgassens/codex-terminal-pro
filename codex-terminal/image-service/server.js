@@ -15,6 +15,7 @@
  */
 
 const express = require('express');
+const QRCode = require('qrcode');
 const http = require('http');
 const { execFile, spawn } = require('child_process');
 const crypto = require('crypto');
@@ -40,6 +41,12 @@ const {
 } = require('./raw-shell-wrapper');
 const { endChildStdin } = require('./child-stdin');
 const { loadTmuxPasteBuffer } = require('./tmux-paste-buffer');
+const {
+    extractSignInUrl,
+    isSignInWrapperProcess,
+    parseLoopbackCallback,
+    signInUrlLabel
+} = require('./signin-utils');
 const {
     JAIL_GID,
     JAIL_ROOT,
@@ -67,6 +74,19 @@ const CODEX_TMUX_TARGET = process.env.CODEX_TMUX_TARGET || process.env.TMUX_TARG
 const TMUX_SESSION = process.env.TMUX_SESSION || CODEX_TMUX_TARGET.split(':')[0] || 'codex-terminal';
 const RAW_TERMINAL_WINDOW = process.env.RAW_TERMINAL_WINDOW || 'raw-shell';
 const RAW_TMUX_TARGET = `${TMUX_SESSION}:${RAW_TERMINAL_WINDOW}.0`;
+// Identifies the served UI so a page left open across an add-on update can
+// notice it is out of date. The terminal iframe registers a beforeunload
+// handler, so a reload can be swallowed and stale pages linger silently.
+const UI_BUILD_ID = (() => {
+    try {
+        const source = fs.readFileSync(path.join(__dirname, 'public', 'index.html'));
+        return crypto.createHash('sha256').update(source).digest('hex').slice(0, 12);
+    } catch {
+        return 'unknown';
+    }
+})();
+const SETTINGS_FILE = process.env.SETTINGS_FILE || '/data/settings.json';
+const CONSULT_BIN = process.env.CONSULT_BIN || '/usr/local/bin/consult';
 const UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
 const RAW_SHELL_COMMAND_MAX_LENGTH = 4096;
 const RAW_SHELL_COMMAND_TIMEOUT_MS = parseNonNegativeInt(process.env.RAW_SHELL_COMMAND_TIMEOUT_MS, 45000);
@@ -330,6 +350,13 @@ function capturePaneText(target, callback) {
         '-S',
         `-${RAW_SHELL_CAPTURE_LINES}`
     ], callback);
+}
+
+// Only the visible screen, no scrollback. A pending sign-in prompt is on the
+// current screen; scanning history would keep matching a completed sign-in's
+// URL (or any old auth-looking line) long after it stopped being live.
+function capturePaneVisible(target, callback) {
+    runTmux(['capture-pane', '-p', '-J', '-t', target], callback);
 }
 
 function truncateShellOutput(output) {
@@ -2625,7 +2652,503 @@ app.get('/config', (req, res) => {
         ttydPort: TTYD_PORT,
         uploadDir: UPLOAD_DIR,
         workspace: CONFIG_ROOT,
-        terminalMode: activeTerminalMode
+        terminalMode: activeTerminalMode,
+        uiBuildId: UI_BUILD_ID
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Consultants and settings
+// ---------------------------------------------------------------------------
+
+// Codex is this add-on's agent. Claude Code and Kimi Code are optional
+// consultants it can ask for a second opinion once the user signs them in.
+// `consult --list --json` is the single source of truth for which are
+// installed and authenticated, so this service and the CLI cannot drift.
+function readConsultantStatus(callback) {
+    execFile(CONSULT_BIN, ['--list', '--json'], { timeout: 5000 }, (err, stdout) => {
+        if (err) {
+            return callback(err);
+        }
+        try {
+            const parsed = JSON.parse(stdout);
+            callback(null, Array.isArray(parsed.consultants) ? parsed.consultants : []);
+        } catch (parseErr) {
+            callback(parseErr);
+        }
+    });
+}
+
+const DEFAULT_PREFERENCES = Object.freeze({
+    defaultConsultant: 'claude',
+    consultTimeoutSeconds: 300,
+    consultants: {}
+});
+// Model names vary by provider and account, so this is a shape check rather
+// than a list: the value is passed to the CLI as a single argv entry.
+const MODEL_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:\/-]{0,99}$/;
+const CONSULT_TIMEOUT_MIN_SECONDS = 30;
+const CONSULT_TIMEOUT_MAX_SECONDS = 1800;
+
+function readPreferences() {
+    try {
+        const stored = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
+        return {
+            defaultConsultant: typeof stored.defaultConsultant === 'string'
+                ? stored.defaultConsultant
+                : DEFAULT_PREFERENCES.defaultConsultant,
+            consultTimeoutSeconds: Number.isInteger(stored.consultTimeoutSeconds)
+                ? stored.consultTimeoutSeconds
+                : DEFAULT_PREFERENCES.consultTimeoutSeconds,
+            consultants: stored.consultants && typeof stored.consultants === 'object'
+                ? stored.consultants
+                : {}
+        };
+    } catch {
+        // No settings file yet, or it is unreadable: defaults are correct.
+        return { ...DEFAULT_PREFERENCES, consultants: {} };
+    }
+}
+
+app.get('/settings', (req, res) => {
+    if (!isSameOriginBrowserRequest(req)) {
+        return res.status(403).json({ success: false, error: 'Cross-origin settings access is not allowed' });
+    }
+
+    readConsultantStatus((err, consultants) => {
+        if (err) {
+            console.error('Consultant status lookup failed:', err.message);
+            return res.status(502).json({ success: false, error: 'Failed to read consultant status' });
+        }
+        res.json({
+            success: true,
+            consultants,
+            preferences: readPreferences(),
+            limits: {
+                consultTimeoutSeconds: {
+                    min: CONSULT_TIMEOUT_MIN_SECONDS,
+                    max: CONSULT_TIMEOUT_MAX_SECONDS
+                }
+            }
+        });
+    });
+});
+
+app.post('/settings', (req, res) => {
+    if (!isSameOriginBrowserRequest(req)) {
+        return res.status(403).json({ success: false, error: 'Cross-origin settings changes are not allowed' });
+    }
+
+    const next = readPreferences();
+
+    if (req.body?.consultTimeoutSeconds !== undefined) {
+        const seconds = Number(req.body.consultTimeoutSeconds);
+        if (!Number.isInteger(seconds)
+            || seconds < CONSULT_TIMEOUT_MIN_SECONDS
+            || seconds > CONSULT_TIMEOUT_MAX_SECONDS) {
+            return res.status(400).json({
+                success: false,
+                error: `Consult timeout must be a whole number of seconds between ${CONSULT_TIMEOUT_MIN_SECONDS} and ${CONSULT_TIMEOUT_MAX_SECONDS}`
+            });
+        }
+        next.consultTimeoutSeconds = seconds;
+    }
+
+    const requestedConsultant = req.body?.defaultConsultant;
+    const requestedConsultants = req.body?.consultants;
+    const finish = () => {
+        try {
+            writeFileAtomic(SETTINGS_FILE, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
+        } catch (writeErr) {
+            console.error('Failed to persist settings:', writeErr.message);
+            return res.status(502).json({ success: false, error: 'Failed to save settings' });
+        }
+        res.json({ success: true, preferences: next });
+    };
+
+    if (requestedConsultant === undefined && requestedConsultants === undefined) {
+        return finish();
+    }
+
+    // Anything naming a consultant is checked against the ones this add-on
+    // actually ships, and an effort level against what that CLI accepts.
+    readConsultantStatus((err, consultants) => {
+        if (err) {
+            console.error('Consultant status lookup failed:', err.message);
+            return res.status(502).json({ success: false, error: 'Failed to read consultant status' });
+        }
+
+        if (requestedConsultant !== undefined) {
+            if (!consultants.some((entry) => entry.id === requestedConsultant)) {
+                return res.status(400).json({ success: false, error: 'Unknown consultant' });
+            }
+            next.defaultConsultant = requestedConsultant;
+        }
+
+        if (requestedConsultants !== undefined) {
+            if (!requestedConsultants || typeof requestedConsultants !== 'object') {
+                return res.status(400).json({ success: false, error: 'Consultant settings must be an object' });
+            }
+            const merged = { ...next.consultants };
+            for (const [id, value] of Object.entries(requestedConsultants)) {
+                const known = consultants.find((entry) => entry.id === id);
+                if (!known) {
+                    return res.status(400).json({ success: false, error: `Unknown consultant: ${id}` });
+                }
+                if (!value || typeof value !== 'object') {
+                    return res.status(400).json({ success: false, error: `Settings for ${known.label} must be an object` });
+                }
+
+                const model = typeof value.model === 'string' ? value.model.trim() : '';
+                if (model && !MODEL_NAME_PATTERN.test(model)) {
+                    return res.status(400).json({
+                        success: false,
+                        error: `That does not look like a model name for ${known.label}`
+                    });
+                }
+
+                const effort = typeof value.effort === 'string' ? value.effort.trim() : '';
+                if (effort) {
+                    if (!known.supportsEffort) {
+                        return res.status(400).json({
+                            success: false,
+                            error: `${known.label} has no reasoning effort setting`
+                        });
+                    }
+                    // Validate against the model being saved, not the one stored
+                    // earlier: for Kimi the levels are per model. An unlisted
+                    // (custom) model whose levels are unknown here is left for
+                    // the consult CLI to validate at run time.
+                    const byModel = known.effortLevelsByModel || {};
+                    let levels = known.effortLevels || [];
+                    if (Object.prototype.hasOwnProperty.call(byModel, model)) {
+                        levels = byModel[model];
+                    } else if (known.effortDependsOnModel) {
+                        levels = null;
+                    }
+                    if (levels && !levels.includes(effort)) {
+                        return res.status(400).json({
+                            success: false,
+                            error: `Effort for ${known.label} with that model must be one of: ${levels.join(', ')}`
+                        });
+                    }
+                }
+
+                merged[id] = { model, effort };
+            }
+            next.consultants = merged;
+        }
+
+        finish();
+    });
+});
+
+// Programs that mean the shell pane is mid-flow and must not be typed into: a
+// consultant login TUI runs as node, and codex is the agent itself. The auth
+// helpers are bash, so an idle shell or a waiting helper menu is not busy.
+const BUSY_PANE_COMMANDS = new Set(['node', 'codex', 'claude', 'kimi', 'python', 'python3']);
+function isBusyPaneCommand(name) {
+    return BUSY_PANE_COMMANDS.has(String(name || '').replace(/^-/, ''));
+}
+
+// Start a consultant's sign-in helper. It runs in the shell pane rather than
+// the agent pane so it never types into a working Codex session; the sign-in
+// dialog then picks the printed URL up from whichever pane is on screen.
+app.post('/consultant-setup', (req, res) => {
+    if (!isSameOriginBrowserRequest(req)) {
+        return res.status(403).json({ success: false, error: 'Cross-origin consultant setup is not allowed' });
+    }
+
+    const requested = typeof req.body?.agent === 'string' ? req.body.agent : '';
+    const previousMode = activeTerminalMode;
+
+    readConsultantStatus((statusErr, consultants) => {
+        if (statusErr) {
+            console.error('Consultant status lookup failed:', statusErr.message);
+            return res.status(502).json({ success: false, error: 'Failed to read consultant status' });
+        }
+
+        const consultant = consultants.find((entry) => entry.id === requested);
+        if (!consultant) {
+            return res.status(400).json({ success: false, error: 'Unknown consultant' });
+        }
+        if (!consultant.installed) {
+            return res.status(409).json({
+                success: false,
+                error: `${consultant.label} is not installed in this add-on`
+            });
+        }
+
+        ensureRawTerminal((ensureErr) => {
+            if (ensureErr) {
+                console.error('Failed to open the shell pane for consultant setup:', ensureErr.message);
+                return res.status(502).json({ success: false, error: 'Failed to open the shell pane' });
+            }
+
+            // Refuse if a program already holds the shell pane (e.g. another
+            // consultant's login TUI waiting for a code): typing the helper
+            // command there would submit it as that program's input instead.
+            runTmux(['display-message', '-p', '-t', RAW_TMUX_TARGET, '#{pane_current_command}'], (cmdErr, cmdOut) => {
+                const current = cmdErr ? '' : String(cmdOut).trim();
+                if (isBusyPaneCommand(current)) {
+                    return res.status(409).json({
+                        success: false,
+                        error: `The Shell pane is busy running ${current}. Finish or cancel that sign-in before starting another.`
+                    });
+                }
+
+                selectTerminalMode('raw', (modeErr) => {
+                    if (modeErr) {
+                        console.error('Failed to select the shell pane for consultant setup:', modeErr.message);
+                        return res.status(502).json({ success: false, error: 'Failed to open the shell pane' });
+                    }
+
+                    // Any failure after the switch rolls the mode back, so a
+                    // half-done setup never strands the shared window on the
+                    // shell pane while the UI still believes it is in Codex mode.
+                    const fail = (message) => selectTerminalMode(previousMode, (restoreErr) => {
+                        if (restoreErr) {
+                            console.error(`Failed to restore terminal mode ${previousMode}:`, restoreErr.message);
+                        }
+                        res.status(502).json({ success: false, error: message });
+                    });
+
+                    runTmux(['send-keys', '-t', RAW_TMUX_TARGET, 'C-u'], () => {
+                        pasteTextToTarget(consultant.authHelper, RAW_TMUX_TARGET, 'consultant setup', (pasteErr) => {
+                            if (pasteErr) {
+                                console.error('Failed to stage the consultant setup command:', pasteErr.message);
+                                return fail('Failed to start the setup helper');
+                            }
+                            runTmux(['send-keys', '-t', RAW_TMUX_TARGET, 'Enter'], (enterErr) => {
+                                if (enterErr) {
+                                    console.error('Failed to run the consultant setup command:', enterErr.message);
+                                    return fail('Failed to start the setup helper');
+                                }
+                                res.json({ success: true, mode: 'raw', consultant });
+                            });
+                        });
+                    });
+                });
+            });
+        });
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Sign-in link recovery
+// ---------------------------------------------------------------------------
+
+let signInQrCache = { url: null, svg: null };
+
+// Consultant CLIs print OAuth URLs that the web terminal renders as wrapped,
+// unselectable text. This returns the pending link so the UI can present it
+// as a real link and a QR code, and reports which CLI is running so the UI
+// can offer to cancel it.
+app.get('/agent-login-url', (req, res) => {
+    if (!isSameOriginBrowserRequest(req)) {
+        return res.status(403).json({ success: false, error: 'Cross-origin login link access is not allowed' });
+    }
+
+    const target = activeTmuxTarget();
+    // The shared window resizes to whichever viewer is active and the TUI
+    // re-wraps its URL at that width, so the pane width is part of the data.
+    runTmux(['display-message', '-p', '-t', target, '#{pane_width} #{pane_pid}'], (dimErr, dimOut) => {
+        const [widthRaw, pidRaw] = dimErr ? [] : String(dimOut).trim().split(/\s+/);
+        const paneWidth = Number.parseInt(widthRaw || '', 10);
+        const panePid = Number.parseInt(pidRaw || '', 10);
+
+        capturePaneVisible(target, (err, output) => {
+            if (err) {
+                console.error(`Failed to capture ${target} for the sign-in link:`, err.message);
+                return res.status(502).json({ success: false, error: 'Failed to read the terminal pane' });
+            }
+
+            const url = extractSignInUrl(output || '', {
+                paneWidth: Number.isNaN(paneWidth) ? null : paneWidth
+            });
+            // Only a URL whose host is a known consultant/Codex sign-in host is
+            // treated as pending. An arbitrary auth-looking URL the agent merely
+            // printed must never be dressed up as a trusted sign-in prompt.
+            const label = url ? signInUrlLabel(url) : null;
+            const pending = Boolean(url && label);
+            const finish = (qrSvg, running) => res.json({
+                success: true,
+                found: pending,
+                url: pending ? url : null,
+                sourceLabel: label,
+                qrSvg: qrSvg || null,
+                running: running || null
+            });
+
+            // Nothing pending: answer without scanning the process table.
+            if (!pending) {
+                return finish(null, null);
+            }
+
+            const respond = (qrSvg) => {
+                if (!Number.isInteger(panePid)) {
+                    return finish(qrSvg, null);
+                }
+                findCancelTarget(panePid, (scanErr, found) => {
+                    finish(qrSvg, !scanErr && found ? found.name : null);
+                });
+            };
+
+            // The browser polls this endpoint, so cache the last rendering.
+            // A QR failure must never break the link itself.
+            if (signInQrCache.url === url) {
+                return respond(signInQrCache.svg);
+            }
+            QRCode.toString(url, { type: 'svg', errorCorrectionLevel: 'M', margin: 2 })
+                .then((svg) => {
+                    signInQrCache = { url, svg };
+                    respond(svg);
+                })
+                .catch((qrErr) => {
+                    console.error('Sign-in QR generation failed:', qrErr.message);
+                    respond(null);
+                });
+        });
+    });
+});
+
+// Codex's browser sign-in flow redirects to localhost:1455, which resolves to
+// the user's own machine rather than this container, so their browser dead
+// ends while the CLI keeps listening. This delivers the failed callback URL
+// to that listener. Only the fixed loopback host, port, and path are allowed.
+app.post('/agent-callback-forward', (req, res) => {
+    if (!isSameOriginBrowserRequest(req)) {
+        return res.status(403).json({ success: false, error: 'Cross-origin callback forwarding is not allowed' });
+    }
+
+    const parsed = parseLoopbackCallback(typeof req.body?.url === 'string' ? req.body.url : '');
+    if (!parsed) {
+        return res.status(400).json({
+            success: false,
+            error: 'That does not look like a localhost:1455 sign-in callback URL'
+        });
+    }
+
+    const forward = http.get({
+        host: '127.0.0.1',
+        port: parsed.port,
+        path: `${parsed.path}?${parsed.query}`,
+        timeout: 10000
+    }, (upstream) => {
+        upstream.resume();
+        // The listener can still reset the socket or time out after sending
+        // headers, so guard every send: a second one would throw
+        // ERR_HTTP_HEADERS_SENT from an event callback and crash the service.
+        if (!res.headersSent) {
+            res.json({ success: true, forwarded: true, status: upstream.statusCode });
+        }
+    });
+    forward.on('timeout', () => forward.destroy(new Error('timed out')));
+    forward.on('error', (err) => {
+        console.warn('Sign-in callback forward failed:', err.message);
+        if (!res.headersSent) {
+            res.status(502).json({
+                success: false,
+                error: 'No sign-in is waiting for this callback - restart the sign-in and try again'
+            });
+        }
+    });
+});
+
+// The pane runs a chain of wrapper shells (tmux launch script -> picker ->
+// auth helper) with the CLI as the first non-wrapper descendant.
+function findCancelTarget(panePid, callback) {
+    // Full args, not comm: bash reports the script name as its comm, so the
+    // wrapper layers would otherwise look like non-shell programs.
+    execFile('ps', ['-o', 'pid=,ppid=,args='], { timeout: 3000 }, (err, stdout) => {
+        if (err) {
+            return callback(err);
+        }
+        const children = new Map();
+        const argsByPid = new Map();
+        for (const line of String(stdout).split('\n')) {
+            const match = line.trim().match(/^(\d+)\s+(\d+)\s+(.+)$/);
+            if (!match) {
+                continue;
+            }
+            const [, pid, ppid, args] = match;
+            argsByPid.set(Number(pid), args.trim());
+            if (!children.has(Number(ppid))) {
+                children.set(Number(ppid), []);
+            }
+            children.get(Number(ppid)).push(Number(pid));
+        }
+        const queue = [...(children.get(panePid) || [])];
+        while (queue.length > 0) {
+            const pid = queue.shift();
+            const args = argsByPid.get(pid) || '';
+            if (!isSignInWrapperProcess(args)) {
+                return callback(null, { pid, name: args.split(/\s+/)[0].split('/').pop() });
+            }
+            queue.push(...(children.get(pid) || []));
+        }
+        callback(null, null);
+    });
+}
+
+// Cancel a pending sign-in. Login TUIs can swallow Ctrl+C entirely (Claude
+// Code's does), so the only reliable abort is to stop the CLI itself; the
+// wrapper shells trap the interruption and redraw their menus.
+app.post('/terminal-cancel-signin', (req, res) => {
+    if (!isSameOriginBrowserRequest(req)) {
+        return res.status(403).json({ success: false, error: 'Cross-origin cancel is not allowed' });
+    }
+
+    const target = activeTmuxTarget();
+    // Cancel only when a sign-in is genuinely on screen in this pane. Without
+    // this, a stray click when a consultant merely printed an auth-looking URL
+    // (or the dialog lingered) would SIGKILL whatever runs in the pane - in
+    // Codex mode, the user's working Codex session.
+    capturePaneVisible(target, (capErr, paneText) => {
+        if (capErr) {
+            console.error(`Failed to capture ${target} to confirm a pending sign-in:`, capErr.message);
+            return res.status(502).json({ success: false, error: 'Failed to inspect the terminal pane' });
+        }
+        const pendingUrl = extractSignInUrl(paneText || '', {});
+        if (!pendingUrl || !signInUrlLabel(pendingUrl)) {
+            return res.json({ success: true, cancelled: false, reason: 'No sign-in is currently pending' });
+        }
+
+        runTmux(['display-message', '-p', '-t', target, '#{pane_pid}'], (paneErr, paneOut) => {
+            const panePid = paneErr ? NaN : Number.parseInt(String(paneOut).trim(), 10);
+            if (!Number.isInteger(panePid)) {
+                return res.status(502).json({ success: false, error: 'Failed to inspect the terminal pane' });
+            }
+
+            findCancelTarget(panePid, (findErr, found) => {
+                if (findErr) {
+                    console.error('Sign-in cancel process scan failed:', findErr.message);
+                    return res.status(502).json({ success: false, error: 'Failed to inspect the terminal pane' });
+                }
+                if (!found) {
+                    return res.json({ success: true, cancelled: false, reason: 'Nothing is running to cancel' });
+                }
+
+                try {
+                    process.kill(found.pid, 'SIGTERM');
+                } catch (killErr) {
+                    console.error(`Sign-in cancel SIGTERM to ${found.pid} failed:`, killErr.message);
+                    return res.status(502).json({ success: false, error: 'Failed to stop the running program' });
+                }
+
+                // Escalate only if the CLI ignores SIGTERM.
+                setTimeout(() => {
+                    try {
+                        process.kill(found.pid, 0);
+                        process.kill(found.pid, 'SIGKILL');
+                        console.warn(`Sign-in cancel escalated to SIGKILL for ${found.name} (${found.pid})`);
+                    } catch {
+                        // Already exited, which is the normal case.
+                    }
+                    res.json({ success: true, cancelled: true, program: found.name });
+                }, 1500);
+            });
+        });
     });
 });
 

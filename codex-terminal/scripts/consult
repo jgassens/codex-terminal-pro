@@ -1,0 +1,632 @@
+#!/usr/bin/python3
+"""Ask a consultant CLI a question, read-only and unprivileged.
+
+Codex is this add-on's principal agent. Claude Code and Kimi Code are
+optional consultants the user may authenticate; this runs one of them for a
+single question and prints its answer.
+
+Isolation, in order of how much it is relied on:
+
+  1. The consultant runs as uid/gid 65534. Everything in /config is
+     root-owned mode 644/755, so the kernel grants read and refuses every
+     write. This is the guarantee, and it does not depend on CLI behaviour.
+  2. Credentials are copied into a throwaway home rather than shared. Each
+     sandbox lives under a root-owned base directory that the unprivileged
+     uid can enter but not list, has a random name, and is removed when the
+     consult ends (including on SIGTERM), so a consultant cannot discover or
+     read another agent's login, nor rewrite the real credential store.
+  3. The environment is an allowlist, so no provider API key, Supervisor
+     token, or GitHub PAT reaches the consultant.
+  4. The CLI's own read-only flags are asked for as well. They are the least
+     load-bearing layer here, being model-level rather than kernel-level.
+"""
+
+from __future__ import annotations
+
+import argparse
+import ctypes
+import json
+import os
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+import tomllib
+from pathlib import Path
+
+WORKSPACE = "/config"
+UNPRIVILEGED_UID = 65534
+UNPRIVILEGED_GID = 65534
+PR_SET_NO_NEW_PRIVS = 38
+MAX_CREDENTIAL_BYTES = 1024 * 1024
+# Sandboxes live under this root-owned directory. It is mode 0711, so the
+# unprivileged consultant can traverse into its own (randomly named) sandbox
+# but cannot list the directory to discover a sibling's.
+SANDBOX_BASE = "/tmp/consult"
+DEFAULT_TIMEOUT_SECONDS = 300
+DEFAULT_AGENT = "claude"
+SETTINGS_FILE = os.environ.get("CONSULT_SETTINGS_FILE", "/data/settings.json")
+
+# Stripped from the consultant's environment no matter which one runs, so a
+# consultant can never bill or impersonate through another provider's key.
+BLOCKED_ENV = (
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "MOONSHOT_API_KEY",
+    "KIMI_API_KEY",
+    "SUPERVISOR_TOKEN",
+    "GITHUB_PAT_TOKEN",
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+)
+
+PASSTHROUGH_ENV = ("TERM", "LANG", "LC_ALL", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY",
+                   "https_proxy", "http_proxy", "no_proxy")
+
+
+def claude_args(prompt: str, model: str, effort: str) -> list[str]:
+    # Deny-by-default permissions with only read tools offered, no MCP servers
+    # started from settings, and no session files written for a one-shot.
+    #
+    # Note: --bare looks like the natural choice here and is not usable. It
+    # skips the stored state that carries the login, so every consult fails
+    # with "Not logged in" even when the CLI is signed in.
+    args = [
+        "claude", "-p", prompt,
+        "--permission-mode", "dontAsk",
+        "--allowedTools", "Read,Glob,Grep",
+        "--strict-mcp-config",
+        "--no-session-persistence",
+    ]
+    if model:
+        args += ["--model", model]
+    if effort:
+        args += ["--effort", effort]
+    return args
+
+
+def kimi_args(prompt: str, model: str, effort: str) -> list[str]:
+    # No --plan here: Kimi refuses to combine it with --prompt. Read-only is
+    # enforced by the uid drop rather than by asking the CLI nicely, so
+    # nothing is lost. Kimi has no effort setting, so it is ignored.
+    args = ["kimi", "-p", prompt]
+    if model:
+        args += ["--model", model]
+    return args
+
+
+# Claude Code has no command that lists models, so these are its documented
+# aliases, each checked against the pinned CLI in this image. A full model id
+# can still be entered by hand.
+CLAUDE_MODEL_ALIASES = ("opus", "sonnet", "haiku", "fable")
+
+
+def claude_models(home: Path) -> list[str]:
+    return list(CLAUDE_MODEL_ALIASES)
+
+
+def kimi_config(home: Path) -> dict:
+    try:
+        with open(home / "config.toml", "rb") as handle:
+            return tomllib.load(handle)
+    except (OSError, ValueError):
+        return {}
+
+
+def kimi_effort_levels(home: Path, model: str = "") -> list[str]:
+    """Efforts the chosen Kimi model declares it supports.
+
+    Kimi has no effort flag; a model entry carries support_efforts and
+    default_effort, and the effort reaches the model as thinking_effort.
+    """
+    data = kimi_config(home)
+    models = data.get("models")
+    if not isinstance(models, dict):
+        return []
+    name = model or data.get("default_model")
+    entry = models.get(name) if isinstance(name, str) else None
+    if not isinstance(entry, dict):
+        # Fall back to whatever any model offers, so the UI is not empty.
+        for candidate in models.values():
+            if isinstance(candidate, dict) and candidate.get("support_efforts"):
+                return [str(level) for level in candidate["support_efforts"]]
+        return []
+    return [str(level) for level in (entry.get("support_efforts") or [])]
+
+
+def toml_value(value) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, list):
+        return "[" + ", ".join(toml_value(item) for item in value) + "]"
+    escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def kimi_effort_alias(sandbox: Path, model: str, effort: str) -> str:
+    """Add a model alias carrying the requested effort to the sandbox config.
+
+    Only the throwaway copy is touched, so the user's own Kimi config keeps
+    whatever effort they chose for their own sessions.
+    """
+    data = kimi_config(sandbox)
+    models = data.get("models")
+    if not isinstance(models, dict):
+        raise ConsultError("Kimi Code has no models configured yet")
+    base_name = model or data.get("default_model")
+    base = models.get(base_name) if isinstance(base_name, str) else None
+    if not isinstance(base, dict):
+        raise ConsultError(f"Kimi Code has no model named {base_name!r}")
+    supported = [str(level) for level in (base.get("support_efforts") or [])]
+    if effort not in supported:
+        raise ConsultError(
+            f"{base_name} supports effort: {', '.join(supported) or 'none'}"
+        )
+
+    alias = f"consult-{effort}"
+    lines = ["", f'[models."{alias}"]']
+    for key, value in base.items():
+        if key == "default_effort":
+            continue
+        lines.append(f"{key} = {toml_value(value)}")
+    lines.append(f'default_effort = "{effort}"')
+    with open(sandbox / "config.toml", "a", encoding="utf-8") as handle:
+        handle.write("\n".join(lines) + "\n")
+    return alias
+
+
+def kimi_models(home: Path) -> list[str]:
+    """Aliases Kimi actually has configured, which sign-in registers."""
+    try:
+        with open(home / "config.toml", "rb") as handle:
+            data = tomllib.load(handle)
+    except (OSError, ValueError):
+        return []
+    names = set()
+    models = data.get("models")
+    if isinstance(models, dict):
+        names.update(str(name) for name in models)
+    default_model = data.get("default_model")
+    if isinstance(default_model, str) and default_model:
+        names.add(default_model)
+    return sorted(names)
+
+
+def always_ready(home: Path) -> tuple[bool, str]:
+    return True, ""
+
+
+def kimi_ready(home: Path) -> tuple[bool, str]:
+    """Kimi needs a provider and model, registered after the token is issued.
+
+    That registration is a separate server call during sign-in, so a valid
+    token can sit next to an empty config when it fails. Reporting such an
+    install as ready sends people to a confusing runtime error instead.
+    """
+    try:
+        with open(home / "config.toml", "rb") as handle:
+            data = tomllib.load(handle)
+    except (OSError, ValueError):
+        return False, "signed in, but its configuration could not be read"
+    if data.get("default_model") or data.get("models") or data.get("providers"):
+        return True, ""
+    return False, "signed in, but no model is configured yet - sign in again to finish setup"
+
+
+CONSULTANTS = {
+    "claude": {
+        "label": "Claude Code",
+        "binary": "claude",
+        "home_env": "CLAUDE_CONFIG_DIR",
+        "default_home": "/data/.claude",
+        # .credentials.json alone is a token with no account attached: Claude
+        # reports "Not logged in" without .claude.json, and settings.json
+        # carries the update/ripgrep settings seeded at boot. First entry is
+        # the one that proves a completed sign-in.
+        "credential_files": (".credentials.json", ".claude.json", "settings.json"),
+        "credential_dirs": (),
+        "login_proof": ".credentials.json",
+        "ready_check": always_ready,
+        "list_models": claude_models,
+        "extra_env": {"DISABLE_AUTOUPDATER": "1", "USE_BUILTIN_RIPGREP": "0"},
+        "build_args": claude_args,
+        "auth_helper": "claude-auth-helper",
+        # Which knobs the UI should offer. Claude takes an effort level;
+        # Kimi has no equivalent flag.
+        "supports_model": True,
+        "supports_effort": True,
+        "list_efforts": lambda home, model="": ["low", "medium", "high", "xhigh", "max"],
+        "model_hint": "opus, sonnet, or a full model id",
+        "effort_via_config": None,
+    },
+    "kimi": {
+        "label": "Kimi Code",
+        "binary": "kimi",
+        "home_env": "KIMI_CODE_HOME",
+        "default_home": "/data/.kimi-code",
+        # Verified against a signed-in account: the token lives in a
+        # credentials/ directory rather than a single file, and config.toml
+        # carries the provider and default_model the token is useless without.
+        "credential_dirs": ("credentials",),
+        "credential_files": ("config.toml", "device_id"),
+        # config.toml exists before any sign-in, so the token itself is the
+        # only honest proof.
+        "login_proof": "credentials/*.json",
+        "ready_check": kimi_ready,
+        "list_models": kimi_models,
+        "extra_env": {},
+        "build_args": kimi_args,
+        "auth_helper": "kimi-auth-helper",
+        "supports_model": True,
+        "supports_effort": True,
+        # Declared per model in Kimi's own config rather than fixed here.
+        "list_efforts": kimi_effort_levels,
+        "model_hint": "a model alias from your Kimi provider",
+        "effort_via_config": kimi_effort_alias,
+    },
+}
+
+
+def load_settings() -> dict:
+    """Read the add-on settings written by the web UI. Absent is normal."""
+    try:
+        with open(SETTINGS_FILE, encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def consultant_preferences(settings: dict, agent: str) -> tuple[str, str]:
+    """Model and effort chosen for one consultant, blank when unset."""
+    consultants = settings.get("consultants")
+    entry = consultants.get(agent) if isinstance(consultants, dict) else None
+    if not isinstance(entry, dict):
+        return "", ""
+    model = entry.get("model")
+    effort = entry.get("effort")
+    return (
+        model.strip() if isinstance(model, str) else "",
+        effort.strip() if isinstance(effort, str) else "",
+    )
+
+
+def framed_prompt(spec: dict, prompt: str, model: str, effort: str) -> str:
+    """Tell the consultant what it was actually started as.
+
+    A consultant does not know its own invocation: asked which model it is
+    running, it reads its config file and reports the default there, which is
+    wrong whenever --model overrides it. Stating the facts up front keeps a
+    consultant from confidently misreporting itself.
+    """
+    facts = []
+    if model:
+        facts.append(f'the model "{model}"')
+    if effort and spec["supports_effort"]:
+        facts.append(f'reasoning effort "{effort}"')
+    if not facts:
+        return prompt
+    return (
+        "[Consultation context: you were started non-interactively with "
+        + " and ".join(facts)
+        + ". This overrides any default named in your own configuration "
+        "file. You are answering a single question and cannot ask a "
+        "follow-up.]\n\n"
+        + prompt
+    )
+
+
+class ConsultError(RuntimeError):
+    """Raised when a consult cannot be run as specified."""
+
+
+def consultant_home(spec: dict) -> Path:
+    return Path(os.environ.get(spec["home_env"], spec["default_home"]))
+
+
+def is_configured(spec: dict) -> bool:
+    if shutil.which(spec["binary"]) is None:
+        return False
+    home = consultant_home(spec)
+    return any(path.is_file() for path in home.glob(spec["login_proof"]))
+
+
+def copy_credential(source: Path, destination: Path) -> bool:
+    """Copy one credential file without following symlinks, 0600, nobody-owned."""
+    try:
+        fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
+    except (FileNotFoundError, OSError):
+        return False
+    try:
+        info = os.fstat(fd)
+        if info.st_size > MAX_CREDENTIAL_BYTES:
+            raise ConsultError(f"{source} is larger than expected for a credential file")
+        payload = os.read(fd, MAX_CREDENTIAL_BYTES)
+    finally:
+        os.close(fd)
+
+    out = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        os.write(out, payload)
+        os.fchown(out, UNPRIVILEGED_UID, UNPRIVILEGED_GID)
+    finally:
+        os.close(out)
+    return True
+
+
+def set_no_new_privileges() -> None:
+    libc = ctypes.CDLL("libc.so.6", use_errno=True)
+    if libc.prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0:
+        error_number = ctypes.get_errno()
+        raise OSError(error_number, os.strerror(error_number))
+
+
+def drop_privileges() -> None:
+    os.setgroups([])
+    os.setgid(UNPRIVILEGED_GID)
+    os.setuid(UNPRIVILEGED_UID)
+    set_no_new_privileges()
+
+
+def build_environment(spec: dict, sandbox_home: Path) -> dict:
+    env = {
+        "PATH": "/usr/local/bin:/usr/bin:/bin",
+        "HOME": str(sandbox_home),
+        "TMPDIR": str(sandbox_home),
+        "NO_COLOR": "1",
+        # The consultant's home points at the throwaway copy, so a refreshed
+        # token is written there and discarded rather than into the real store.
+        spec["home_env"]: str(sandbox_home),
+    }
+    for name in PASSTHROUGH_ENV:
+        value = os.environ.get(name)
+        if value:
+            env[name] = value
+    env.update(spec["extra_env"])
+    for name in BLOCKED_ENV:
+        env.pop(name, None)
+    return env
+
+
+def ensure_sandbox_base() -> Path:
+    """Root-owned parent for sandboxes, mode 0711.
+
+    The unprivileged consultant can traverse into its own randomly named
+    sandbox but cannot list this directory, so it cannot enumerate or reach a
+    sibling consult's copied credentials.
+    """
+    base = Path(SANDBOX_BASE)
+    base.mkdir(mode=0o711, exist_ok=True)
+    # mkdir honours umask and is a no-op when the directory already exists, so
+    # assert the mode explicitly either way.
+    os.chmod(base, 0o711)
+    return base
+
+
+def run_consult(agent: str, prompt: str, timeout: int, model: str = "", effort: str = "") -> int:
+    spec = CONSULTANTS[agent]
+    if effort and not spec["supports_effort"]:
+        effort = ""
+    if effort:
+        levels = spec["list_efforts"](consultant_home(spec), model)
+        if levels and effort not in levels:
+            raise ConsultError(
+                f"{spec['label']} effort must be one of: {', '.join(levels)}"
+            )
+    if shutil.which(spec["binary"]) is None:
+        raise ConsultError(f"{spec['label']} is not installed in this add-on")
+
+    home = consultant_home(spec)
+    if is_configured(spec):
+        ready, note = spec["ready_check"](home)
+        if not ready:
+            raise ConsultError(f"{spec['label']} is {note}")
+    if not is_configured(spec):
+        raise ConsultError(
+            f"{spec['label']} is not set up yet. Run {spec['auth_helper']} in a "
+            f"shell, or open the add-on's Settings panel and use its consultant "
+            f"setup, to sign in."
+        )
+
+    sandbox = Path(tempfile.mkdtemp(prefix="consult-", dir=str(ensure_sandbox_base())))
+    proc = None
+
+    def terminate_child() -> None:
+        if proc is None or proc.poll() is not None:
+            return
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+    def cleanup() -> None:
+        terminate_child()
+        shutil.rmtree(sandbox, ignore_errors=True)
+
+    def on_signal(signum, _frame):
+        # A cancel or shutdown must not orphan the consultant or leave its
+        # copied credentials behind in the sandbox.
+        cleanup()
+        os._exit(128 + signum)
+
+    previous_term = signal.signal(signal.SIGTERM, on_signal)
+    previous_hup = signal.signal(signal.SIGHUP, on_signal)
+    try:
+        os.chmod(sandbox, 0o700)
+        os.chown(sandbox, UNPRIVILEGED_UID, UNPRIVILEGED_GID)
+        for name in spec["credential_files"]:
+            copy_credential(home / name, sandbox / name)
+        for name in spec.get("credential_dirs", ()):
+            source_dir = home / name
+            if not source_dir.is_dir():
+                continue
+            target_dir = sandbox / name
+            os.mkdir(target_dir, 0o700)
+            os.chown(target_dir, UNPRIVILEGED_UID, UNPRIVILEGED_GID)
+            for entry in sorted(source_dir.iterdir()):
+                if entry.is_file():
+                    copy_credential(entry, target_dir / entry.name)
+
+        run_model = model
+        if effort and spec.get("effort_via_config"):
+            run_model = spec["effort_via_config"](sandbox, model, effort)
+
+        # start_new_session puts the consultant and anything it spawns in their
+        # own process group, so a timeout or cancel kills the whole tree rather
+        # than orphaning children under a deleted sandbox.
+        proc = subprocess.Popen(
+            spec["build_args"](framed_prompt(spec, prompt, model, effort), run_model, effort),
+            cwd=WORKSPACE,
+            env=build_environment(spec, sandbox),
+            preexec_fn=drop_privileges,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            terminate_child()
+            proc.communicate()
+            raise ConsultError(f"{spec['label']} did not answer within {timeout}s")
+        returncode = proc.returncode
+    finally:
+        signal.signal(signal.SIGTERM, previous_term)
+        signal.signal(signal.SIGHUP, previous_hup)
+        cleanup()
+
+    if returncode != 0:
+        # A consultant that failed must never be reported as a successful
+        # answer: surface the exit code and the last line of its stderr, and
+        # drop any partial stdout rather than passing it off as the opinion.
+        detail = (stderr or "").strip().splitlines()
+        raise ConsultError(
+            f"{spec['label']} exited {returncode}"
+            + (f": {detail[-1]}" if detail else "")
+        )
+    answer = (stdout or "").strip()
+    if answer:
+        print(answer)
+    return 0
+
+
+def status_records() -> list[dict]:
+    settings = load_settings()
+    records = []
+    for agent, spec in CONSULTANTS.items():
+        installed = shutil.which(spec["binary"]) is not None
+        home = consultant_home(spec)
+        signed_in = installed and is_configured(spec)
+        ready, note = spec["ready_check"](home) if signed_in else (False, "")
+        model, effort = consultant_preferences(settings, agent)
+        models = spec["list_models"](home) if installed else []
+        # Effort levels can depend on the chosen model (Kimi's are per model),
+        # so report them per model - keyed by model name, with "" for the CLI
+        # default - and keep the stored model's list under effortLevels for the
+        # first render. effortDependsOnModel tells a validator whether an
+        # unlisted (custom) model's efforts can be checked here at all.
+        effort_by_model = (
+            {name: spec["list_efforts"](home, name) for name in ([""] + models)}
+            if installed else {}
+        )
+        records.append({
+            "id": agent,
+            "label": spec["label"],
+            "installed": installed,
+            "signedIn": signed_in,
+            "ready": signed_in and ready,
+            "readyNote": note,
+            "authHelper": spec["auth_helper"],
+            "supportsModel": spec["supports_model"],
+            "supportsEffort": spec["supports_effort"],
+            "effortDependsOnModel": spec.get("effort_via_config") is not None,
+            "effortLevels": spec["list_efforts"](home, model) if installed else [],
+            "effortLevelsByModel": effort_by_model,
+            "modelHint": spec["model_hint"],
+            "models": models,
+            "model": model,
+            "effort": effort,
+        })
+    return records
+
+
+def print_status(as_json: bool) -> int:
+    records = status_records()
+    if as_json:
+        print(json.dumps({"consultants": records}))
+        return 0
+    for record in records:
+        if not record["installed"]:
+            state = "not installed"
+        elif record["ready"]:
+            state = "ready"
+        elif record["signedIn"]:
+            state = record["readyNote"] or "signed in, but not usable"
+        else:
+            state = f"not signed in (run {record['authHelper']})"
+        print(f"{record['id']:8} {record['label']:12} {state}")
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="consult",
+        description="Ask a consultant CLI a question about this Home Assistant config.",
+    )
+    parser.add_argument("--agent", choices=sorted(CONSULTANTS), default=None,
+                        help="which consultant to ask (default: from Settings)")
+    parser.add_argument("--timeout", type=int, default=None,
+                        help="seconds to wait for an answer (default: from Settings)")
+    parser.add_argument("--model", default=None,
+                        help="model to ask for (default: from Settings)")
+    parser.add_argument("--effort", default=None,
+                        help="reasoning effort, where the consultant supports it")
+    parser.add_argument("--list", action="store_true",
+                        help="show which consultants are installed and signed in")
+    parser.add_argument("--json", action="store_true",
+                        help="with --list, report status as JSON")
+    parser.add_argument("question", nargs="*",
+                        help="the question; omit to read it from stdin")
+    return parser
+
+
+def main(argv: list[str]) -> int:
+    args = build_parser().parse_args(argv)
+    if args.list:
+        return print_status(args.json)
+
+    prompt = " ".join(args.question).strip() if args.question else sys.stdin.read().strip()
+    if not prompt:
+        raise ConsultError("No question given")
+
+    settings = load_settings()
+    agent = args.agent or settings.get("defaultConsultant") or DEFAULT_AGENT
+    if agent not in CONSULTANTS:
+        raise ConsultError(f"Unknown consultant: {agent}")
+
+    timeout = args.timeout
+    if timeout is None:
+        stored = settings.get("consultTimeoutSeconds")
+        timeout = stored if isinstance(stored, int) else DEFAULT_TIMEOUT_SECONDS
+    if timeout <= 0:
+        raise ConsultError("--timeout must be positive")
+
+    stored_model, stored_effort = consultant_preferences(settings, agent)
+    model = args.model if args.model is not None else stored_model
+    effort = args.effort if args.effort is not None else stored_effort
+    return run_consult(agent, prompt, timeout, model, effort)
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except ConsultError as error:
+        print(f"consult: {error}", file=sys.stderr)
+        sys.exit(2)
+    except KeyboardInterrupt:
+        sys.exit(130)
