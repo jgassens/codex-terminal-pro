@@ -94,13 +94,21 @@ class ConsultModelSettingsTests(unittest.TestCase):
             self.assertNotIn("--model", args, agent)
             self.assertNotIn("--effort", args, agent)
 
-    def test_kimi_has_no_effort_flag(self) -> None:
-        # Kimi exposes no effort setting; asking for one must not invent a flag.
-        self.assertFalse(consult.CONSULTANTS["kimi"]["supports_effort"])
-        args = consult.CONSULTANTS["kimi"]["build_args"]("q", "kimi-k2", "high")
+    def test_kimi_carries_effort_through_config_not_a_flag(self) -> None:
+        # Kimi supports effort, but only as a model-table setting: inventing
+        # a --effort flag would just make the CLI reject the call.
+        spec = consult.CONSULTANTS["kimi"]
+        self.assertTrue(spec["supports_effort"])
+        self.assertTrue(callable(spec["effort_via_config"]))
+        args = spec["build_args"]("q", "kimi-k2", "high")
         self.assertNotIn("--effort", args)
         self.assertNotIn("--plan", args)
         self.assertEqual(args[args.index("--model") + 1], "kimi-k2")
+
+    def test_claude_carries_effort_on_the_command_line(self) -> None:
+        spec = consult.CONSULTANTS["claude"]
+        self.assertTrue(spec["supports_effort"])
+        self.assertIsNone(spec["effort_via_config"])
 
     def test_preferences_are_read_per_consultant(self) -> None:
         settings = {"consultants": {"claude": {"model": "sonnet", "effort": "max"}}}
@@ -337,9 +345,10 @@ class ConsultPromptFramingTests(unittest.TestCase):
         # The override must be called out, since the config says otherwise.
         self.assertIn("overrides any default", framed)
 
-    def test_effort_is_omitted_for_a_consultant_without_one(self) -> None:
+    def test_only_what_was_set_is_stated(self) -> None:
+        # Model alone, with no effort chosen, must not imply an effort.
         framed = consult.framed_prompt(
-            consult.CONSULTANTS["kimi"], "question", "kimi-code/k3", "high"
+            consult.CONSULTANTS["kimi"], "question", "kimi-code/k3", ""
         )
         self.assertIn('the model "kimi-code/k3"', framed)
         self.assertNotIn("reasoning effort", framed)
@@ -347,3 +356,74 @@ class ConsultPromptFramingTests(unittest.TestCase):
     def test_an_unconfigured_consult_is_left_alone(self) -> None:
         for spec in consult.CONSULTANTS.values():
             self.assertEqual(consult.framed_prompt(spec, "plain question", "", ""), "plain question")
+
+
+class KimiEffortTests(unittest.TestCase):
+    """Kimi's effort is a model-table setting, not a command-line flag."""
+
+    K3 = (
+        '\n[models."kimi-code/k3"]\n'
+        'provider = "managed:kimi-code"\n'
+        'model = "k3"\n'
+        'max_context_size = 1048576\n'
+        'capabilities = ["thinking", "tool_use"]\n'
+        'display_name = "K3"\n'
+        'support_efforts = ["low", "high", "max"]\n'
+        'default_effort = "high"\n'
+    )
+
+    def home_with_k3(self, directory: str) -> Path:
+        home = Path(directory)
+        (home / "config.toml").write_text('default_model = "kimi-code/k3"\n' + self.K3)
+        return home
+
+    def test_effort_levels_come_from_the_chosen_model(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            home = self.home_with_k3(directory)
+            self.assertEqual(
+                consult.kimi_effort_levels(home, "kimi-code/k3"), ["low", "high", "max"]
+            )
+            # With no model named, the configured default answers.
+            self.assertEqual(consult.kimi_effort_levels(home), ["low", "high", "max"])
+
+    def test_no_models_yields_no_levels(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual(consult.kimi_effort_levels(Path(directory)), [])
+
+    def test_effort_alias_is_added_to_the_sandbox_only(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            sandbox = self.home_with_k3(directory)
+            original = (sandbox / "config.toml").read_text()
+            alias = consult.kimi_effort_alias(sandbox, "kimi-code/k3", "max")
+            self.assertEqual(alias, "consult-max")
+            import tomllib
+            data = tomllib.loads((sandbox / "config.toml").read_text())
+            entry = data["models"][alias]
+            self.assertEqual(entry["default_effort"], "max")
+            # The alias must otherwise mirror the model it came from.
+            self.assertEqual(entry["provider"], "managed:kimi-code")
+            self.assertEqual(entry["model"], "k3")
+            self.assertEqual(entry["max_context_size"], 1048576)
+            self.assertEqual(entry["capabilities"], ["thinking", "tool_use"])
+            # The original entry is untouched.
+            self.assertIn(original.strip(), (sandbox / "config.toml").read_text())
+
+    def test_unsupported_effort_is_refused_with_the_real_options(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            sandbox = self.home_with_k3(directory)
+            with self.assertRaises(consult.ConsultError) as caught:
+                consult.kimi_effort_alias(sandbox, "kimi-code/k3", "medium")
+            self.assertIn("low, high, max", str(caught.exception))
+
+    def test_toml_values_round_trip(self) -> None:
+        import tomllib
+        rendered = "\n".join([
+            "[t]",
+            f"s = {consult.toml_value('a b')}",
+            f"n = {consult.toml_value(42)}",
+            f"b = {consult.toml_value(True)}",
+            f"l = {consult.toml_value(['x', 'y'])}",
+            f"q = {consult.toml_value('say \"hi\"')}",
+        ])
+        parsed = tomllib.loads(rendered)["t"]
+        self.assertEqual(parsed, {"s": "a b", "n": 42, "b": True, "l": ["x", "y"], "q": 'say "hi"'})

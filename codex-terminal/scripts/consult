@@ -100,6 +100,78 @@ def claude_models(home: Path) -> list[str]:
     return list(CLAUDE_MODEL_ALIASES)
 
 
+def kimi_config(home: Path) -> dict:
+    try:
+        with open(home / "config.toml", "rb") as handle:
+            return tomllib.load(handle)
+    except (OSError, ValueError):
+        return {}
+
+
+def kimi_effort_levels(home: Path, model: str = "") -> list[str]:
+    """Efforts the chosen Kimi model declares it supports.
+
+    Kimi has no effort flag; a model entry carries support_efforts and
+    default_effort, and the effort reaches the model as thinking_effort.
+    """
+    data = kimi_config(home)
+    models = data.get("models")
+    if not isinstance(models, dict):
+        return []
+    name = model or data.get("default_model")
+    entry = models.get(name) if isinstance(name, str) else None
+    if not isinstance(entry, dict):
+        # Fall back to whatever any model offers, so the UI is not empty.
+        for candidate in models.values():
+            if isinstance(candidate, dict) and candidate.get("support_efforts"):
+                return [str(level) for level in candidate["support_efforts"]]
+        return []
+    return [str(level) for level in (entry.get("support_efforts") or [])]
+
+
+def toml_value(value) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, list):
+        return "[" + ", ".join(toml_value(item) for item in value) + "]"
+    escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def kimi_effort_alias(sandbox: Path, model: str, effort: str) -> str:
+    """Add a model alias carrying the requested effort to the sandbox config.
+
+    Only the throwaway copy is touched, so the user's own Kimi config keeps
+    whatever effort they chose for their own sessions.
+    """
+    data = kimi_config(sandbox)
+    models = data.get("models")
+    if not isinstance(models, dict):
+        raise ConsultError("Kimi Code has no models configured yet")
+    base_name = model or data.get("default_model")
+    base = models.get(base_name) if isinstance(base_name, str) else None
+    if not isinstance(base, dict):
+        raise ConsultError(f"Kimi Code has no model named {base_name!r}")
+    supported = [str(level) for level in (base.get("support_efforts") or [])]
+    if effort not in supported:
+        raise ConsultError(
+            f"{base_name} supports effort: {', '.join(supported) or 'none'}"
+        )
+
+    alias = f"consult-{effort}"
+    lines = ["", f'[models."{alias}"]']
+    for key, value in base.items():
+        if key == "default_effort":
+            continue
+        lines.append(f"{key} = {toml_value(value)}")
+    lines.append(f'default_effort = "{effort}"')
+    with open(sandbox / "config.toml", "a", encoding="utf-8") as handle:
+        handle.write("\n".join(lines) + "\n")
+    return alias
+
+
 def kimi_models(home: Path) -> list[str]:
     """Aliases Kimi actually has configured, which sign-in registers."""
     try:
@@ -160,8 +232,9 @@ CONSULTANTS = {
         # Kimi has no equivalent flag.
         "supports_model": True,
         "supports_effort": True,
-        "effort_levels": ("low", "medium", "high", "xhigh", "max"),
+        "list_efforts": lambda home, model="": ["low", "medium", "high", "xhigh", "max"],
         "model_hint": "opus, sonnet, or a full model id",
+        "effort_via_config": None,
     },
     "kimi": {
         "label": "Kimi Code",
@@ -182,9 +255,11 @@ CONSULTANTS = {
         "build_args": kimi_args,
         "auth_helper": "kimi-auth-helper",
         "supports_model": True,
-        "supports_effort": False,
-        "effort_levels": (),
+        "supports_effort": True,
+        # Declared per model in Kimi's own config rather than fixed here.
+        "list_efforts": kimi_effort_levels,
         "model_hint": "a model alias from your Kimi provider",
+        "effort_via_config": kimi_effort_alias,
     },
 }
 
@@ -314,10 +389,12 @@ def run_consult(agent: str, prompt: str, timeout: int, model: str = "", effort: 
     spec = CONSULTANTS[agent]
     if effort and not spec["supports_effort"]:
         effort = ""
-    if effort and effort not in spec["effort_levels"]:
-        raise ConsultError(
-            f"{spec['label']} effort must be one of: {', '.join(spec['effort_levels'])}"
-        )
+    if effort:
+        levels = spec["list_efforts"](consultant_home(spec), model)
+        if levels and effort not in levels:
+            raise ConsultError(
+                f"{spec['label']} effort must be one of: {', '.join(levels)}"
+            )
     if shutil.which(spec["binary"]) is None:
         raise ConsultError(f"{spec['label']} is not installed in this add-on")
 
@@ -349,8 +426,12 @@ def run_consult(agent: str, prompt: str, timeout: int, model: str = "", effort: 
                 if entry.is_file():
                     copy_credential(entry, target_dir / entry.name)
 
+        run_model = model
+        if effort and spec.get("effort_via_config"):
+            run_model = spec["effort_via_config"](sandbox, model, effort)
+
         completed = subprocess.run(
-            spec["build_args"](framed_prompt(spec, prompt, model, effort), model, effort),
+            spec["build_args"](framed_prompt(spec, prompt, model, effort), run_model, effort),
             cwd=WORKSPACE,
             env=build_environment(spec, sandbox),
             preexec_fn=drop_privileges,
@@ -394,7 +475,7 @@ def status_records() -> list[dict]:
             "authHelper": spec["auth_helper"],
             "supportsModel": spec["supports_model"],
             "supportsEffort": spec["supports_effort"],
-            "effortLevels": list(spec["effort_levels"]),
+            "effortLevels": spec["list_efforts"](consultant_home(spec), model) if installed else [],
             "modelHint": spec["model_hint"],
             "models": spec["list_models"](consultant_home(spec)) if installed else [],
             "model": model,
