@@ -89,6 +89,33 @@ def kimi_args(prompt: str, model: str, effort: str) -> list[str]:
     return args
 
 
+# Claude Code has no command that lists models, so these are its documented
+# aliases, each checked against the pinned CLI in this image. A full model id
+# can still be entered by hand.
+CLAUDE_MODEL_ALIASES = ("opus", "sonnet", "haiku", "fable")
+
+
+def claude_models(home: Path) -> list[str]:
+    return list(CLAUDE_MODEL_ALIASES)
+
+
+def kimi_models(home: Path) -> list[str]:
+    """Aliases Kimi actually has configured, which sign-in registers."""
+    try:
+        with open(home / "config.toml", "rb") as handle:
+            data = tomllib.load(handle)
+    except (OSError, ValueError):
+        return []
+    names = set()
+    models = data.get("models")
+    if isinstance(models, dict):
+        names.update(str(name) for name in models)
+    default_model = data.get("default_model")
+    if isinstance(default_model, str) and default_model:
+        names.add(default_model)
+    return sorted(names)
+
+
 def always_ready(home: Path) -> tuple[bool, str]:
     return True, ""
 
@@ -124,6 +151,7 @@ CONSULTANTS = {
         "credential_dirs": (),
         "login_proof": ".credentials.json",
         "ready_check": always_ready,
+        "list_models": claude_models,
         "extra_env": {"DISABLE_AUTOUPDATER": "1", "USE_BUILTIN_RIPGREP": "0"},
         "build_args": claude_args,
         "auth_helper": "claude-auth-helper",
@@ -148,6 +176,7 @@ CONSULTANTS = {
         # only honest proof.
         "login_proof": "credentials/*.json",
         "ready_check": kimi_ready,
+        "list_models": kimi_models,
         "extra_env": {},
         "build_args": kimi_args,
         "auth_helper": "kimi-auth-helper",
@@ -341,6 +370,7 @@ def status_records() -> list[dict]:
             "supportsEffort": spec["supports_effort"],
             "effortLevels": list(spec["effort_levels"]),
             "modelHint": spec["model_hint"],
+            "models": spec["list_models"](consultant_home(spec)) if installed else [],
             "model": model,
             "effort": effort,
         })

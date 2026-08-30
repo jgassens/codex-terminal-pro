@@ -262,3 +262,26 @@ class ConsultReadinessTests(unittest.TestCase):
 
     def test_claude_needs_no_extra_configuration(self) -> None:
         self.assertEqual(consult.always_ready(Path("/nonexistent")), (True, ""))
+
+
+class ConsultModelListingTests(unittest.TestCase):
+    def test_claude_offers_its_documented_aliases(self) -> None:
+        models = consult.CONSULTANTS["claude"]["list_models"](Path("/nonexistent"))
+        for alias in ("opus", "sonnet", "haiku", "fable"):
+            self.assertIn(alias, models)
+
+    def test_kimi_lists_only_configured_models(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            (home / "config.toml").write_text(
+                'default_model = "k2-turbo"\n\n[models.k2]\nprovider = "kimi"\n'
+            )
+            models = consult.CONSULTANTS["kimi"]["list_models"](home)
+            self.assertEqual(models, ["k2", "k2-turbo"])
+
+    def test_kimi_lists_nothing_before_sign_in_registers_models(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            (home / "config.toml").write_text("default_yolo = true\n")
+            self.assertEqual(consult.CONSULTANTS["kimi"]["list_models"](home), [])
+            self.assertEqual(consult.CONSULTANTS["kimi"]["list_models"](Path("/nonexistent")), [])

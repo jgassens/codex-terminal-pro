@@ -4708,6 +4708,16 @@
         // Model and effort inputs are collected per consultant so `consult`
         // can apply them; they are keyed by id in consultantControls.
         const consultantControls = new Map();
+        const CUSTOM_MODEL = '__custom__';
+
+        function consultantModelValue(controls) {
+            if (!controls.modelSelect) {
+                return '';
+            }
+            return controls.modelSelect.value === CUSTOM_MODEL
+                ? controls.modelCustom.value.trim()
+                : controls.modelSelect.value;
+        }
 
         function renderConsultantRow(consultant) {
             const block = document.createElement('div');
@@ -4748,9 +4758,10 @@
             row.append(label, action);
             block.appendChild(row);
 
-            const controls = { model: null, effort: null };
+            const controls = { modelSelect: null, modelCustom: null, effort: null };
 
             if (consultant.supportsModel) {
+                const available = consultant.models || [];
                 const modelRow = document.createElement('div');
                 modelRow.className = 'settings-row';
                 const modelLabel = document.createElement('div');
@@ -4759,21 +4770,59 @@
                 modelName.textContent = 'Model';
                 const modelHint = document.createElement('span');
                 modelHint.className = 'settings-state';
-                modelHint.textContent = 'Blank uses the CLI default';
+                modelHint.textContent = available.length
+                    ? 'Default lets the CLI choose'
+                    : 'No models available until sign-in finishes';
                 modelLabel.append(modelName, modelHint);
 
-                const modelInput = document.createElement('input');
-                modelInput.className = 'settings-input';
-                modelInput.type = 'text';
-                modelInput.autocapitalize = 'off';
-                modelInput.autocomplete = 'off';
-                modelInput.spellcheck = false;
-                modelInput.placeholder = consultant.modelHint || '';
-                modelInput.value = consultant.model || '';
-                controls.model = modelInput;
+                const modelSelect = document.createElement('select');
+                modelSelect.className = 'settings-input';
+                const defaultOption = document.createElement('option');
+                defaultOption.value = '';
+                defaultOption.textContent = 'Default';
+                modelSelect.appendChild(defaultOption);
+                for (const model of available) {
+                    const option = document.createElement('option');
+                    option.value = model;
+                    option.textContent = model;
+                    modelSelect.appendChild(option);
+                }
+                const customOption = document.createElement('option');
+                customOption.value = CUSTOM_MODEL;
+                customOption.textContent = 'Custom…';
+                modelSelect.appendChild(customOption);
 
-                modelRow.append(modelLabel, modelInput);
+                // A model saved earlier may not be in the list, either because
+                // it is a full id or because sign-in has not registered the
+                // aliases yet. Keep it visible rather than silently dropping it.
+                const saved = consultant.model || '';
+                const known = saved === '' || available.includes(saved);
+                modelSelect.value = known ? saved : CUSTOM_MODEL;
+
+                const modelCustom = document.createElement('input');
+                modelCustom.className = 'settings-input';
+                modelCustom.type = 'text';
+                modelCustom.autocapitalize = 'off';
+                modelCustom.autocomplete = 'off';
+                modelCustom.spellcheck = false;
+                modelCustom.placeholder = consultant.modelHint || '';
+                modelCustom.value = known ? '' : saved;
+                modelCustom.style.display = modelSelect.value === CUSTOM_MODEL ? '' : 'none';
+                modelSelect.addEventListener('change', () => {
+                    modelCustom.style.display = modelSelect.value === CUSTOM_MODEL ? '' : 'none';
+                });
+
+                controls.modelSelect = modelSelect;
+                controls.modelCustom = modelCustom;
+
+                modelRow.append(modelLabel, modelSelect);
                 block.appendChild(modelRow);
+
+                const customRow = document.createElement('div');
+                customRow.className = 'settings-row';
+                customRow.appendChild(document.createElement('div'));
+                customRow.appendChild(modelCustom);
+                block.appendChild(customRow);
             }
 
             if (consultant.supportsEffort) {
@@ -4889,7 +4938,7 @@
                         consultTimeoutSeconds: Number(settingsConsultTimeout.value),
                         consultants: Object.fromEntries(
                             [...consultantControls].map(([id, controls]) => [id, {
-                                model: controls.model ? controls.model.value.trim() : '',
+                                model: consultantModelValue(controls),
                                 effort: controls.effort ? controls.effort.value : ''
                             }])
                         )
@@ -4900,8 +4949,10 @@
                     setStatus((data && data.error) || 'Could not save settings.', 'error');
                     return;
                 }
-                settingsPanel.classList.remove('active');
-                setStatus('✓ Settings saved.', 'success');
+                // Refresh first: loadSettings clears the status line, so the
+                // confirmation has to come after it.
+                await loadSettings();
+                setStatus('✓ Settings saved and applied.', 'success');
             } finally {
                 settingsSave.disabled = false;
             }
