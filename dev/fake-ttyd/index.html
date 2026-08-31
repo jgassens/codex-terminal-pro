@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="xterm.css">
+<style>
+  html, body { margin: 0; height: 100%; background: #0b0f14; }
+  #terminal { height: 100%; }
+</style>
+</head>
+<body>
+<div id="terminal"></div>
+<script src="xterm.js"></script>
+<script>
+  const term = new Terminal({ cursorBlink: false, fontSize: 13, theme: { background: '#0b0f14' } });
+  term.open(document.getElementById('terminal'));
+  term.fit = () => {}; // parity with the ttyd page's API surface
+  window.term = term;
+  term.writeln('fake-ttyd: dev harness terminal');
+  term.writeln('OpenAI Codex (dev) — this pane is not connected to a real shell');
+  term.writeln('');
+</script>
+</body>
+</html>

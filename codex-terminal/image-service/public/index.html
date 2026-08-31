@@ -595,6 +595,14 @@
             display: flex;
         }
 
+        /* A pending sign-in is action-required and easy to miss: keep its
+           dialog above the other sliding panels (2500) and Change Desk (2600),
+           or starting a sign-in from Settings pops the link invisibly
+           underneath the Settings panel. */
+        #signin-link-panel {
+            z-index: 2700;
+        }
+
         #change-desk-panel {
             position: fixed;
             top: 64px;
@@ -4960,7 +4968,11 @@
                 setStatus(`${consultant.label} sign-in started in the Shell pane.`, 'success');
             } catch (err) {
                 console.error('Consultant setup failed:', err);
-                setStatus(`Could not start ${consultant.label} sign-in.`, 'error');
+                // The server's refusal (e.g. "the Shell pane is busy running
+                // X") tells the user what to do; only fall back to the generic
+                // line when there is no real message to show.
+                const detail = err && err.message && !/^HTTP \d+$/.test(err.message) ? err.message : '';
+                setStatus(detail || `Could not start ${consultant.label} sign-in.`, 'error');
                 // The server may have switched the shared window before failing,
                 // so realign the UI's mode with whatever the server ended on.
                 await syncTerminalModeFromServer();

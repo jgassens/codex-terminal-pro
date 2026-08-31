@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.8.1
+
+- Keep the sign-in dialog above the Settings panel. Starting a consultant
+  sign-in from Settings used to pop the link and QR code invisibly underneath
+  it, making the flow look dead.
+- Show the server's actual refusal when a consultant setup cannot start, such
+  as the Shell pane being busy with another sign-in, instead of a generic
+  failure line.
+
 ## 2.8.0
 
 - Add optional consultants. Codex remains this add-on's agent; Claude Code and

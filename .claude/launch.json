@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "codex-terminal-dev",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["dev/dev-run.sh"],
+      "port": 7680
+    }
+  ]
+}

@@ -45,3 +45,5 @@ AGENTS.md
 # Operating System Files
 .DS_Store
 Thumbs.db
+dev/.state/
+dev/fake-ttyd/node_modules/
