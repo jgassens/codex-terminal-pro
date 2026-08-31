@@ -397,7 +397,7 @@ install_tools() {
 
 log_startup_diagnostics() {
     local app_name="${APP_NAME:-${ADDON_NAME:-Codex Terminal Pro}}"
-    local app_version="${BUILD_VERSION:-${APP_VERSION:-2.8.1}}"
+    local app_version="${BUILD_VERSION:-${APP_VERSION:-2.8.2}}"
 
     bashio::log.info "Startup diagnostics:"
     bashio::log.info "  - Date: $(date)"
@@ -1130,6 +1130,7 @@ start_image_service() {
     local upload_dir="/data/images"
     local service_dir="/opt/image-service"
     local server_file="${service_dir}/server.js"
+    local service_log="/data/logs/image-service.log"
     local image_retention_days
     local image_retention_max_bytes
     local image_service_ready="false"
@@ -1162,8 +1163,16 @@ start_image_service() {
         return 1
     fi
 
+    # One rotated backup, so a crash-loop cannot erase its own evidence.
+    if [ -f "${service_log}" ] && [ "$(wc -c < "${service_log}")" -gt 1048576 ]; then
+        mv -f "${service_log}" "${service_log}.1" 2>/dev/null || true
+    fi
+
+    # tee first: when node dies at startup, the container teardown races the
+    # bashio reader below and can drop its traceback from the add-on log, but
+    # the file write has already happened by then.
     node "${server_file}" > >(
-        while IFS= read -r line; do
+        tee -a "${service_log}" | while IFS= read -r line; do
             bashio::log.info "[Image Service] $line"
         done
     ) 2>&1 &
@@ -1188,6 +1197,12 @@ start_image_service() {
         bashio::log.info "Image service is running successfully"
     else
         bashio::log.error "Image service failed to start"
+        if [ -s "${service_log}" ]; then
+            bashio::log.error "Last lines of ${service_log}:"
+            tail -n 25 "${service_log}" 2>/dev/null | while IFS= read -r line; do
+                bashio::log.error "[Image Service] $line"
+            done || true
+        fi
         return 1
     fi
 }

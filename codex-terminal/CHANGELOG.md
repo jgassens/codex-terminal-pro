@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.8.2
+
+- Keep the image service's output in /data/logs/image-service.log (one rotated
+  backup) in addition to the add-on log. A service that dies at startup used
+  to lose its traceback to the container teardown, leaving only "Image service
+  failed to start"; the failure branch now also prints the log's last lines so
+  the add-on log itself shows the cause.
+
 ## 2.8.1
 
 - Keep the sign-in dialog above the Settings panel. Starting a consultant
