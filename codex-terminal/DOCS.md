@@ -280,7 +280,8 @@ leave Codex's native approval policy, Auto-review choice, and sandbox settings
 under your control; the add-on does not add a second prompt after Codex admits
 a command. Change Desk's Mall Cop is unaffected because its Codex run goes
 through `consult`, not this terminal's approval policy: an ephemeral,
-read-only `codex exec` under its own uid and Landlock, with every extra
+read-only `codex exec` under its own uid (with Landlock where the kernel
+provides it), with every extra
 capability switched off.
 
 Terminal transcript logging stays enabled by default for debugging, but the log
@@ -305,8 +306,9 @@ wording; configuration, auth, and system-health patterns stay review findings.
 or unavailable services. The monitor does not call services, reload, restart, edit `/config`, execute
 arbitrary user task files, or call an LLM. Change Desk asks Codex to narrate
 Mall Cop through `consult`, the same isolation the optional consultants use:
-the run has its own uid, is confined by Landlock to a filtered projection
-rather than the live `/config` and `/data` trees, receives nothing but the
+the run has its own uid, is confined to a filtered projection rather than the
+live `/config` and `/data` trees (by Landlock too where the kernel provides
+it), receives nothing but the
 fenced evidence packet, and its copy of the login is never carried back.
 Opening Change Desk triggers the run at most once every 24 hours, and the
 footer **Ask Mall Cop** action forces a fresh run. When Codex is signed out or

@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.10.1
+
+- Fix consultants failing everywhere with "filesystem isolation could not be
+  applied" on kernels without Landlock. 2.9.0's security pass made Landlock a
+  required, fail-closed layer, but Home Assistant OS ships kernels that do not
+  implement it (the syscall returns ENOSYS), so every consult - and Mall Cop's
+  Codex narration - died at startup. Landlock is now applied where the kernel
+  provides it and skipped where it does not, falling back to the dedicated
+  unprivileged uid, the redacted workspace projection, and no-new-privileges
+  (the model shipped before 2.9.0). A Landlock that is present but fails after
+  the probe still fails closed. consult notes on stderr which isolation tier a
+  run used.
+
 ## 2.10.0
 
 - Add Codex as a consultant. It uses the login the terminal already has and

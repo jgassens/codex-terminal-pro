@@ -42,18 +42,21 @@ Use `--timeout SECONDS` to allow longer than the configured default, up to
 
 ## What the consultant can see
 
-It runs as an unprivileged user inside a Linux Landlock filesystem policy. It
-can read a bounded, root-owned text snapshot of `/config`, and cannot read the
-live `/config`, `/data`, `.storage`, `secrets.yaml`, credential/key files,
-databases, logs, backups, symlinks, binary files, or oversized files. Common
+It runs as a dedicated unprivileged user whose working directory is a
+bounded, root-owned text snapshot of `/config` - never the live `/config` or
+`/data` trees - with `.storage`, `secrets.yaml`, credential/key files,
+databases, logs, backups, symlinks, binary files, and oversized files left
+out. Where the kernel provides Landlock it is added on top to block reads
+outside the snapshot by absolute path. Common
 inline token and secret assignments are redacted in the snapshot. It can write
 only to its disposable credential home, which is deleted after the answer.
 
 Two things follow. First, give it the context it needs in the question itself,
 because it cannot ask a follow-up. Second, the filtered configuration is being
 sent to a third-party model, so do not consult over trivia and never paste a
-secret into the question. The run fails closed if the kernel isolation cannot
-be installed; do not bypass that failure by launching the provider CLI directly.
+secret into the question. If a consult reports it is not set up or its
+isolation could not be applied, sign it in or report the error; do not bypass
+it by launching the provider CLI directly.
 
 ## Using the answer
 

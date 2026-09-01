@@ -275,7 +275,7 @@ and saved; use `ha-monitor once --fail-on-problems` when a script should also fa
 if the observation reports errors or unavailable services. It does not call services, reload, restart, edit `/config`, execute
 bespoke task files, or call an LLM. Change Desk's Mall Cop path hands the
 bounded monitor evidence to Codex through `consult` - the same isolation the
-optional consultants use: its own uid, Landlock, a filtered projection instead
+optional consultants use: its own uid, a filtered projection instead
 of the live `/config` and `/data` trees, and only the fenced packet as input -
 once every 24 hours on panel open, or immediately from the **Ask Mall Cop**
 button, and stores comparison memory at

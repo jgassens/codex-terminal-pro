@@ -808,6 +808,28 @@ class CodexConsultantTests(unittest.TestCase):
             self.assertEqual(consult.read_sandbox_answer(Path(raw) / "missing.md"), "")
 
 
+class LandlockFallbackTests(unittest.TestCase):
+    """A kernel without Landlock degrades to uid-drop, it does not refuse."""
+
+    def test_absent_landlock_degrades_instead_of_raising(self) -> None:
+        for code in (consult.errno.ENOSYS, consult.errno.EPERM, consult.errno.EOPNOTSUPP):
+            with mock.patch.object(consult, "_landlock_syscall", side_effect=OSError(code, "x")):
+                self.assertFalse(consult.apply_landlock(Path("/config"), Path("/tmp")))
+                self.assertEqual(consult.landlock_supported(), (False, code))
+
+    def test_low_abi_degrades(self) -> None:
+        with mock.patch.object(consult, "_landlock_syscall", return_value=0):
+            self.assertFalse(consult.apply_landlock(Path("/config"), Path("/tmp")))
+            self.assertEqual(consult.landlock_supported(), (False, 0))
+
+    def test_present_but_broken_landlock_still_fails_closed(self) -> None:
+        # An unexpected errno from the probe is a real problem on a kernel that
+        # claims Landlock, so it must not be mistaken for graceful absence.
+        with mock.patch.object(consult, "_landlock_syscall", side_effect=OSError(consult.errno.EFAULT, "bad")):
+            with self.assertRaises(OSError):
+                consult.apply_landlock(Path("/config"), Path("/tmp"))
+
+
 class SandboxLogTests(unittest.TestCase):
     def test_log_tail_is_read_out_of_the_sandbox(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
