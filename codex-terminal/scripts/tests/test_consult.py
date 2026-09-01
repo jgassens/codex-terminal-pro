@@ -766,6 +766,48 @@ class RefreshedCredentialTests(unittest.TestCase):
             self.assertEqual(json.loads((home / ".credentials.json").read_text()), live)
 
 
+class CodexConsultantTests(unittest.TestCase):
+    """Codex is consulted through the same isolation as the others."""
+
+    def test_codex_args_turn_off_every_extra_capability(self) -> None:
+        args = consult.codex_args("what is this?", "gpt-5.6-sol", "max")
+        self.assertEqual(args[:2], ["codex", "exec"])
+        self.assertEqual(args[-1], "what is this?")
+        for flag in ("--ephemeral", "--ignore-user-config", "--ignore-rules", "--skip-git-repo-check"):
+            self.assertIn(flag, args)
+        self.assertEqual(args[args.index("--sandbox") + 1], "read-only")
+        disabled = [args[i + 1] for i, item in enumerate(args) if item == "--disable"]
+        self.assertEqual(disabled, list(consult.CODEX_DISABLED_FEATURES))
+        self.assertIn('web_search="disabled"', args)
+        self.assertIn("mcp_servers={}", args)
+        self.assertEqual(args[args.index("--model") + 1], "gpt-5.6-sol")
+        self.assertIn('model_reasoning_effort="max"', args)
+
+    def test_codex_spec_asks_for_an_answer_file_and_never_writes_back(self) -> None:
+        spec = consult.CONSULTANTS["codex"]
+        self.assertEqual(spec["answer_file"], "last-message.md")
+        self.assertFalse(spec["preserve_refreshed"])
+        self.assertEqual(spec["login_proof"], "auth.json")
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            home, agent_home = root / "home", root / "sandbox"
+            home.mkdir()
+            agent_home.mkdir()
+            live = {"tokens": {"access_token": "A" * 40, "refresh_token": "B" * 40}}
+            planted = {"tokens": {"access_token": "X" * 40, "refresh_token": "Y" * 40}}
+            (home / "auth.json").write_text(json.dumps(live))
+            (agent_home / "auth.json").write_text(json.dumps(planted))
+            consult.preserve_refreshed_credentials(spec, home, agent_home)
+            self.assertEqual(json.loads((home / "auth.json").read_text()), live)
+
+    def test_answer_file_is_read_and_stripped(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            path = Path(raw) / "last-message.md"
+            path.write_text("\n## Bottom line\nAll quiet.\n\n")
+            self.assertEqual(consult.read_sandbox_answer(path), "## Bottom line\nAll quiet.")
+            self.assertEqual(consult.read_sandbox_answer(Path(raw) / "missing.md"), "")
+
+
 class SandboxLogTests(unittest.TestCase):
     def test_log_tail_is_read_out_of_the_sandbox(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

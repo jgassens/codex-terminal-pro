@@ -1,7 +1,7 @@
 FROM ghcr.io/home-assistant/base:3.22-2026.04.0@sha256:eed9b5eff1441d4db22d5036b7802610e7fc94af8c0448439ae6dda9942d5230
 
 LABEL \
-    io.hass.version="2.9.0" \
+    io.hass.version="2.10.0" \
     io.hass.type="addon" \
     io.hass.arch="aarch64|amd64" \
     org.opencontainers.image.title="Home Assistant Add-on: Codex Terminal Pro" \
@@ -129,7 +129,9 @@ RUN RESOLVED_ARCH="${TARGETARCH:-${BUILD_ARCH:-$(apk --print-arch)}}" && \
 RUN addgroup -S -g 61001 ctp-claude \
     && adduser -S -D -H -h /nonexistent -u 61001 -G ctp-claude -s /sbin/nologin ctp-claude \
     && addgroup -S -g 61002 ctp-kimi \
-    && adduser -S -D -H -h /nonexistent -u 61002 -G ctp-kimi -s /sbin/nologin ctp-kimi
+    && adduser -S -D -H -h /nonexistent -u 61002 -G ctp-kimi -s /sbin/nologin ctp-kimi \
+    && addgroup -S -g 61003 ctp-codex \
+    && adduser -S -D -H -h /nonexistent -u 61003 -G ctp-codex -s /sbin/nologin ctp-codex
 
 WORKDIR /config
 

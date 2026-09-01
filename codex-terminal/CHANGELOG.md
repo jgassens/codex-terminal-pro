@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.10.0
+
+- Add Codex as a consultant. It uses the login the terminal already has and
+  runs through the same isolation as Claude Code and Kimi Code: its own uid,
+  Landlock, a filtered projection instead of the live trees, an ephemeral
+  `codex exec` with every extra capability switched off, and no write-back of
+  its credential copy, so a prompt-injected run can never rewrite the
+  terminal's own identity.
+- Mall Cop narrates again. Change Desk hands the bounded monitor evidence to
+  the Codex consultant through `consult` - so the model never holds the live
+  credential and sees nothing but the fenced packet - and renders the six
+  sections it writes. When Codex is signed out or the run fails, the
+  deterministic reading of the same sections is shown instead, and the
+  observation footer says which one you are looking at.
+- The Codex auth helper reports real sign-in state the way the other helpers
+  now do, instead of "present, 600".
+
 ## 2.9.0
 
 Security pass. An independent review of 2.8.2 (`reviews/2026-08-31-kimi-findings.md`)

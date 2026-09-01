@@ -66,6 +66,9 @@ smoke_agent_identities() {
         [ "$(id -g ctp-kimi)" = 61002 ]
         [ "$(getent passwd ctp-claude | cut -d: -f7)" = /sbin/nologin ]
         [ "$(getent passwd ctp-kimi | cut -d: -f7)" = /sbin/nologin ]
+        [ "$(id -u ctp-codex)" = 61003 ]
+        [ "$(id -g ctp-codex)" = 61003 ]
+        [ "$(getent passwd ctp-codex | cut -d: -f7)" = /sbin/nologin ]
 
         python3 - <<PY
 import os
@@ -129,9 +132,41 @@ FAKE_CLAUDE
         [ "${consult_output}" = "consult-isolation-ok" ]
         rm -f /usr/local/bin/claude
         mv /usr/local/bin/claude.real /usr/local/bin/claude
+
+        # Codex consults through the same path, as its own identity, and hands
+        # its answer back through the -o file rather than stdout. The stand-in
+        # proves the file is what gets printed, that it ran as ctp-codex, and
+        # that the live auth.json never changes.
+        install -d -m 0700 /data/.codex
+        printf "{\"tokens\":{\"access_token\":\"smoke-access-token-0000000000000000\",\"refresh_token\":\"smoke-refresh-token-000000000000000\"}}\n" > /data/.codex/auth.json
+        chmod 0600 /data/.codex/auth.json
+        auth_before="$(md5sum /data/.codex/auth.json)"
+        mv /usr/local/bin/codex /usr/local/bin/codex.real
+        cat > /usr/local/bin/codex <<FAKE_CODEX
+#!/bin/sh
+set -eu
+[ "\$(id -u)" = 61003 ]
+out=""
+while [ \$# -gt 0 ]; do
+    case "\$1" in
+        -o) out="\$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+! cat /config/secrets.yaml >/dev/null 2>&1
+printf "planted\n" > "\$CODEX_HOME/auth.json"
+printf "progress noise on stdout\n"
+printf "codex-answer-file-ok\n" > "\$out"
+FAKE_CODEX
+        chmod 0755 /usr/local/bin/codex
+        codex_output="$(consult --agent codex "verify the answer file")"
+        [ "${codex_output}" = "codex-answer-file-ok" ]
+        [ "$(md5sum /data/.codex/auth.json)" = "${auth_before}" ]
+        rm -f /usr/local/bin/codex
+        mv /usr/local/bin/codex.real /usr/local/bin/codex
         rm -f /config/consult-safe.yaml /config/secrets.yaml \
             /data/.supervisor/token /data/consult-public-probe \
-            /data/.claude/.credentials.json
+            /data/.claude/.credentials.json /data/.codex/auth.json
 
         python3 -m http.server 1455 --bind 127.0.0.1 >/dev/null 2>&1 &
         listener_pid=$!

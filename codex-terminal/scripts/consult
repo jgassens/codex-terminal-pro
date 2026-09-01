@@ -2,8 +2,9 @@
 """Ask a consultant CLI a question, read-only and unprivileged.
 
 Codex is this add-on's principal agent. Claude Code and Kimi Code are
-optional consultants the user may authenticate; this runs one of them for a
-single question and prints its answer.
+optional consultants the user may authenticate, and Codex itself can be
+consulted through the same isolation using the terminal's own login; this
+runs one of them for a single question and prints its answer.
 
 Isolation, in order of how much it is relied on:
 
@@ -15,8 +16,11 @@ Isolation, in order of how much it is relied on:
      sandbox lives under a root-owned base directory that the unprivileged
      uid can enter but not list, has a random name, and is removed when the
      consult ends (including on SIGTERM). Dedicated provider identities stop
-     Claude and Kimi from reading one another's copied login, while no
-     consultant can rewrite the real credential store.
+     consultants from reading one another's copied login, and the
+     consultant process can never write the real credential store. After a
+     run, consult itself carries a refreshed Claude or Kimi token back only
+     once it has parsed and still holds a token; Codex's copy never travels
+     back, since it is the terminal's own identity.
   3. The environment is an allowlist, so no provider API key, Supervisor
      token, or GitHub PAT reaches the consultant.
   4. The CLI's own read-only flags are asked for as well. They are the least
@@ -45,6 +49,8 @@ CLAUDE_UID = 61001
 CLAUDE_GID = 61001
 KIMI_UID = 61002
 KIMI_GID = 61002
+CODEX_UID = 61003
+CODEX_GID = 61003
 PR_SET_NO_NEW_PRIVS = 38
 MAX_CREDENTIAL_BYTES = 1024 * 1024
 MAX_WORKSPACE_FILE_BYTES = 2 * 1024 * 1024
@@ -161,6 +167,40 @@ def kimi_args(prompt: str, model: str, effort: str) -> list[str]:
     args = ["kimi", "-p", prompt]
     if model:
         args += ["--model", model]
+    return args
+
+
+# Everything Codex could reach beyond the prompt itself, switched off at the
+# model level. This is the outer layer: the uid drop and Landlock underneath
+# are what actually contain a prompt-injected run, and this list keeps the
+# model from even asking. Verified against the pinned Codex CLI.
+CODEX_DISABLED_FEATURES = (
+    "apps", "browser_use", "browser_use_external", "computer_use", "goals",
+    "hooks", "image_generation", "in_app_browser", "memories", "multi_agent",
+    "plugin_sharing", "plugins", "shell_snapshot", "shell_tool",
+    "skill_mcp_dependency_install", "tool_call_mcp_elicitation", "tool_suggest",
+    "unified_exec", "workspace_dependencies",
+)
+
+
+def codex_args(prompt: str, model: str, effort: str) -> list[str]:
+    # --ignore-user-config still authenticates from CODEX_HOME, which is the
+    # sandbox copy of auth.json; --ephemeral keeps the run out of session
+    # history. The workspace is a projection, not a repository.
+    args = [
+        "codex", "exec",
+        "--ephemeral", "--ignore-user-config", "--ignore-rules",
+        "--skip-git-repo-check", "--sandbox", "read-only",
+        "--config", 'web_search="disabled"',
+        "--config", "mcp_servers={}",
+    ]
+    for feature in CODEX_DISABLED_FEATURES:
+        args += ["--disable", feature]
+    if model:
+        args += ["--model", model]
+    if effort:
+        args += ["--config", f'model_reasoning_effort="{effort}"']
+    args.append(prompt)
     return args
 
 
@@ -338,6 +378,34 @@ CONSULTANTS = {
         "list_efforts": kimi_effort_levels,
         "model_hint": "a model alias from your Kimi provider",
         "effort_via_config": kimi_effort_alias,
+    },
+    "codex": {
+        "label": "Codex",
+        "binary": "codex",
+        "uid": CODEX_UID,
+        "gid": CODEX_GID,
+        "home_env": "CODEX_HOME",
+        "default_home": "/data/.codex",
+        # The same login the terminal itself uses. --ignore-user-config means
+        # auth.json is the only file the run needs.
+        "credential_files": ("auth.json",),
+        "credential_dirs": (),
+        "login_proof": "auth.json",
+        "ready_check": always_ready,
+        "list_models": lambda home: [],
+        "extra_env": {},
+        "build_args": codex_args,
+        "auth_helper": "codex-auth-helper",
+        "supports_model": True,
+        "supports_effort": True,
+        "list_efforts": lambda home, model="": ["low", "medium", "high", "xhigh", "max"],
+        "model_hint": "a Codex model id, or blank for the CLI default",
+        "effort_via_config": None,
+        # Codex prints progress to stdout; the answer is asked for in a file.
+        "answer_file": "last-message.md",
+        # Never carry this copy back: it is the terminal's own identity, and a
+        # prompt-injected run planting a well-formed token would hijack it.
+        "preserve_refreshed": False,
     },
 }
 
@@ -533,6 +601,8 @@ def preserve_refreshed_credentials(spec: dict, home: Path, agent_home: Path) -> 
     the consultant's uid, so it is treated as untrusted input: size-capped,
     parsed, and never merged into any other path.
     """
+    if not spec.get("preserve_refreshed", True):
+        return
     for source in sorted(agent_home.glob(spec["login_proof"])):
         if not source.is_file():
             continue
@@ -552,6 +622,18 @@ def preserve_refreshed_credentials(spec: dict, home: Path, agent_home: Path) -> 
             write_credential_atomically(destination, payload)
         except OSError as exc:
             print(f"consult: could not save the refreshed credential: {exc}", file=sys.stderr)
+
+
+MAX_ANSWER_BYTES = 256 * 1024
+
+
+def read_sandbox_answer(path: Path) -> str:
+    """The final message a CLI was asked to write, read before cleanup."""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            return handle.read(MAX_ANSWER_BYTES).strip()
+    except OSError:
+        return ""
 
 
 def read_sandbox_log_tail(agent_home: Path, limit: int = 20) -> str:
@@ -968,8 +1050,11 @@ def run_consult(agent: str, prompt: str, timeout: int, model: str = "", effort: 
         # own process group, so a timeout or cancel kills the whole tree rather
         # than orphaning children under a deleted sandbox.
         try:
+            argv = spec["build_args"](framed_prompt(spec, prompt, model, effort), run_model, effort)
+            if spec.get("answer_file"):
+                argv = [*argv, "-o", str(agent_home / spec["answer_file"])]
             proc = subprocess.Popen(
-                spec["build_args"](framed_prompt(spec, prompt, model, effort), run_model, effort),
+                argv,
                 cwd=workspace,
                 env=build_environment(spec, agent_home),
                 preexec_fn=functools.partial(
@@ -996,6 +1081,8 @@ def run_consult(agent: str, prompt: str, timeout: int, model: str = "", effort: 
             preserve_refreshed_credentials(spec, home, agent_home)
             raise ConsultError(f"{spec['label']} did not answer within {timeout}s")
         returncode = proc.returncode
+        if spec.get("answer_file"):
+            stdout = read_sandbox_answer(agent_home / spec["answer_file"]) or stdout
         # Both of these read the sandbox, so they have to run before cleanup
         # deletes it - a token refreshed during the run and the CLI's own log
         # are otherwise gone by the time anyone needs them.

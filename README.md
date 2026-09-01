@@ -273,11 +273,15 @@ so Change Desk can say whether anything is new, resolved, persistent, or likely
 unchanged. `ha-monitor once` returns success when that observation was collected
 and saved; use `ha-monitor once --fail-on-problems` when a script should also fail
 if the observation reports errors or unavailable services. It does not call services, reload, restart, edit `/config`, execute
-bespoke task files, or call an LLM. Change Desk's Mall Cop path renders the
-bounded monitor evidence locally once every 24 hours on panel open, or
-immediately from the **Ask Mall Cop** button, and stores comparison memory at
-`/data/monitor/change-desk-mall-cop-memory.json`. It does not launch Codex,
-copy a login credential, or make an outbound model request.
+bespoke task files, or call an LLM. Change Desk's Mall Cop path hands the
+bounded monitor evidence to Codex through `consult` - the same isolation the
+optional consultants use: its own uid, Landlock, a filtered projection instead
+of the live `/config` and `/data` trees, and only the fenced packet as input -
+once every 24 hours on panel open, or immediately from the **Ask Mall Cop**
+button, and stores comparison memory at
+`/data/monitor/change-desk-mall-cop-memory.json`. The live credential never
+leaves the real store, and when Codex is signed out or the run fails the same
+six sections are rendered deterministically instead, with the footer saying so.
 The monitor also triages issues deterministically: Modbus, Wi-Fi, socket,
 timeout, and unavailable-entity noise is labeled as localized connectivity
 trouble with low system-wide risk unless the entity looks safety, security, or

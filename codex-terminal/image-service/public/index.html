@@ -1987,6 +1987,19 @@
             if (observation.trigger) {
                 appendChangeDeskLine(body, 'Run type', observation.trigger);
             }
+            // Say who wrote the reading. A deterministic fallback is still a
+            // valid observation, but it is evidence rendered, not interpreted.
+            if (observation.source && observation.source !== 'deterministic') {
+                appendChangeDeskLine(body, 'Narrated by', `${observation.source} (through consult)`);
+            } else {
+                appendChangeDeskLine(
+                    body,
+                    'Narrated by',
+                    observation.sourceNote
+                        ? `deterministic renderer - ${observation.sourceNote}`
+                        : 'deterministic renderer'
+                );
+            }
             if (observation.truncated) {
                 body.appendChild(changeDeskElement('div', 'change-desk-muted', 'Summary was truncated by the add-on size limit.'));
             }
@@ -2006,7 +2019,9 @@
                 packetPath: payload.packetPath || '',
                 packetTruncated: Boolean(payload.packetTruncated),
                 truncated: Boolean(payload.truncated || payload.packetTruncated),
-                trigger: payload.trigger || ''
+                trigger: payload.trigger || '',
+                source: payload.source || 'deterministic',
+                sourceNote: payload.sourceNote || ''
             };
         }
 

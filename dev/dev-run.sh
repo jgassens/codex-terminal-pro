@@ -68,6 +68,25 @@ EOF
 # Fake kimi binary so consult treats Kimi as installed.
 printf '#!/bin/sh\necho "fake kimi: $*"\n' > "$STATE/bin/kimi"
 chmod +x "$STATE/bin/kimi"
+# Fake codex: honours `-o FILE` the way `codex exec` does, so the answer-file
+# path and Mall Cop narration can be exercised end to end without a login.
+cat > "$STATE/bin/codex" <<'FAKE_CODEX'
+#!/bin/sh
+out=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -o) out="$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+echo "fake codex progress line on stdout"
+if [ -n "$out" ]; then
+    printf '## Bottom line\nFake Codex narration: the observation looks stable.\n\n## Acute state\nNothing acute.\n' > "$out"
+fi
+FAKE_CODEX
+chmod +x "$STATE/bin/codex"
+[ -f "$STATE/codex-home/auth.json" ] || \
+    printf '{"tokens":{"access_token":"fake-dev-access-token-0000000000000000","refresh_token":"fake-dev-refresh-token-000000000000000"}}\n' > "$STATE/codex-home/auth.json"
 # consult's shebang is /usr/bin/python3, which on macOS may predate tomllib
 # (needs 3.11+); run it through a modern interpreter instead.
 printf '#!/bin/bash\nexec "%s" "%s/scripts/consult" "$@"\n' "$PY3" "$REPO" > "$STATE/bin/consult-dev"

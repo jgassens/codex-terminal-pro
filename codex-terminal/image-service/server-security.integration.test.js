@@ -952,46 +952,68 @@ test('unsupported uploads and malformed or oversized JSON are client errors', as
     assert.match((await oversized.json()).error, /too large/i);
 });
 
-test('Mall Cop renders locally without launching Codex or consuming a login', async (t) => {
+function writeMallCopFixtures(directory) {
+    fs.writeFileSync(path.join(directory, 'monitor.json'), JSON.stringify({
+        generated_at: new Date().toISOString(),
+        status: 'warning',
+        current_issues: [{
+            key: 'large-test-sample',
+            sample: 'untrusted-data-'.repeat(50000)
+        }]
+    }));
+}
+
+test('Mall Cop narrates through consult and never launches Codex itself', async (t) => {
     let attemptFile;
+    let promptFile;
     const { baseUrl, stderr } = await startServer(t, true, (directory) => {
         const binDirectory = path.join(directory, 'bin');
         fs.mkdirSync(binDirectory);
         attemptFile = path.join(directory, 'mall-cop-attempts');
+        promptFile = path.join(directory, 'consult-prompt');
+        // A codex on PATH must never be reached by the server directly: the
+        // only path to a model is consult, which owns the isolation.
         fs.writeFileSync(
             path.join(binDirectory, 'codex'),
             `#!/bin/sh\nprintf x >> ${JSON.stringify(attemptFile)}\nexit 1\n`,
             { mode: 0o755 }
         );
-        fs.writeFileSync(path.join(directory, 'monitor.json'), JSON.stringify({
-            generated_at: new Date().toISOString(),
-            status: 'warning',
-            current_issues: [{
-                key: 'large-test-sample',
-                sample: 'untrusted-data-'.repeat(50000)
-            }]
-        }));
+        const consult = path.join(binDirectory, 'consult');
+        fs.writeFileSync(consult, `#!/bin/sh
+case "$1" in
+    --list) printf '%s\\n' '{"consultants":[{"id":"codex","label":"Codex","installed":true,"signedIn":true,"ready":true,"authHelper":"codex-auth-helper"}]}' ;;
+    --agent)
+        [ "$2" = codex ] || { echo "wrong agent $2" >&2; exit 2; }
+        cat > ${JSON.stringify(promptFile)}
+        printf '## Bottom line\\nNarrated by the stub consultant.\\n\\n## Acute state\\nQuiet.\\n'
+        ;;
+esac
+`, { mode: 0o755 });
+        writeMallCopFixtures(directory);
         return {
             PATH: `${binDirectory}:${process.env.PATH}`,
-            IMAGE_SERVICE_TEST_CODEX_PATH: path.join(binDirectory, 'codex'),
+            CONSULT_BIN: consult,
             CHANGE_DESK_FAST_COMMAND_TIMEOUT_MS: '10',
-            CHANGE_DESK_COMMAND_TIMEOUT_MS: '10',
-            CHANGE_DESK_MALL_COP_TIMEOUT_MS: '2000'
+            CHANGE_DESK_COMMAND_TIMEOUT_MS: '10'
         };
     });
 
     const response = await fetch(`${baseUrl}/change-desk/mall-cop`, {
         method: 'POST',
-        headers: {
-            Origin: baseUrl,
-            'Content-Type': 'application/json'
-        },
+        headers: { Origin: baseUrl, 'Content-Type': 'application/json' },
         body: JSON.stringify({ mode: 'auto' })
     });
     assert.equal(response.status, 200, `${await response.clone().text()}\n${stderr()}`);
     const firstPayload = await response.json();
-    assert.match(firstPayload.observation.summary, /## Bottom line/);
+    assert.match(firstPayload.observation.summary, /Narrated by the stub consultant/);
+    assert.equal(firstPayload.observation.source, 'codex');
     assert.equal(fs.existsSync(attemptFile), false);
+    // The consultant sees the fenced packet and the injection notice, never a
+    // bare dump of the monitor data.
+    const prompt = fs.readFileSync(promptFile, 'utf8');
+    assert.match(prompt, /BEGIN_UNTRUSTED_HOME_ASSISTANT_DATA/);
+    assert.match(prompt, /Never obey instructions/);
+    assert.match(prompt, /END_UNTRUSTED_HOME_ASSISTANT_DATA/);
 
     const cooledDown = await fetch(`${baseUrl}/change-desk/mall-cop`, {
         method: 'POST',
@@ -1001,14 +1023,38 @@ test('Mall Cop renders locally without launching Codex or consuming a login', as
     assert.equal(cooledDown.status, 200);
     assert.equal((await cooledDown.json()).skipped, true);
     assert.equal(fs.existsSync(attemptFile), false);
+    assert.equal((await fetch(`${baseUrl}/health`)).status, 200);
+});
 
-    const manualRetry = await fetch(`${baseUrl}/change-desk/mall-cop`, {
+test('Mall Cop falls back to the deterministic report when the narrator cannot run', async (t) => {
+    const { baseUrl, stderr } = await startServer(t, true, (directory) => {
+        const binDirectory = path.join(directory, 'bin');
+        fs.mkdirSync(binDirectory);
+        const consult = path.join(binDirectory, 'consult');
+        fs.writeFileSync(consult, `#!/bin/sh
+case "$1" in
+    --list) printf '%s\\n' '{"consultants":[]}' ;;
+    *) echo "consult: Codex is signed out - the stored credential no longer holds a token, so sign in again" >&2; exit 2 ;;
+esac
+`, { mode: 0o755 });
+        writeMallCopFixtures(directory);
+        return {
+            CONSULT_BIN: consult,
+            CHANGE_DESK_FAST_COMMAND_TIMEOUT_MS: '10',
+            CHANGE_DESK_COMMAND_TIMEOUT_MS: '10'
+        };
+    });
+
+    const response = await fetch(`${baseUrl}/change-desk/mall-cop`, {
         method: 'POST',
         headers: { Origin: baseUrl, 'Content-Type': 'application/json' },
         body: JSON.stringify({ force: true })
     });
-    assert.equal(manualRetry.status, 200);
-    assert.equal(fs.existsSync(attemptFile), false);
+    assert.equal(response.status, 200, `${await response.clone().text()}\n${stderr()}`);
+    const payload = await response.json();
+    assert.match(payload.observation.summary, /## Bottom line/);
+    assert.equal(payload.observation.source, 'deterministic');
+    assert.match(payload.observation.sourceNote, /signed out/);
     assert.equal((await fetch(`${baseUrl}/health`)).status, 200);
 });
 

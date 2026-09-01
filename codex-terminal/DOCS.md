@@ -278,8 +278,10 @@ and ingress is admin-only. With this option enabled, model-initiated commands
 run as Full access without approval prompts. Set `codex_full_access: false` to
 leave Codex's native approval policy, Auto-review choice, and sandbox settings
 under your control; the add-on does not add a second prompt after Codex admits
-a command. Change Desk's Mall Cop is unaffected because it is a local,
-deterministic renderer and does not launch Codex.
+a command. Change Desk's Mall Cop is unaffected because its Codex run goes
+through `consult`, not this terminal's approval policy: an ephemeral,
+read-only `codex exec` under its own uid and Landlock, with every extra
+capability switched off.
 
 Terminal transcript logging stays enabled by default for debugging, but the log
 rotates under `/data/logs`. Uploaded images stay in `/data/images` long enough
@@ -301,14 +303,21 @@ wording; configuration, auth, and system-health patterns stay review findings.
 `ha-monitor once` succeeds when collection and saving succeed; add
 `--fail-on-problems` when a calling script should also fail on observed errors
 or unavailable services. The monitor does not call services, reload, restart, edit `/config`, execute
-arbitrary user task files, or call an LLM. Change Desk renders Mall Cop locally:
-opening Change Desk triggers the run at most once every 24 hours, and the footer
-**Ask Mall Cop** action forces a fresh run.
+arbitrary user task files, or call an LLM. Change Desk asks Codex to narrate
+Mall Cop through `consult`, the same isolation the optional consultants use:
+the run has its own uid, is confined by Landlock to a filtered projection
+rather than the live `/config` and `/data` trees, receives nothing but the
+fenced evidence packet, and its copy of the login is never carried back.
+Opening Change Desk triggers the run at most once every 24 hours, and the
+footer **Ask Mall Cop** action forces a fresh run. When Codex is signed out or
+the run fails, the same six sections are rendered deterministically and the
+observation footer says so. Setting `CHANGE_DESK_MALL_COP_NARRATOR` to an
+empty value in the image service environment keeps only the deterministic
+reading.
 Mall Cop memory is stored at `/data/monitor/change-desk-mall-cop-memory.json`
 so each run can compare current conditions with the prior observation and call
-out new, resolved, changed, and unchanged issues. It does not copy a Codex
-credential or use outbound model access. `/data/monitor/tasks.d` is reserved for a future explicit
-task-manifest design and is ignored by this release.
+out new, resolved, changed, and unchanged issues. `/data/monitor/tasks.d` is
+reserved for a future explicit task-manifest design and is ignored by this release.
 
 ## Safe Home Assistant Workflow
 

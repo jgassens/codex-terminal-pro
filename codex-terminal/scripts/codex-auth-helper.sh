@@ -55,15 +55,49 @@ check_auth() {
         mode=$(auth_mode)
         echo "Auth file: present"
         echo "Permissions: $mode"
-        if [ "$mode" = "600" ]; then
-            echo "Status: permissions look correct"
-        else
-            echo "Status: permissions should be 600"
+        if [ "$mode" != "600" ]; then
+            echo "Note: permissions should be 600 - use the fix option in this menu."
         fi
     else
         echo "Auth file: missing"
-        echo "Status: not authenticated yet, or credentials are stored elsewhere"
     fi
+
+    # Presence and permissions say nothing about whether the account can still
+    # authenticate: a signed-out CLI leaves the file behind with its tokens
+    # emptied. consult reads the token itself, so ask it rather than guessing.
+    echo ""
+    echo "Sign-in state:"
+    report_sign_in_state
+}
+
+report_sign_in_state() {
+    if ! command -v consult >/dev/null 2>&1; then
+        echo "  consult command was not found in PATH"
+        return 0
+    fi
+
+    consult --list --json 2>/dev/null | python3 -c '
+import json, sys
+
+try:
+    records = json.load(sys.stdin)["consultants"]
+except Exception:
+    print("  could not read the consultant listing")
+    raise SystemExit(0)
+
+for record in records:
+    if record.get("id") != "codex":
+        continue
+    if record.get("ready"):
+        print("  signed in and ready")
+    elif record.get("signedIn"):
+        print("  " + (record.get("readyNote") or "signed in, but not ready"))
+    else:
+        print("  " + (record.get("readyNote") or "not signed in yet"))
+    break
+else:
+    print("  codex is not a known consultant")
+' || echo "  could not read the consultant listing"
 }
 
 fix_permissions() {
