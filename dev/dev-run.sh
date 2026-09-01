@@ -15,14 +15,22 @@ STATE="$DEV_DIR/.state"
 TMUX_BIN="$(command -v tmux || echo /opt/homebrew/bin/tmux)"
 PY3="$(command -v /opt/homebrew/bin/python3 || command -v python3)"
 
-mkdir -p "$STATE"/{uploads,reports,monitor,config,codex-home,claude-home,kimi-home/credentials,bin}
+mkdir -p "$STATE"/{uploads,reports,monitor,config,codex-home,claude-home,kimi-home/credentials,bin,runtime}
+chmod 700 "$STATE/runtime"
+SHELL_DISPATCH_SOCKET_PATH="$STATE/runtime/shell-dispatch.sock"
+if [ -S "$SHELL_DISPATCH_SOCKET_PATH" ]; then
+    rm -f "$SHELL_DISPATCH_SOCKET_PATH"
+elif [ -e "$SHELL_DISPATCH_SOCKET_PATH" ] || [ -L "$SHELL_DISPATCH_SOCKET_PATH" ]; then
+    printf 'Refusing unsafe development socket path: %s\n' "$SHELL_DISPATCH_SOCKET_PATH" >&2
+    exit 1
+fi
 
 # --- fixtures: a signed-in Claude and a Kimi with two models ---------------
 [ -f "$STATE/claude-home/.credentials.json" ] || \
-    printf '{"claudeAiOauth":{"accessToken":"fake-dev-token"}}\n' > "$STATE/claude-home/.credentials.json"
+    printf '{"claudeAiOauth":{"accessToken":"fake-dev-access-token-0000000000000000","refreshToken":"fake-dev-refresh-token-000000000000000"}}\n' > "$STATE/claude-home/.credentials.json"
 [ -f "$STATE/claude-home/.claude.json" ] || printf '{}\n' > "$STATE/claude-home/.claude.json"
 [ -f "$STATE/kimi-home/credentials/account-1.json" ] || \
-    printf '{"token":"fake"}\n' > "$STATE/kimi-home/credentials/account-1.json"
+    printf '{"access_token":"fake-dev-access-token-0000000000000000","refresh_token":"fake-dev-refresh-token-000000000000000","token_type":"Bearer"}\n' > "$STATE/kimi-home/credentials/account-1.json"
 [ -f "$STATE/kimi-home/device_id" ] || printf 'dev-device\n' > "$STATE/kimi-home/device_id"
 if [ ! -f "$STATE/kimi-home/config.toml" ]; then
     cat > "$STATE/kimi-home/config.toml" <<'EOF'

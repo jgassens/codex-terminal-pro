@@ -405,34 +405,308 @@ def consultant_home(spec: dict) -> Path:
     return Path(os.environ.get(spec["home_env"], spec["default_home"]))
 
 
+# Both vendors store an OAuth record whose token fields are long opaque
+# strings - Claude nests them under claudeAiOauth, Kimi keeps them flat in
+# snake_case - so look for any token-ish field rather than hardcoding either
+# schema, which would drift with the pinned CLIs.
+TOKEN_KEY_PATTERN = re.compile(r"token", re.IGNORECASE)
+MIN_CREDENTIAL_TOKEN_CHARS = 20
+
+
+def payload_carries_token(value) -> bool:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if (
+                TOKEN_KEY_PATTERN.search(str(key))
+                and isinstance(item, str)
+                and len(item.strip()) >= MIN_CREDENTIAL_TOKEN_CHARS
+            ):
+                return True
+            if payload_carries_token(item):
+                return True
+        return False
+    if isinstance(value, list):
+        return any(payload_carries_token(item) for item in value)
+    return False
+
+
+def credential_state(spec: dict) -> tuple[bool, str]:
+    """Report whether a usable token is stored, not merely whether a file is.
+
+    Signing out - or a refresh the provider rejects - leaves the credential
+    file in place with its token fields emptied. Treating the file's presence
+    as proof of a login therefore reports a consultant that cannot
+    authenticate as "signed in and ready" everywhere at once: the Settings
+    panel, `consult --list`, and the auth helper. Read the token instead.
+    """
+    home = consultant_home(spec)
+    paths = sorted(path for path in home.glob(spec["login_proof"]) if path.is_file())
+    if not paths:
+        return False, ""
+    readable = 0
+    for path in paths:
+        try:
+            with open(path, "rb") as handle:
+                data = json.loads(handle.read(MAX_CREDENTIAL_BYTES + 1).decode("utf-8"))
+        except (OSError, ValueError):
+            continue
+        readable += 1
+        if payload_carries_token(data):
+            return True, ""
+    if not readable:
+        return False, "signed out - its credential file could not be read, so sign in again"
+    return False, "signed out - the stored credential no longer holds a token, so sign in again"
+
+
 def is_configured(spec: dict) -> bool:
     if shutil.which(spec["binary"]) is None:
         return False
-    home = consultant_home(spec)
-    return any(path.is_file() for path in home.glob(spec["login_proof"]))
+    return credential_state(spec)[0]
 
 
-def copy_credential(source: Path, destination: Path) -> bool:
-    """Copy one credential file without following symlinks, 0600, nobody-owned."""
+def copy_credential(source: Path, destination: Path, uid: int, gid: int) -> bool:
+    """Copy one credential file without following symlinks, 0600, role-owned."""
     try:
         fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
     except (FileNotFoundError, OSError):
         return False
     try:
         info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise ConsultError(f"{source} is not a regular credential file")
         if info.st_size > MAX_CREDENTIAL_BYTES:
             raise ConsultError(f"{source} is larger than expected for a credential file")
-        payload = os.read(fd, MAX_CREDENTIAL_BYTES)
+        payload = bytearray()
+        while len(payload) <= MAX_CREDENTIAL_BYTES:
+            chunk = os.read(fd, min(64 * 1024, MAX_CREDENTIAL_BYTES + 1 - len(payload)))
+            if not chunk:
+                break
+            payload.extend(chunk)
+        if len(payload) > MAX_CREDENTIAL_BYTES:
+            raise ConsultError(f"{source} is larger than expected for a credential file")
     finally:
         os.close(fd)
 
     out = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     try:
-        os.write(out, payload)
-        os.fchown(out, UNPRIVILEGED_UID, UNPRIVILEGED_GID)
+        written = 0
+        while written < len(payload):
+            count = os.write(out, memoryview(payload)[written:])
+            if count <= 0:
+                raise OSError("credential copy made no write progress")
+            written += count
+        os.fchown(out, uid, gid)
     finally:
         os.close(out)
     return True
+
+
+def write_credential_atomically(destination: Path, payload: bytes) -> None:
+    handle, temporary = tempfile.mkstemp(
+        prefix=f".{destination.name}.", dir=str(destination.parent)
+    )
+    try:
+        os.fchmod(handle, 0o600)
+        written = 0
+        while written < len(payload):
+            count = os.write(handle, memoryview(payload)[written:])
+            if count <= 0:
+                raise OSError("credential write made no progress")
+            written += count
+        os.fsync(handle)
+    finally:
+        os.close(handle)
+    os.replace(temporary, destination)
+
+
+def preserve_refreshed_credentials(spec: dict, home: Path, agent_home: Path) -> None:
+    """Carry a token the consultant refreshed back into the real store.
+
+    The consultant runs against a throwaway copy of the credentials, so a
+    refresh performed mid-consult is deleted with the sandbox - while the
+    provider has already rotated the old token away. The account is then
+    signed out by nothing more than having asked a question.
+
+    Only the file that proves the login travels back, and only when it still
+    parses and still carries a token, so a signed-out CLI wiping its copy
+    cannot propagate that wipe into the real store. The copy is written by
+    the consultant's uid, so it is treated as untrusted input: size-capped,
+    parsed, and never merged into any other path.
+    """
+    for source in sorted(agent_home.glob(spec["login_proof"])):
+        if not source.is_file():
+            continue
+        destination = home / source.relative_to(agent_home)
+        try:
+            payload = source.read_bytes()
+            if len(payload) > MAX_CREDENTIAL_BYTES:
+                continue
+            if destination.is_file() and payload == destination.read_bytes():
+                continue
+            data = json.loads(payload.decode("utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not payload_carries_token(data):
+            continue
+        try:
+            write_credential_atomically(destination, payload)
+        except OSError as exc:
+            print(f"consult: could not save the refreshed credential: {exc}", file=sys.stderr)
+
+
+def read_sandbox_log_tail(agent_home: Path, limit: int = 20) -> str:
+    """Copy a CLI's own log out before the sandbox holding it is deleted.
+
+    Kimi reports failures as "See log: <path>" pointing inside the throwaway
+    home, which cleanup removes moments later - so the only pointer to the
+    cause is dead by the time anyone reads the error.
+    """
+    lines: list[str] = []
+    try:
+        paths = sorted(agent_home.glob("logs/*.log"))
+    except OSError:
+        return ""
+    for path in paths:
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as handle:
+                content = handle.read(MAX_CREDENTIAL_BYTES)
+        except OSError:
+            continue
+        lines.extend(line for line in content.strip().splitlines() if line.strip())
+    return "\n".join(lines[-limit:])
+
+
+def redact_workspace_text(text: str) -> str:
+    """Remove conventional inline credentials from the consultant projection."""
+    redacted = SENSITIVE_ASSIGNMENT_RE.sub(
+        lambda match: f"{match.group('prefix')}[redacted]",
+        text,
+    )
+    for pattern in TOKEN_VALUE_RES:
+        redacted = pattern.sub("[redacted-token]", redacted)
+    return redacted
+
+
+def workspace_entry_allowed(relative: Path, *, directory: bool) -> bool:
+    names = [part.lower() for part in relative.parts]
+    if any(name in WORKSPACE_BLOCKED_DIR_NAMES for name in names[:-1] if names):
+        return False
+    name = names[-1] if names else ""
+    if directory:
+        return name not in WORKSPACE_BLOCKED_DIR_NAMES
+    return (
+        name not in WORKSPACE_BLOCKED_FILE_NAMES
+        and not name.endswith(WORKSPACE_BLOCKED_SUFFIXES)
+    )
+
+
+def read_workspace_text_no_follow(source: Path) -> str | None:
+    """Read one bounded regular UTF-8 text file without following a symlink."""
+    try:
+        descriptor = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
+    except (FileNotFoundError, OSError):
+        return None
+    try:
+        info = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_nlink != 1
+            or info.st_size > MAX_WORKSPACE_FILE_BYTES
+        ):
+            return None
+        payload = bytearray()
+        while len(payload) <= MAX_WORKSPACE_FILE_BYTES:
+            chunk = os.read(
+                descriptor,
+                min(64 * 1024, MAX_WORKSPACE_FILE_BYTES + 1 - len(payload)),
+            )
+            if not chunk:
+                break
+            payload.extend(chunk)
+        if len(payload) > MAX_WORKSPACE_FILE_BYTES or b"\x00" in payload:
+            return None
+        try:
+            return payload.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+    finally:
+        os.close(descriptor)
+
+
+def build_filtered_workspace(source_root: Path, destination_root: Path) -> dict[str, int]:
+    """Build a bounded, root-owned text projection for one consultant run.
+
+    The consultant never receives Landlock access to source_root. Skipping
+    symlinks and copying through O_NOFOLLOW means a late source replacement
+    cannot redirect the snapshot reader into a credential file.
+    """
+    source_info = source_root.lstat()
+    if not stat.S_ISDIR(source_info.st_mode) or stat.S_ISLNK(source_info.st_mode):
+        raise ConsultError("Consult workspace must be a real directory")
+
+    destination_root.mkdir(mode=0o755)
+    file_count = 0
+    byte_count = 0
+    for current, dirnames, filenames in os.walk(source_root, topdown=True, followlinks=False):
+        current_path = Path(current)
+        relative_dir = current_path.relative_to(source_root)
+        kept_dirs: list[str] = []
+        for name in sorted(dirnames):
+            source_dir = current_path / name
+            relative = relative_dir / name
+            try:
+                info = source_dir.lstat()
+            except OSError:
+                continue
+            if (
+                stat.S_ISDIR(info.st_mode)
+                and not stat.S_ISLNK(info.st_mode)
+                and workspace_entry_allowed(relative, directory=True)
+            ):
+                target_dir = destination_root / relative
+                target_dir.mkdir(mode=0o755, parents=True, exist_ok=True)
+                kept_dirs.append(name)
+        dirnames[:] = kept_dirs
+
+        for name in sorted(filenames):
+            if file_count >= MAX_WORKSPACE_FILES or byte_count >= MAX_WORKSPACE_TOTAL_BYTES:
+                break
+            relative = relative_dir / name
+            if not workspace_entry_allowed(relative, directory=False):
+                continue
+            text = read_workspace_text_no_follow(current_path / name)
+            if text is None:
+                continue
+            payload = redact_workspace_text(text).encode("utf-8")
+            if byte_count + len(payload) > MAX_WORKSPACE_TOTAL_BYTES:
+                continue
+            target = destination_root / relative
+            target.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+            descriptor = os.open(
+                target,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o444,
+            )
+            try:
+                written = 0
+                while written < len(payload):
+                    count = os.write(descriptor, memoryview(payload)[written:])
+                    if count <= 0:
+                        raise OSError("workspace snapshot made no write progress")
+                    written += count
+                os.fchmod(descriptor, 0o444)
+            finally:
+                os.close(descriptor)
+            file_count += 1
+            byte_count += len(payload)
+
+    # parents=True honours umask for new intermediate entries; seal all copied
+    # directories after construction so the unprivileged role cannot alter it.
+    for current, dirnames, _filenames in os.walk(destination_root):
+        os.chmod(current, 0o555)
+        for name in dirnames:
+            os.chmod(Path(current) / name, 0o555)
+    return {"files": file_count, "bytes": byte_count}
 
 
 def set_no_new_privileges() -> None:
@@ -624,19 +898,26 @@ def run_consult(agent: str, prompt: str, timeout: int, model: str = "", effort: 
         raise ConsultError(f"{spec['label']} is not installed in this add-on")
 
     home = consultant_home(spec)
-    if is_configured(spec):
-        ready, note = spec["ready_check"](home)
-        if not ready:
-            raise ConsultError(f"{spec['label']} is {note}")
-    if not is_configured(spec):
+    signed_in, credential_note = credential_state(spec)
+    if not signed_in:
         raise ConsultError(
-            f"{spec['label']} is not set up yet. Run {spec['auth_helper']} in a "
-            f"shell, or open the add-on's Settings panel and use its consultant "
-            f"setup, to sign in."
+            f"{spec['label']} is {credential_note}"
+            if credential_note
+            else (
+                f"{spec['label']} is not set up yet. Run {spec['auth_helper']} in a "
+                f"shell, or open the add-on's Settings panel and use its consultant "
+                f"setup, to sign in."
+            )
         )
+    ready, note = spec["ready_check"](home)
+    if not ready:
+        raise ConsultError(f"{spec['label']} is {note}")
 
     sandbox = Path(tempfile.mkdtemp(prefix="consult-", dir=str(ensure_sandbox_base())))
+    agent_home = sandbox / "home"
+    workspace = sandbox / "workspace"
     proc = None
+    failure_log = ""
 
     def terminate_child() -> None:
         if proc is None or proc.poll() is not None:
@@ -660,44 +941,66 @@ def run_consult(agent: str, prompt: str, timeout: int, model: str = "", effort: 
     previous_hup = signal.signal(signal.SIGHUP, on_signal)
     try:
         os.chmod(sandbox, 0o700)
-        os.chown(sandbox, UNPRIVILEGED_UID, UNPRIVILEGED_GID)
+        os.chown(sandbox, spec["uid"], spec["gid"])
+        agent_home.mkdir(mode=0o700)
+        os.chown(agent_home, spec["uid"], spec["gid"])
+        snapshot = build_filtered_workspace(Path(WORKSPACE), workspace)
+        if snapshot["files"] == 0:
+            raise ConsultError("No safe text files were available in the consultant workspace")
         for name in spec["credential_files"]:
-            copy_credential(home / name, sandbox / name)
+            copy_credential(home / name, agent_home / name, spec["uid"], spec["gid"])
         for name in spec.get("credential_dirs", ()):
             source_dir = home / name
             if not source_dir.is_dir():
                 continue
-            target_dir = sandbox / name
+            target_dir = agent_home / name
             os.mkdir(target_dir, 0o700)
-            os.chown(target_dir, UNPRIVILEGED_UID, UNPRIVILEGED_GID)
+            os.chown(target_dir, spec["uid"], spec["gid"])
             for entry in sorted(source_dir.iterdir()):
                 if entry.is_file():
-                    copy_credential(entry, target_dir / entry.name)
+                    copy_credential(entry, target_dir / entry.name, spec["uid"], spec["gid"])
 
         run_model = model
         if effort and spec.get("effort_via_config"):
-            run_model = spec["effort_via_config"](sandbox, model, effort)
+            run_model = spec["effort_via_config"](agent_home, model, effort)
 
         # start_new_session puts the consultant and anything it spawns in their
         # own process group, so a timeout or cancel kills the whole tree rather
         # than orphaning children under a deleted sandbox.
-        proc = subprocess.Popen(
-            spec["build_args"](framed_prompt(spec, prompt, model, effort), run_model, effort),
-            cwd=WORKSPACE,
-            env=build_environment(spec, sandbox),
-            preexec_fn=drop_privileges,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            start_new_session=True,
-        )
+        try:
+            proc = subprocess.Popen(
+                spec["build_args"](framed_prompt(spec, prompt, model, effort), run_model, effort),
+                cwd=workspace,
+                env=build_environment(spec, agent_home),
+                preexec_fn=functools.partial(
+                    drop_privileges_and_isolate,
+                    spec["uid"],
+                    spec["gid"],
+                    workspace,
+                    agent_home,
+                ),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                start_new_session=True,
+            )
+        except subprocess.SubprocessError as exc:
+            raise ConsultError(
+                f"{spec['label']} filesystem isolation could not be applied"
+            ) from exc
         try:
             stdout, stderr = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
             terminate_child()
             proc.communicate()
+            preserve_refreshed_credentials(spec, home, agent_home)
             raise ConsultError(f"{spec['label']} did not answer within {timeout}s")
         returncode = proc.returncode
+        # Both of these read the sandbox, so they have to run before cleanup
+        # deletes it - a token refreshed during the run and the CLI's own log
+        # are otherwise gone by the time anyone needs them.
+        preserve_refreshed_credentials(spec, home, agent_home)
+        failure_log = read_sandbox_log_tail(agent_home) if returncode != 0 else ""
     finally:
         signal.signal(signal.SIGTERM, previous_term)
         signal.signal(signal.SIGHUP, previous_hup)
@@ -708,10 +1011,12 @@ def run_consult(agent: str, prompt: str, timeout: int, model: str = "", effort: 
         # answer: surface the exit code and the last line of its stderr, and
         # drop any partial stdout rather than passing it off as the opinion.
         detail = (stderr or "").strip().splitlines()
-        raise ConsultError(
-            f"{spec['label']} exited {returncode}"
-            + (f": {detail[-1]}" if detail else "")
-        )
+        message = f"{spec['label']} exited {returncode}"
+        if detail:
+            message += f": {detail[-1]}"
+        if failure_log:
+            message += f"\n{failure_log}"
+        raise ConsultError(message)
     answer = (stdout or "").strip()
     if answer:
         print(answer)
@@ -724,8 +1029,8 @@ def status_records() -> list[dict]:
     for agent, spec in CONSULTANTS.items():
         installed = shutil.which(spec["binary"]) is not None
         home = consultant_home(spec)
-        signed_in = installed and is_configured(spec)
-        ready, note = spec["ready_check"](home) if signed_in else (False, "")
+        signed_in, credential_note = credential_state(spec) if installed else (False, "")
+        ready, note = spec["ready_check"](home) if signed_in else (False, credential_note)
         model, effort = consultant_preferences(settings, agent)
         models = spec["list_models"](home) if installed else []
         # Effort levels can depend on the chosen model (Kimi's are per model),

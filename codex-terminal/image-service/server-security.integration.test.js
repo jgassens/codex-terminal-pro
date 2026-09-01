@@ -219,14 +219,331 @@ test('direct loopback access is denied by default while the local health probe r
     assert.equal((await fetch(`${baseUrl}/config`)).status, 403);
 });
 
-test('the bundled loopback shell dispatcher is narrowly allowed without browser headers', async (t) => {
-    const { baseUrl } = await startServer(t, false);
+test('terminal HTTP and WebSocket traffic reaches a ttyd Unix socket', async (t) => {
+    const ttydSocket = await startUnixTerminalBackend(t);
+    const { baseUrl } = await startServer(t, true, () => ({
+        TTYD_SOCKET_PATH: ttydSocket
+    }));
+
+    const terminal = await fetch(`${baseUrl}/terminal/probe?client=test`);
+    assert.equal(terminal.status, 200);
+    assert.equal(await terminal.text(), 'unix-terminal:/probe?client=test');
+
+    const port = Number.parseInt(new URL(baseUrl).port, 10);
+    const upgrade = await rawWebSocketUpgrade(port);
+    assert.match(upgrade, /^HTTP\/1\.1 101 Switching Protocols/m);
+    assert.match(upgrade, /X-Upstream-Path: \/ws\?client=test/i);
+    assert.match(upgrade, /unix-terminal-upgrade/);
+});
+
+test('consultant setup fails closed when the shared shell has a descendant', async (t) => {
+    const { baseUrl, directory } = await startServer(t, true, (root) => {
+        const binDirectory = path.join(root, 'bin');
+        fs.mkdirSync(binDirectory);
+        const consult = path.join(binDirectory, 'consult');
+        fs.writeFileSync(consult, `#!/bin/sh
+printf '%s\n' '{"consultants":[{"id":"claude","label":"Claude Code","installed":true,"authHelper":"claude-auth-helper"}]}'
+`, { mode: 0o755 });
+        fs.writeFileSync(path.join(binDirectory, 'tmux'), `#!/bin/sh
+case "$1" in
+    list-windows) printf 'raw-shell\n' ;;
+    display-message) printf 'bash 4242\n' ;;
+    *) printf '%s\n' "$*" >> "$TMUX_CALL_LOG" ;;
+esac
+`, { mode: 0o755 });
+        fs.writeFileSync(path.join(binDirectory, 'ps'), `#!/bin/sh
+printf '%s\n' '4242 1 root /bin/bash -l' '4243 4242 root /bin/bash /usr/local/bin/claude-auth-helper'
+`, { mode: 0o755 });
+        return {
+            PATH: `${binDirectory}:${process.env.PATH}`,
+            CONSULT_BIN: consult,
+            TMUX_CALL_LOG: path.join(root, 'tmux-calls')
+        };
+    });
+
+    const response = await fetch(`${baseUrl}/consultant-setup`, {
+        method: 'POST',
+        headers: { Origin: baseUrl, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agent: 'claude' })
+    });
+    assert.equal(response.status, 409);
+    assert.match((await response.json()).error, /busy/i);
+    assert.equal(fs.existsSync(path.join(directory, 'tmux-calls')), false);
+});
+
+test('settings and consultant setup share one bounded consultant-status lookup', async (t) => {
+    let invocationFile;
+    const { baseUrl } = await startServer(t, true, (directory) => {
+        invocationFile = path.join(directory, 'consult-invocations');
+        const consult = path.join(directory, 'consult');
+        fs.writeFileSync(consult, `#!/bin/sh
+printf '%s\\n' invoked >> "$CONSULT_INVOCATION_FILE"
+sleep 1
+printf '%s\\n' '{"consultants":[{"id":"claude","label":"Claude Code","installed":true,"authenticated":true,"supportsEffort":true,"effortLevels":["high"]}]}'
+`, { mode: 0o755 });
+        return {
+            CONSULT_BIN: consult,
+            CONSULT_INVOCATION_FILE: invocationFile,
+            SETTINGS_FILE: path.join(directory, 'settings.json')
+        };
+    });
+
+    const [readResponse, writeResponse, setupResponse] = await Promise.all([
+        fetch(`${baseUrl}/settings`, { headers: { Origin: baseUrl } }),
+        fetch(`${baseUrl}/settings`, {
+            method: 'POST',
+            headers: { Origin: baseUrl, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ defaultConsultant: 'claude' })
+        }),
+        fetch(`${baseUrl}/consultant-setup`, {
+            method: 'POST',
+            headers: { Origin: baseUrl, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ agent: 'unknown' })
+        })
+    ]);
+
+    assert.equal(readResponse.status, 200);
+    assert.equal(writeResponse.status, 200);
+    assert.equal(setupResponse.status, 400);
+    assert.equal(fs.readFileSync(invocationFile, 'utf8').trim().split('\n').length, 1);
+});
+
+test('an allowlisted URL is hidden unless the live process is the matching login CLI', async (t) => {
+    const startWithProcess = (args, options = {}) => startServer(t, true, (root) => {
+        const binDirectory = path.join(root, 'bin');
+        fs.mkdirSync(binDirectory);
+        const url = options.url || 'https://auth.openai.com/oauth/authorize?client_id=planted';
+        const processUser = options.user || 'root';
+        const processLines = options.wrapper
+            ? `'4242 1 root /bin/bash -l' '4243 4242 root /bin/bash /opt/scripts/${options.wrapper}' '4244 4243 ${processUser} ${args}'`
+            : `'4242 1 root /bin/bash -l' '4243 4242 ${processUser} ${args}'`;
+        fs.writeFileSync(path.join(binDirectory, 'tmux'), `#!/bin/sh
+case "$1" in
+    display-message)
+        case "$*" in
+            *pane_current_command*) printf 'bash 4242\n' ;;
+            *) printf '100 4242\n' ;;
+        esac
+        ;;
+    capture-pane) printf '%s\n' '${url}' ;;
+esac
+`, { mode: 0o755 });
+        fs.writeFileSync(path.join(binDirectory, 'ps'), `#!/bin/sh
+printf '%s\n' ${processLines}
+`, { mode: 0o755 });
+        return { PATH: `${binDirectory}:${process.env.PATH}` };
+    });
+
+    const unrelated = await startWithProcess('codex exec echo-url');
+    const hidden = await fetch(`${unrelated.baseUrl}/agent-login-url`, {
+        headers: { Origin: unrelated.baseUrl }
+    });
+    assert.equal(hidden.status, 200);
+    assert.equal((await hidden.json()).found, false);
+
+    const login = await startWithProcess('codex login --device-auth');
+    const shown = await fetch(`${login.baseUrl}/agent-login-url`, {
+        headers: { Origin: login.baseUrl }
+    });
+    assert.equal(shown.status, 200);
+    const payload = await shown.json();
+    assert.equal(payload.found, true);
+    assert.equal(payload.sourceLabel, 'Codex');
+    assert.equal(payload.targetMode, 'codex');
+
+    const argvSpoof = await startWithProcess('/bin/bash -c /tmp/codex login');
+    const argvSpoofResponse = await fetch(`${argvSpoof.baseUrl}/agent-login-url`, {
+        headers: { Origin: argvSpoof.baseUrl }
+    });
+    assert.equal((await argvSpoofResponse.json()).found, false);
+
+    const droppedUser = await startWithProcess('codex login --device-auth', { user: 'ctp-kimi' });
+    const droppedUserResponse = await fetch(`${droppedUser.baseUrl}/agent-login-url`, {
+        headers: { Origin: droppedUser.baseUrl }
+    });
+    assert.equal((await droppedUserResponse.json()).found, false);
+
+    const ordinaryClaude = await startWithProcess('claude', {
+        url: 'https://console.anthropic.com/oauth/authorize?client_id=planted'
+    });
+    const ordinaryClaudeResponse = await fetch(`${ordinaryClaude.baseUrl}/agent-login-url`, {
+        headers: { Origin: ordinaryClaude.baseUrl }
+    });
+    assert.equal((await ordinaryClaudeResponse.json()).found, false);
+
+    const helperClaude = await startWithProcess('claude', {
+        url: 'https://console.anthropic.com/oauth/authorize?client_id=verified',
+        wrapper: 'claude-auth-helper.sh'
+    });
+    const helperClaudeResponse = await fetch(`${helperClaude.baseUrl}/agent-login-url`, {
+        headers: { Origin: helperClaude.baseUrl }
+    });
+    const helperClaudePayload = await helperClaudeResponse.json();
+    assert.equal(helperClaudePayload.found, true);
+    assert.equal(helperClaudePayload.sourceLabel, 'Claude Code');
+});
+
+test('a sign-in code stays bound to the pane that produced the verified URL', async (t) => {
+    const { baseUrl, directory } = await startServer(t, true, (root) => {
+        const binDirectory = path.join(root, 'bin');
+        fs.mkdirSync(binDirectory);
+        fs.writeFileSync(path.join(binDirectory, 'tmux'), `#!/bin/sh
+case "$1" in
+    list-windows) printf 'raw-shell\n' ;;
+    display-message)
+        case "$*" in
+            *pane_current_command*) printf 'bash 4242\n' ;;
+            *) printf '100 4242\n' ;;
+        esac
+        ;;
+    capture-pane) printf '%s\n' 'https://auth.openai.com/oauth/authorize?client_id=verified' ;;
+    *) printf '%s\n' "$*" >> "$TMUX_CALL_LOG" ;;
+esac
+`, { mode: 0o755 });
+        fs.writeFileSync(path.join(binDirectory, 'ps'), `#!/bin/sh
+printf '%s\n' '4242 1 root /bin/bash -l' '4243 4242 root codex login --device-auth'
+`, { mode: 0o755 });
+        return {
+            PATH: `${binDirectory}:${process.env.PATH}`,
+            TMUX_CALL_LOG: path.join(root, 'tmux-calls')
+        };
+    });
+
+    const linkResponse = await fetch(`${baseUrl}/agent-login-url`, {
+        headers: { Origin: baseUrl }
+    });
+    const link = await linkResponse.json();
+    assert.equal(link.targetMode, 'codex');
+
+    const modeResponse = await fetch(`${baseUrl}/terminal-mode`, {
+        method: 'POST',
+        headers: { Origin: baseUrl, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'raw' })
+    });
+    assert.equal(modeResponse.status, 200);
+
+    const submit = await fetch(`${baseUrl}/terminal-signin-code`, {
+        method: 'POST',
+        headers: { Origin: baseUrl, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: 'one-time-code', mode: link.targetMode, url: link.url })
+    });
+    assert.equal(submit.status, 200);
+    assert.equal((await submit.json()).mode, 'codex');
+    const calls = fs.readFileSync(path.join(directory, 'tmux-calls'), 'utf8');
+    assert.match(calls, /send-keys -t codex-terminal:0\.0 -l -- one-time-code/);
+    assert.doesNotMatch(calls, /send-keys -t codex-terminal:raw-shell\.0 -l -- one-time-code/);
+});
+
+test('OAuth callback forwarding requires the verified Codex process to own the listener', async (t) => {
+    const callbackListener = await startCallbackListener(t);
+    const fallbackListener = await startCallbackListener(t, 1457);
+    const { baseUrl, directory } = await startServer(t, true, (root) => {
+        const binDirectory = path.join(root, 'bin');
+        const loginState = path.join(root, 'login-active');
+        const ownerAllowed = path.join(root, 'owner-allowed');
+        const ownerLog = path.join(root, 'owner-check');
+        fs.mkdirSync(binDirectory);
+        fs.writeFileSync(path.join(binDirectory, 'tmux'), `#!/bin/sh
+case "$1" in
+    display-message)
+        case "$*" in
+            *pane_current_command*) printf 'bash 4242\n' ;;
+            *) printf '100 4242\n' ;;
+        esac
+        ;;
+    capture-pane) printf '%s\n' 'https://auth.openai.com/oauth/authorize?client_id=verified' ;;
+esac
+`, { mode: 0o755 });
+        fs.writeFileSync(path.join(binDirectory, 'ps'), `#!/bin/sh
+printf '%s\n' '4242 1 root /bin/bash -l'
+if [ -f "$LOGIN_STATE" ]; then
+    printf '%s\n' '4243 4242 root codex login'
+fi
+`, { mode: 0o755 });
+        const ownerCheck = path.join(binDirectory, 'port-owner');
+        fs.writeFileSync(ownerCheck, `#!/bin/sh
+printf '%s %s\n' "$1" "$2" >> "$OWNER_LOG"
+[ -f "$OWNER_ALLOWED" ]
+`, { mode: 0o755 });
+        return {
+            PATH: `${binDirectory}:${process.env.PATH}`,
+            LOGIN_STATE: loginState,
+            OWNER_ALLOWED: ownerAllowed,
+            OWNER_LOG: ownerLog,
+            SIGNIN_PORT_OWNER_BIN: ownerCheck
+        };
+    });
+    const body = {
+        url: 'http://localhost:1455/auth/callback?code=review-secret&state=review',
+        mode: 'codex',
+        signInUrl: 'https://auth.openai.com/oauth/authorize?client_id=verified'
+    };
+    const postCallback = (url = body.url) => fetch(`${baseUrl}/agent-callback-forward`, {
+        method: 'POST',
+        headers: { Origin: baseUrl, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...body, url })
+    });
+
+    const noLogin = await postCallback();
+    assert.equal(noLogin.status, 409);
+    assert.deepEqual(callbackListener.paths, []);
+    assert.equal(callbackListener.connectionCount(), 0);
+
+    fs.writeFileSync(path.join(directory, 'login-active'), 'yes');
+    const wrongOwner = await postCallback();
+    assert.equal(wrongOwner.status, 409);
+    assert.deepEqual(callbackListener.paths, []);
+    assert.equal(callbackListener.connectionCount(), 1);
+
+    fs.writeFileSync(path.join(directory, 'owner-allowed'), 'yes');
+    const delivered = await postCallback();
+    assert.equal(delivered.status, 200);
+    assert.equal((await delivered.json()).forwarded, true);
+    assert.deepEqual(callbackListener.paths, ['/auth/callback?code=review-secret&state=review']);
+    // One failed owner check and one successful callback produce exactly two
+    // TCP connections. A second connection for the successful request would
+    // reintroduce the listener-replacement race this path is designed to close.
+    assert.equal(callbackListener.connectionCount(), 2);
+
+    const fallbackDelivered = await postCallback(
+        'http://localhost:1457/auth/callback?code=fallback-secret&state=fallback'
+    );
+    assert.equal(fallbackDelivered.status, 200);
+    assert.equal((await fallbackDelivered.json()).forwarded, true);
+    assert.deepEqual(fallbackListener.paths, [
+        '/auth/callback?code=fallback-secret&state=fallback'
+    ]);
+    assert.equal(fallbackListener.connectionCount(), 1);
+
+    const ownerChecks = fs.readFileSync(path.join(directory, 'owner-check'), 'utf8');
+    assert.match(ownerChecks, /^4243 1455$/m);
+    assert.match(ownerChecks, /^4243 1457$/m);
+});
+
+test('TCP loopback cannot dispatch shell commands while the private Unix socket can', async (t) => {
+    const { baseUrl, shellDispatchSocket } = await startServer(t, false);
     const response = await fetch(`${baseUrl}/terminal-shell-command`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: '{}'
     });
-    assert.equal(response.status, 400);
+    assert.equal(response.status, 403);
+
+    const forgedBrowser = await fetch(`${baseUrl}/terminal-shell-command`, {
+        method: 'POST',
+        headers: {
+            Origin: baseUrl,
+            'Sec-Fetch-Site': 'same-origin',
+            'X-Codex-Terminal-Request': '1',
+            'Content-Type': 'application/json'
+        },
+        body: '{}'
+    });
+    assert.equal(forgedBrowser.status, 403);
+
+    const internal = await unixJsonRequest(shellDispatchSocket, {});
+    assert.equal(internal.status, 400);
+    assert.equal(fs.statSync(shellDispatchSocket).mode & 0o777, 0o600);
 
     const unrelatedWrite = await fetch(`${baseUrl}/terminal-control`, {
         method: 'POST',
@@ -236,16 +553,21 @@ test('the bundled loopback shell dispatcher is narrowly allowed without browser 
     assert.equal(unrelatedWrite.status, 403);
 });
 
-test('shell dispatch preserves loopback Codex versus same-origin browser provenance', async (t) => {
+test('shell dispatch preserves private Codex versus same-origin browser provenance', async (t) => {
     let bufferFile;
-    const { baseUrl } = await startServer(t, false, (directory) => {
+    const { baseUrl, shellDispatchSocket } = await startServer(t, false, (directory) => {
         const binDirectory = path.join(directory, 'bin');
         fs.mkdirSync(binDirectory);
         bufferFile = path.join(directory, 'fake-tmux-buffer');
         fs.writeFileSync(path.join(binDirectory, 'tmux'), `#!/bin/sh
 case "$1" in
     list-windows) printf 'raw-shell\\n' ;;
-    display-message) printf '0\\n' ;;
+    display-message)
+        case "$*" in
+            *pane_current_command*) printf 'bash 4242\\n' ;;
+            *) printf '0\\n' ;;
+        esac
+        ;;
     load-buffer) cat > "$FAKE_TMUX_BUFFER" ;;
     capture-pane)
         start=$(awk 'match($0, /__CTP_SHELL_START_[A-Za-z0-9_]+__/) { print substr($0, RSTART, RLENGTH); exit }' "$FAKE_TMUX_BUFFER")
@@ -266,11 +588,43 @@ esac
         body: JSON.stringify({ command: 'ha store reload' })
     });
 
-    const loopbackResponse = await dispatch({});
+    const loopbackResponse = await unixJsonRequest(shellDispatchSocket, { command: 'ha store reload' });
     assert.equal(loopbackResponse.status, 200);
     assert.match(fs.readFileSync(bufferFile, 'utf8'), /CODEX_TERMINAL_AGENT_EXECUTION=1/);
 
-    const browserResponse = await dispatch({ Origin: baseUrl });
+    assert.equal((await dispatch({ Origin: baseUrl })).status, 403);
+
+    const browserServer = await startServer(t, true, (directory) => {
+        const binDirectory = path.join(directory, 'bin');
+        fs.mkdirSync(binDirectory);
+        bufferFile = path.join(directory, 'fake-tmux-buffer');
+        fs.writeFileSync(path.join(binDirectory, 'tmux'), `#!/bin/sh
+case "$1" in
+    list-windows) printf 'raw-shell\\n' ;;
+    display-message)
+        case "$*" in
+            *pane_current_command*) printf 'bash 4242\\n' ;;
+            *) printf '0\\n' ;;
+        esac
+        ;;
+    load-buffer) cat > "$FAKE_TMUX_BUFFER" ;;
+    capture-pane)
+        start=$(awk 'match($0, /__CTP_SHELL_START_[A-Za-z0-9_]+__/) { print substr($0, RSTART, RLENGTH); exit }' "$FAKE_TMUX_BUFFER")
+        end=$(awk 'match($0, /__CTP_SHELL_END_[A-Za-z0-9_]+__/) { print substr($0, RSTART, RLENGTH); exit }' "$FAKE_TMUX_BUFFER")
+        printf '%s\\ncomplete\\n%s:0\\n' "$start" "$end"
+        ;;
+esac
+`, { mode: 0o755 });
+        return {
+            PATH: `${binDirectory}:${process.env.PATH}`,
+            FAKE_TMUX_BUFFER: bufferFile
+        };
+    });
+    const browserResponse = await fetch(`${browserServer.baseUrl}/terminal-shell-command`, {
+        method: 'POST',
+        headers: { Origin: browserServer.baseUrl, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command: 'ha store reload' })
+    });
     assert.equal(browserResponse.status, 200);
     assert.doesNotMatch(fs.readFileSync(bufferFile, 'utf8'), /CODEX_TERMINAL_AGENT_EXECUTION=1/);
 });
@@ -722,7 +1076,12 @@ case "$1" in
         printf '%s\\n' "$@" > "$FAKE_TMUX_NEW_WINDOW_ARGS"
         : > "$FAKE_TMUX_WINDOW_STATE"
         ;;
-    display-message) printf '0\\n' ;;
+    display-message)
+        case "$*" in
+            *pane_current_command*) printf 'bash 4242\\n' ;;
+            *) printf '0\\n' ;;
+        esac
+        ;;
     load-buffer) cat > "$FAKE_TMUX_STATE" ;;
     capture-pane)
         marker=$(awk 'match($0, /__CTP_SHELL_START_[A-Za-z0-9_]+__/) { print substr($0, RSTART, RLENGTH); exit }' "$FAKE_TMUX_STATE")
@@ -793,7 +1152,12 @@ test('an interrupt failure still hard-respawns before releasing the shell queue'
         fs.writeFileSync(fakeTmux, `#!/bin/sh
 case "$1" in
     list-windows) printf 'raw-shell\\n' ;;
-    display-message) printf '0\\n' ;;
+    display-message)
+        case "$*" in
+            *pane_current_command*) printf 'bash 4242\\n' ;;
+            *) printf '0\\n' ;;
+        esac
+        ;;
     load-buffer) cat > "$FAKE_TMUX_STATE" ;;
     capture-pane)
         marker=$(awk 'match($0, /__CTP_SHELL_START_[A-Za-z0-9_]+__/) { print substr($0, RSTART, RLENGTH); exit }' "$FAKE_TMUX_STATE")
@@ -840,7 +1204,12 @@ test('a capture failure resets the pane before the next queued command runs', as
         fs.writeFileSync(fakeTmux, `#!/bin/sh
 case "$1" in
     list-windows) printf 'raw-shell\\n' ;;
-    display-message) printf '0\\n' ;;
+    display-message)
+        case "$*" in
+            *pane_current_command*) printf 'bash 4242\\n' ;;
+            *) printf '0\\n' ;;
+        esac
+        ;;
     load-buffer)
         cat > "$FAKE_TMUX_BUFFER"
         printf 'load\\n' >> "$FAKE_TMUX_EVENTS"
@@ -899,7 +1268,12 @@ test('an end marker without a visible start marker completes as truncated output
         fs.writeFileSync(path.join(binDirectory, 'tmux'), `#!/bin/sh
 case "$1" in
     list-windows) printf 'raw-shell\\n' ;;
-    display-message) printf '0\\n' ;;
+    display-message)
+        case "$*" in
+            *pane_current_command*) printf 'bash 4242\\n' ;;
+            *) printf '0\\n' ;;
+        esac
+        ;;
     load-buffer) cat > "$FAKE_TMUX_BUFFER" ;;
     capture-pane)
         end=$(awk 'match($0, /__CTP_SHELL_END_[A-Za-z0-9_]+__/) { print substr($0, RSTART, RLENGTH); exit }' "$FAKE_TMUX_BUFFER")

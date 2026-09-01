@@ -57,66 +57,98 @@ wait_for_health() {
     return 1
 }
 
-smoke_mall_cop_jail() {
+smoke_agent_identities() {
     local name="$1"
     docker exec "$name" sh -euc '
-        run_name="run-container-smoke"
-        host_work="/opt/mall-cop-jail/work/${run_name}"
-        sandbox_work="/work/${run_name}"
-        mkdir -p "${host_work}/home" "${host_work}/tmp" "${host_work}/codex-home"
-        chown -R 65534:65534 "${host_work}"
-        chmod 0700 "${host_work}" "${host_work}/home" "${host_work}/tmp" "${host_work}/codex-home"
-        output="$(env -i \
-            PATH=/bin \
-            HOME="${sandbox_work}/home" \
-            TMPDIR="${sandbox_work}/tmp" \
-            CODEX_HOME="${sandbox_work}/codex-home" \
-            TERM=dumb \
-            NO_COLOR=1 \
-            /opt/scripts/codex-terminal-mall-cop-jail.py \
-                --cwd "${sandbox_work}" \
-                /opt/mall-cop-jail \
-                -- /bin/codex --version)"
-        case "${output}" in
-            "codex-cli 0.147.0"|"codex 0.147.0") ;;
-            *) printf "unexpected jailed Codex version: %s\n" "${output}" >&2; exit 1 ;;
-        esac
+        [ "$(id -u ctp-claude)" = 61001 ]
+        [ "$(id -g ctp-claude)" = 61001 ]
+        [ "$(id -u ctp-kimi)" = 61002 ]
+        [ "$(id -g ctp-kimi)" = 61002 ]
+        [ "$(getent passwd ctp-claude | cut -d: -f7)" = /sbin/nologin ]
+        [ "$(getent passwd ctp-kimi | cut -d: -f7)" = /sbin/nologin ]
 
-        set +e
-        exec_output="$({ printf "Mall Cop container smoke.\n" | timeout 8 env -i \
-            PATH=/bin \
-            HOME="${sandbox_work}/home" \
-            TMPDIR="${sandbox_work}/tmp" \
-            CODEX_HOME="${sandbox_work}/codex-home" \
-            OPENAI_API_KEY=invalid-container-smoke-key \
-            TERM=dumb \
-            NO_COLOR=1 \
-            /opt/scripts/codex-terminal-mall-cop-jail.py \
-                --cwd "${sandbox_work}" \
-                /opt/mall-cop-jail \
-                -- /bin/codex exec \
-                    --ephemeral \
-                    --ignore-user-config \
-                    --ignore-rules \
-                    --config "web_search=\"disabled\"" \
-                    --config "mcp_servers={}" \
-                    --config "openai_base_url=\"http://127.0.0.1:9\"" \
-                    --disable shell_tool \
-                    --disable unified_exec \
-                    --sandbox read-only \
-                    --cd "${sandbox_work}" \
-                    --skip-git-repo-check \
-                    -; } 2>&1)"
-        exec_status=$?
-        set -e
-        [ "${exec_status}" -ne 126 ]
-        printf "%s\n" "${exec_output}" | grep -q "OpenAI Codex v0.147.0"
-        if printf "%s\n" "${exec_output}" | grep -Eq "Codex executable path is not configured|no /proc/self/exe available"; then
-            printf "jailed Codex exec did not initialize correctly:\n%s\n" "${exec_output}" >&2
-            exit 1
-        fi
-        [ ! -e /opt/mall-cop-jail/config ]
-        [ ! -e /opt/mall-cop-jail/data ]
+        python3 - <<PY
+import os
+import runpy
+import stat
+
+consult = runpy.run_path("/opt/scripts/consult")
+base = consult["ensure_sandbox_base"]()
+info = base.lstat()
+assert (info.st_uid, info.st_gid) == (0, 0)
+assert stat.S_IMODE(info.st_mode) == 0o711
+
+abi = consult["_landlock_syscall"](
+    consult["LANDLOCK_CREATE_RULESET"], None, 0,
+    consult["LANDLOCK_CREATE_RULESET_VERSION"],
+)
+assert abi >= 1
+PY
+
+        identity_root=/tmp/ctp-agent-identity-smoke
+        rm -rf "${identity_root}"
+        install -d -m 0700 -o 61001 -g 61001 "${identity_root}/claude"
+        install -d -m 0700 -o 61002 -g 61002 "${identity_root}/kimi"
+        printf claude > "${identity_root}/claude/auth"
+        printf kimi > "${identity_root}/kimi/auth"
+        chown 61001:61001 "${identity_root}/claude/auth"
+        chown 61002:61002 "${identity_root}/kimi/auth"
+        chmod 0600 "${identity_root}"/*/auth
+
+        ! su ctp-claude -s /bin/sh -c "cat ${identity_root}/kimi/auth" >/dev/null 2>&1
+        ! su ctp-kimi -s /bin/sh -c "cat ${identity_root}/claude/auth" >/dev/null 2>&1
+        rm -rf "${identity_root}"
+
+        # Prove the actual consultant process can read its filtered projection
+        # but not the live config, manager token, or a write target.
+        printf "safe: visible\n" > /config/consult-safe.yaml
+        printf "password: do-not-expose\n" > /config/secrets.yaml
+        install -d -m 0700 /data/.supervisor
+        printf "smoke-manager-token\n" > /data/.supervisor/token
+        chmod 0600 /data/.supervisor/token
+        printf "world-readable-live-data\n" > /data/consult-public-probe
+        chmod 0644 /data/consult-public-probe
+        install -d -m 0700 /data/.claude
+        # consult reads the token rather than just stat-ing the file, so the
+        # stand-in credential has to carry one to count as a signed-in account.
+        printf "{\"claudeAiOauth\":{\"accessToken\":\"smoke-access-token-0000000000000000\",\"refreshToken\":\"smoke-refresh-token-000000000000000\"}}\n" > /data/.claude/.credentials.json
+        chmod 0600 /data/.claude/.credentials.json
+        mv /usr/local/bin/claude /usr/local/bin/claude.real
+        cat > /usr/local/bin/claude <<FAKE_CLAUDE
+#!/bin/sh
+set -eu
+[ "\$(cat consult-safe.yaml)" = "safe: visible" ]
+! cat /config/secrets.yaml >/dev/null 2>&1
+! cat /data/.supervisor/token >/dev/null 2>&1
+! cat /data/consult-public-probe >/dev/null 2>&1
+! printf "changed\n" >> consult-safe.yaml 2>/dev/null
+printf "consult-isolation-ok\n"
+FAKE_CLAUDE
+        chmod 0755 /usr/local/bin/claude
+        consult_output="$(consult --agent claude "verify isolation")"
+        [ "${consult_output}" = "consult-isolation-ok" ]
+        rm -f /usr/local/bin/claude
+        mv /usr/local/bin/claude.real /usr/local/bin/claude
+        rm -f /config/consult-safe.yaml /config/secrets.yaml \
+            /data/.supervisor/token /data/consult-public-probe \
+            /data/.claude/.credentials.json
+
+        python3 -m http.server 1455 --bind 127.0.0.1 >/dev/null 2>&1 &
+        listener_pid=$!
+        sleep 30 &
+        unrelated_pid=$!
+        owner_ready=false
+        for attempt in $(seq 1 40); do
+            if /opt/scripts/codex-terminal-port-owner.py "${listener_pid}" 1455; then
+                owner_ready=true
+                break
+            fi
+            sleep 0.05
+        done
+        [ "${owner_ready}" = true ]
+        ! /opt/scripts/codex-terminal-port-owner.py "${unrelated_pid}" 1455
+        kill "${listener_pid}" "${unrelated_pid}"
+        wait "${listener_pid}" "${unrelated_pid}" 2>/dev/null || true
     '
 }
 
@@ -221,4 +253,4 @@ failure_exit="$(docker inspect --format '{{.State.ExitCode}}' "$failure_name")"
 failure_logs="$(docker logs "$failure_name" 2>&1)"
 grep -q 'Image service exited; stopping ttyd' <<< "$failure_logs"
 
-echo "container startup, human terminal broker routing, jailed Mall Cop, normal shutdown, and child-failure supervision: ok"
+echo "container startup, consultant Landlock isolation, human terminal broker routing, normal shutdown, and child-failure supervision: ok"

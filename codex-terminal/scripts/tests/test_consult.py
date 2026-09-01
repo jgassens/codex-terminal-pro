@@ -659,5 +659,129 @@ class KimiEffortTests(unittest.TestCase):
         self.assertEqual(parsed, {"s": "a b", "n": 42, "b": True, "l": ["x", "y"], "q": 'say "hi"'})
 
 
+class CredentialStateTests(unittest.TestCase):
+    """A credential file is only proof of a login when it still holds a token."""
+
+    CLAUDE_LIVE = {"claudeAiOauth": {"accessToken": "sk-ant-oat01-" + "A" * 60,
+                                     "refreshToken": "B" * 64, "expiresAt": 1790000000000}}
+    # Exactly what a signed-out Claude Code leaves behind: the record and its
+    # metadata survive, the tokens are emptied.
+    CLAUDE_WIPED = {"claudeAiOauth": {"accessToken": "", "refreshToken": "",
+                                      "expiresAt": 0, "subscriptionType": "max"}}
+    KIMI_LIVE = {"access_token": "C" * 704, "refresh_token": "D" * 705,
+                 "expires_at": 1788282878, "token_type": "Bearer"}
+
+    def test_token_detection_covers_both_vendor_shapes(self) -> None:
+        self.assertTrue(consult.payload_carries_token(self.CLAUDE_LIVE))
+        self.assertTrue(consult.payload_carries_token(self.KIMI_LIVE))
+        self.assertFalse(consult.payload_carries_token(self.CLAUDE_WIPED))
+        self.assertFalse(consult.payload_carries_token({"access_token": "", "refresh_token": ""}))
+        self.assertFalse(consult.payload_carries_token({"device_id": "E" * 40}))
+
+    def _claude_spec(self, home: Path) -> dict:
+        spec = dict(consult.CONSULTANTS["claude"])
+        spec["default_home"] = str(home)
+        return spec
+
+    def test_emptied_credential_reads_as_signed_out(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            home = Path(raw)
+            (home / ".credentials.json").write_text(json.dumps(self.CLAUDE_WIPED))
+            spec = self._claude_spec(home)
+            with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(home)}):
+                signed_in, note = consult.credential_state(spec)
+            self.assertFalse(signed_in)
+            self.assertIn("sign in again", note)
+
+    def test_live_credential_reads_as_signed_in(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            home = Path(raw)
+            (home / ".credentials.json").write_text(json.dumps(self.CLAUDE_LIVE))
+            spec = self._claude_spec(home)
+            with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(home)}):
+                signed_in, note = consult.credential_state(spec)
+            self.assertTrue(signed_in)
+            self.assertEqual(note, "")
+
+    def test_missing_credential_has_no_note(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            home = Path(raw)
+            spec = self._claude_spec(home)
+            with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(home)}):
+                signed_in, note = consult.credential_state(spec)
+            self.assertFalse(signed_in)
+            self.assertEqual(note, "")
+
+
+class RefreshedCredentialTests(unittest.TestCase):
+    """A token refreshed inside the sandbox has to survive its deletion."""
+
+    def _claude_spec(self) -> dict:
+        return dict(consult.CONSULTANTS["claude"])
+
+    def test_refreshed_token_is_carried_back(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            home, agent_home = root / "home", root / "sandbox"
+            home.mkdir()
+            agent_home.mkdir()
+            old = {"claudeAiOauth": {"accessToken": "A" * 40, "refreshToken": "B" * 40}}
+            new = {"claudeAiOauth": {"accessToken": "C" * 40, "refreshToken": "D" * 40}}
+            (home / ".credentials.json").write_text(json.dumps(old))
+            (agent_home / ".credentials.json").write_text(json.dumps(new))
+
+            consult.preserve_refreshed_credentials(self._claude_spec(), home, agent_home)
+
+            self.assertEqual(json.loads((home / ".credentials.json").read_text()), new)
+            self.assertEqual((home / ".credentials.json").stat().st_mode & 0o777, 0o600)
+
+    def test_a_wiped_sandbox_copy_never_overwrites_a_live_token(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            home, agent_home = root / "home", root / "sandbox"
+            home.mkdir()
+            agent_home.mkdir()
+            live = {"claudeAiOauth": {"accessToken": "A" * 40, "refreshToken": "B" * 40}}
+            (home / ".credentials.json").write_text(json.dumps(live))
+            (agent_home / ".credentials.json").write_text(
+                json.dumps({"claudeAiOauth": {"accessToken": "", "refreshToken": ""}})
+            )
+
+            consult.preserve_refreshed_credentials(self._claude_spec(), home, agent_home)
+
+            self.assertEqual(json.loads((home / ".credentials.json").read_text()), live)
+
+    def test_unparsable_sandbox_copy_is_ignored(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            home, agent_home = root / "home", root / "sandbox"
+            home.mkdir()
+            agent_home.mkdir()
+            live = {"claudeAiOauth": {"accessToken": "A" * 40, "refreshToken": "B" * 40}}
+            (home / ".credentials.json").write_text(json.dumps(live))
+            (agent_home / ".credentials.json").write_text("not json at all")
+
+            consult.preserve_refreshed_credentials(self._claude_spec(), home, agent_home)
+
+            self.assertEqual(json.loads((home / ".credentials.json").read_text()), live)
+
+
+class SandboxLogTests(unittest.TestCase):
+    def test_log_tail_is_read_out_of_the_sandbox(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            agent_home = Path(raw)
+            (agent_home / "logs").mkdir()
+            (agent_home / "logs" / "kimi-code.log").write_text(
+                "first line\n\nsecond line\nthe authorization grant is invalid\n"
+            )
+            tail = consult.read_sandbox_log_tail(agent_home)
+            self.assertIn("the authorization grant is invalid", tail)
+            self.assertNotIn("\n\n", tail)
+
+    def test_missing_log_directory_is_not_an_error(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            self.assertEqual(consult.read_sandbox_log_tail(Path(raw)), "")
+
+
 if __name__ == "__main__":
     unittest.main()

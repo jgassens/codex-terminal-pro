@@ -48,14 +48,23 @@ check_auth() {
         mode=$(auth_mode)
         echo "Credentials file: present"
         echo "Permissions: $mode"
-        if [ "$mode" = "600" ]; then
-            echo "Status: permissions look correct"
-        else
-            echo "Status: permissions should be 600"
+        if [ "$mode" != "600" ]; then
+            echo "Note: permissions should be 600 - use the fix option in this menu."
         fi
     else
         echo "Credentials file: missing"
-        echo "Status: not authenticated yet, or credentials are stored elsewhere"
+    fi
+
+    # The file proves nothing on its own: signing out, or a refresh the server
+    # rejects, leaves it in place with the tokens emptied. Reporting "present,
+    # 600" as if it were a login is what makes a dead account look healthy, so
+    # ask Claude Code itself whether the account can actually authenticate.
+    echo ""
+    echo "Account status reported by Claude Code:"
+    if command -v claude >/dev/null 2>&1; then
+        claude auth status 2>&1 | sed 's/^/  /'
+    else
+        echo "  claude command was not found in PATH"
     fi
 }
 
@@ -79,7 +88,11 @@ interactive_login() {
         return 1
     fi
 
-    echo "Starting Claude Code so you can sign in."
+    echo "Starting the Claude Code sign-in."
+    echo ""
+    echo "This runs 'claude auth login', the CLI's own sign-in command."
+    echo "Launching the chat interface instead only signs you in if you"
+    echo "remember to type /login once it is up, which is easy to miss."
     echo ""
     echo "Claude Code will print a URL. Open it on any device (your phone or"
     echo "computer), sign in with your Claude subscription, and paste the"
@@ -98,15 +111,19 @@ interactive_login() {
     echo "  - Use the sign-in dialog's code field on the add-on web page"
     echo "  - On mobile, long-press usually shows a paste option"
     echo ""
-    printf "Press Enter to launch Claude Code..." >&2
+    printf "Press Enter to start the sign-in..." >&2
     read -r _
-    claude || true
+    claude auth login || true
 
     if [ -f "$AUTH_FILE" ]; then
         chmod 600 "$AUTH_FILE"
-        echo ""
-        echo "Credentials file exists and permissions were set to 600."
     fi
+
+    # Report what the account can actually do now rather than that a file was
+    # written: a half-finished flow leaves the file behind without a token.
+    echo ""
+    echo "Account status reported by Claude Code:"
+    claude auth status 2>&1 | sed 's/^/  /'
 }
 
 show_import_instructions() {

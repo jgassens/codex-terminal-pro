@@ -1,5 +1,55 @@
 # Changelog
 
+## 2.9.0
+
+Security pass. An independent review of 2.8.2 (`reviews/2026-08-31-kimi-findings.md`)
+was verified and repaired finding by finding (`reviews/2026-08-31-codex-review.md`):
+
+- The manager `SUPERVISOR_TOKEN` is written to a root-only file and removed from
+  the environment before apk, pip, npm, or any other third-party code runs.
+- The development harness accepts the loopback override only from an actual
+  loopback peer and binds to 127.0.0.1; it used to accept any LAN address.
+- Root-executed launch and transcript helpers live under a root-only runtime
+  directory instead of predictable shared /tmp paths.
+- Root terminal control is no longer reachable over container loopback, and
+  consultants can no longer reach the live /config or /data trees: each runs
+  under its own uid with a Landlock-confined, filtered projection.
+- Mall Cop no longer launches a model. It rendered untrusted Home Assistant data
+  through a Codex process holding a copy of the live credential with network
+  access and only model-level containment. It is now a deterministic local
+  renderer of the same six sections; model narration returns in a later release
+  through the consultant isolation path.
+- Broker configuration is parsed as data rather than sourced as shell; the
+  paste-repair heuristic no longer rewrites quoted arguments; the three TOML
+  mutators no longer mistake string contents for tables; rejected-request logs
+  no longer capture the ingress token; `ha-site-memory` ignores proxy
+  environment variables; solar discovery bounds a CIDR before expanding it;
+  Modbus TCP accepts unit IDs through 255.
+- Image decoding is fully validated with resource bounds, subprocess-heavy
+  reads share one global budget, the OAuth callback flow verifies ownership,
+  and startup waits for both the image service and the ttyd transport.
+- The consultant test no longer depends on a developer-machine `claude`
+  binary, which had been failing Validate on every push since 2.8.0.
+
+Consultant sign-in truthfulness:
+
+- Report a consultant as signed in only when its stored credential still holds
+  a token. Signing out leaves the credential file in place with the tokens
+  emptied, so the Settings panel, `consult --list`, and the auth helpers all
+  reported a dead account as "signed in and ready" while every consult failed.
+- Sign in to Claude Code with `claude auth login`, the CLI's own sign-in
+  command. The previous option launched the chat interface, which signs you in
+  only if you then remember to type /login.
+- Refuse a shell dispatch while the Shell pane is busy, the way consultant
+  setup already does. A dispatch types into the shared pane, so it used to
+  take the pane from an auth helper mid-sign-in or a running consultant.
+- Carry a token refreshed during a consult back into the real credential
+  store. The consultant runs against a throwaway copy, so a refresh was
+  discarded with the sandbox while the provider had already rotated the old
+  token away.
+- Include the consultant's own log in a failure message. Kimi reports errors as
+  "See log: <path>" pointing inside the sandbox that cleanup then deletes.
+
 ## 2.8.2
 
 - Keep the image service's output in /data/logs/image-service.log (one rotated
