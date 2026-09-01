@@ -16,6 +16,11 @@ This is an MVP fork. It is not an official OpenAI add-on.
   storage directly, and Change Desk gathers `ha core check`, recent logs, live
   API reachability, MCP status, and monitor findings before you reload or
   restart.
+- Optional AI consultants for a second opinion: sign in Claude Code and Kimi
+  Code with your own subscriptions and Codex can ask them - in parallel, as
+  independent opinions rather than a primary and a backup - before a change
+  that is hard to undo. Each runs read-only as its own unprivileged user in a
+  filtered snapshot of `/config`, never the live tree.
 - Better troubleshooting context: bundled read-only REST/WebSocket helpers,
   `ha-toolbox`, and `/opt/home-assistant/HA.md` give Codex exact entity states,
   service schemas, registry matches, exposed entities, and automation validation
@@ -49,6 +54,26 @@ This is an MVP fork. It is not an official OpenAI add-on.
 - Headless-friendly setup and updates: device-code login support and pinned
   bundled Codex CLI releases keep authentication and CLI upgrades manageable
   from Home Assistant rather than from an interactive desktop.
+
+## Consultants and Mall Cop
+
+Codex is the agent, but it does not have to think alone. Sign in optional
+consultants - Claude Code and Kimi Code - with your own subscriptions from the
+add-on's Settings panel, and Codex can ask them for an independent second
+opinion before a change that is hard to undo. Both are asked at once and their
+answers stream back fastest first, so a quick take is usable immediately while
+a slower, deeper one still arrives. Each consultant runs read-only as its own
+unprivileged user in a filtered snapshot of `/config` - never the live tree,
+with secrets and credentials left out - hardened further with Linux Landlock
+where the kernel provides it.
+
+Change Desk's **Mall Cop** reviews your Home Assistant health on that same
+isolated path: it hands the bounded monitor evidence to Codex and renders a
+short, sectioned read of what is acute, what is chronic, what changed, and what
+Codex can and cannot fix - falling back to a deterministic local render when no
+consultant is available.
+
+![Change Desk's Mall Cop observation, narrated by a consultant](images/mall-cop.png)
 
 ## Installation
 
