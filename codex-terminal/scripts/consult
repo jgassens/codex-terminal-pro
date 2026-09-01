@@ -39,12 +39,15 @@ import functools
 import json
 import os
 import re
+import queue
 import shutil
 import signal
 import stat
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import tomllib
 from pathlib import Path
 
@@ -64,7 +67,7 @@ MAX_WORKSPACE_FILES = 5000
 # unprivileged consultant can traverse into its own (randomly named) sandbox
 # but cannot list the directory to discover a sibling's.
 SANDBOX_BASE = "/tmp/consult"
-DEFAULT_TIMEOUT_SECONDS = 300
+DEFAULT_TIMEOUT_SECONDS = 600
 DEFAULT_AGENT = "claude"
 SETTINGS_FILE = os.environ.get("CONSULT_SETTINGS_FILE", "/data/settings.json")
 
@@ -1218,6 +1221,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--agent", choices=sorted(CONSULTANTS), default=None,
                         help="which consultant to ask (default: from Settings)")
+    parser.add_argument("--agents", default=None,
+                        help="comma-separated consultants to ask in parallel; "
+                             "answers stream back fastest first")
     parser.add_argument("--timeout", type=int, default=None,
                         help="seconds to wait for an answer (default: from Settings)")
     parser.add_argument("--model", default=None,
@@ -1233,6 +1239,112 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def parse_agent_list(raw: str) -> list[str]:
+    """Parse --agents into an ordered, de-duplicated, validated list."""
+    names = [name.strip() for name in re.split(r"[,\s]+", raw) if name.strip()]
+    ordered: list[str] = []
+    for name in names:
+        if name not in CONSULTANTS:
+            raise ConsultError(f"Unknown consultant: {name}")
+        if name not in ordered:
+            ordered.append(name)
+    if not ordered:
+        raise ConsultError("--agents needs at least one consultant")
+    return ordered
+
+
+def human_duration(seconds: float) -> str:
+    seconds = int(round(seconds))
+    if seconds < 60:
+        return f"{seconds}s"
+    return f"{seconds // 60}m{seconds % 60:02d}s"
+
+
+def format_consult_block(label: str, seconds: float, returncode: int, stdout: str, stderr: str) -> str:
+    """One labelled block for a finished consult, answer or failure."""
+    if returncode == 0 and stdout.strip():
+        body = stdout.strip()
+        heading = f"=== {label} · {human_duration(seconds)} ==="
+    else:
+        # A failing consult already writes its reason to stderr; surface that
+        # rather than an empty block, so a slow or signed-out consultant is
+        # visibly distinct from one that answered.
+        detail = stderr.strip().splitlines()
+        reason = detail[-1] if detail else f"no answer (exit {returncode})"
+        body = reason
+        heading = f"=== {label} · {human_duration(seconds)} · no answer ==="
+    return f"{heading}\n{body}\n"
+
+
+def build_child_consult_command(agent: str, prompt: str, timeout: int) -> list[str]:
+    # Re-invoke this same script for one agent: the child runs the fully
+    # isolated single-agent path and resolves that consultant's own stored
+    # model and effort, so a parallel ask is exactly N normal consults at once.
+    return [
+        sys.executable, os.path.abspath(__file__),
+        "--agent", agent, "--timeout", str(timeout), prompt,
+    ]
+
+
+def run_parallel_consults(agents: list[str], prompt: str, timeout: int,
+                          command_builder=build_child_consult_command) -> int:
+    """Ask several consultants at once, printing each answer as it lands.
+
+    They are independent opinions asked simultaneously, not a primary and a
+    backup: the fastest consultant's answer is available first so the caller
+    can act on it without waiting for the slower, deeper one, which prints
+    when it finishes. Each child owns its isolation, timeout, and cleanup.
+    """
+    procs: dict[str, subprocess.Popen] = {}
+    for agent in agents:
+        procs[agent] = subprocess.Popen(
+            command_builder(agent, prompt, timeout),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+
+    def terminate_all() -> None:
+        for proc in procs.values():
+            if proc.poll() is None:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+
+    def on_signal(signum, _frame):
+        terminate_all()
+        os._exit(128 + signum)
+
+    previous_term = signal.signal(signal.SIGTERM, on_signal)
+    previous_hup = signal.signal(signal.SIGHUP, on_signal)
+
+    finished: "queue.Queue[tuple[str, int, str, str, float]]" = queue.Queue()
+    started = time.monotonic()
+
+    def wait_for(agent: str, proc: subprocess.Popen) -> None:
+        out, err = proc.communicate()
+        finished.put((agent, proc.returncode, out, err, time.monotonic() - started))
+
+    for agent, proc in procs.items():
+        threading.Thread(target=wait_for, args=(agent, proc), daemon=True).start()
+
+    answered = False
+    try:
+        for _ in agents:
+            agent, returncode, out, err, seconds = finished.get()
+            print(format_consult_block(CONSULTANTS[agent]["label"], seconds, returncode, out, err), flush=True)
+            if returncode == 0 and out.strip():
+                answered = True
+    finally:
+        signal.signal(signal.SIGTERM, previous_term)
+        signal.signal(signal.SIGHUP, previous_hup)
+        terminate_all()
+
+    return 0 if answered else 2
+
+
 def main(argv: list[str]) -> int:
     args = build_parser().parse_args(argv)
     if args.list:
@@ -1243,9 +1355,6 @@ def main(argv: list[str]) -> int:
         raise ConsultError("No question given")
 
     settings = load_settings()
-    agent = args.agent or settings.get("defaultConsultant") or DEFAULT_AGENT
-    if agent not in CONSULTANTS:
-        raise ConsultError(f"Unknown consultant: {agent}")
 
     timeout = args.timeout
     if timeout is None:
@@ -1253,6 +1362,15 @@ def main(argv: list[str]) -> int:
         timeout = stored if isinstance(stored, int) else DEFAULT_TIMEOUT_SECONDS
     if timeout <= 0:
         raise ConsultError("--timeout must be positive")
+
+    if args.agents:
+        if args.agent:
+            raise ConsultError("use --agent for one consultant or --agents for several, not both")
+        return run_parallel_consults(parse_agent_list(args.agents), prompt, timeout)
+
+    agent = args.agent or settings.get("defaultConsultant") or DEFAULT_AGENT
+    if agent not in CONSULTANTS:
+        raise ConsultError(f"Unknown consultant: {agent}")
 
     stored_model, stored_effort = consultant_preferences(settings, agent)
     model = args.model if args.model is not None else stored_model

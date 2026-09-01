@@ -808,6 +808,63 @@ class CodexConsultantTests(unittest.TestCase):
             self.assertEqual(consult.read_sandbox_answer(Path(raw) / "missing.md"), "")
 
 
+class ParallelConsultTests(unittest.TestCase):
+    """Several consultants asked at once, fastest answer surfaced first."""
+
+    def test_agent_list_is_ordered_deduped_and_validated(self) -> None:
+        self.assertEqual(consult.parse_agent_list("kimi, claude,kimi"), ["kimi", "claude"])
+        self.assertEqual(consult.parse_agent_list("claude"), ["claude"])
+        with self.assertRaises(consult.ConsultError):
+            consult.parse_agent_list("kimi,gemini")
+        with self.assertRaises(consult.ConsultError):
+            consult.parse_agent_list("   ")
+
+    def test_block_uses_stdout_on_success_and_stderr_on_failure(self) -> None:
+        ok = consult.format_consult_block("Kimi Code", 12, 0, "the answer", "tier note")
+        self.assertIn("=== Kimi Code · 12s ===", ok)
+        self.assertIn("the answer", ok)
+        self.assertNotIn("tier note", ok)
+        bad = consult.format_consult_block("Claude Code", 300, 2, "", "consult: timed out")
+        self.assertIn("· no answer ===", bad)
+        self.assertIn("consult: timed out", bad)
+
+    def _run(self, agents, builder):
+        import contextlib, io
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = consult.run_parallel_consults(agents, "q", 30, command_builder=builder)
+        return rc, buf.getvalue()
+
+    def test_faster_consultant_prints_first(self) -> None:
+        def builder(agent, prompt, timeout):
+            delay = {"kimi": "0.1", "claude": "0.6"}[agent]
+            return ["sh", "-c", f'sleep {delay}; printf "%s-done" {agent}']
+        rc, out = self._run(["claude", "kimi"], builder)
+        self.assertEqual(rc, 0)
+        # Kimi is faster, so its block appears before Claude's regardless of
+        # the order they were requested in.
+        self.assertLess(out.index("Kimi Code"), out.index("Claude Code"))
+        self.assertIn("kimi-done", out)
+        self.assertIn("claude-done", out)
+
+    def test_one_failure_does_not_sink_the_other(self) -> None:
+        def builder(agent, prompt, timeout):
+            if agent == "claude":
+                return ["sh", "-c", "sleep 0.1; echo broke >&2; exit 2"]
+            return ["sh", "-c", 'sleep 0.2; printf PONG']
+        rc, out = self._run(["claude", "kimi"], builder)
+        self.assertEqual(rc, 0)  # kimi answered
+        self.assertIn("Claude Code · 0s · no answer", out.replace("1s", "0s"))
+        self.assertIn("broke", out)
+        self.assertIn("PONG", out)
+
+    def test_all_failing_returns_nonzero(self) -> None:
+        def builder(agent, prompt, timeout):
+            return ["sh", "-c", "echo nope >&2; exit 2"]
+        rc, out = self._run(["kimi", "claude"], builder)
+        self.assertEqual(rc, 2)
+
+
 class LandlockFallbackTests(unittest.TestCase):
     """A kernel without Landlock degrades to uid-drop, it does not refuse."""
 

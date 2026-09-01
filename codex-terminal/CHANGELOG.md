@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.10.2
+
+- Ask consultants in parallel. `consult --agents kimi,claude "..."` runs both
+  at once as independent opinions - not a primary and a backup - and streams
+  each answer as it lands, fastest first, so Codex can act on the quick one
+  (Kimi) the moment it settles the question and still get the slower, deeper
+  one (Claude) when it arrives. Single-consultant `consult --agent X` and the
+  bare default are unchanged. The consult skill now teaches this pattern.
+- Raise the default consult timeout to 600s (from 300s). A heavy safety review
+  that reads several config files at high effort was overrunning five minutes
+  and being reported as a timeout; it now has room to finish. A consultant
+  that still overruns is shown as "no answer" for that one while the others'
+  answers stand. Effort is unchanged - consults stay at full intelligence.
+
 ## 2.10.1
 
 - Fix consultants failing everywhere with "filesystem isolation could not be
