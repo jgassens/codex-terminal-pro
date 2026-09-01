@@ -147,8 +147,11 @@ def fetch_states(timeout: int) -> tuple[dict[str, dict[str, Any]], str]:
             "Accept": "application/json",
         },
     )
+    # Supervisor traffic is container-local and must never inherit a caller's
+    # HTTP(S)_PROXY settings with its bearer token attached.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with opener.open(request, timeout=timeout) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         return {}, f"http-error:{exc.code}"

@@ -7,6 +7,76 @@ IMAGE_SERVICE_PID=""
 TTYD_PID=""
 SSH_BRIDGE_PID=""
 HA_MONITOR_PID=""
+RUNTIME_DIR="/run/codex-terminal"
+SHELL_DISPATCH_SOCKET_PATH="${RUNTIME_DIR}/shell-dispatch.sock"
+TTYD_SOCKET_PATH="${RUNTIME_DIR}/ttyd.sock"
+TMUX_SESSION="codex-terminal"
+CODEX_TMUX_TARGET="${TMUX_SESSION}:0.0"
+RAW_TMUX_TARGET="${TMUX_SESSION}:raw-shell.0"
+
+initialize_private_service_credentials() {
+    local supervisor_dir="/data/.supervisor"
+    local temporary_file
+
+    if [ -n "${SUPERVISOR_TOKEN:-}" ]; then
+        temporary_file="$(mktemp "$supervisor_dir/.supervisor-token.XXXXXX")"
+        printf '%s\n' "$SUPERVISOR_TOKEN" > "$temporary_file"
+        chmod 600 "$temporary_file"
+        mv -f "$temporary_file" "$supervisor_dir/token"
+    elif [ ! -s "$supervisor_dir/token" ]; then
+        bashio::log.warning "SUPERVISOR_TOKEN is not available; brokered ha commands may fail"
+    fi
+
+    # No third-party package installer or long-lived child should inherit the
+    # Home Assistant manager token. Helpers read the private token file instead.
+    unset SUPERVISOR_TOKEN
+}
+
+prepare_runtime_socket_path() {
+    local socket_path="$1"
+
+    if [ -L "$socket_path" ] || { [ -e "$socket_path" ] && [ ! -S "$socket_path" ]; }; then
+        bashio::log.error "Refusing unsafe runtime socket path: ${socket_path}"
+        return 1
+    fi
+    if [ -S "$socket_path" ]; then
+        rm -f "$socket_path"
+    fi
+}
+
+cleanup_runtime_sockets() {
+    local socket_path
+    for socket_path in "$SHELL_DISPATCH_SOCKET_PATH" "$TTYD_SOCKET_PATH"; do
+        if [ -S "$socket_path" ]; then
+            rm -f "$socket_path" || true
+        fi
+    done
+}
+
+append_bounded_log_line() {
+    local log_file="$1"
+    local max_bytes="$2"
+    local line="$3"
+    local current_bytes=0
+    local line_bytes
+
+    if [ "$max_bytes" -le 0 ]; then
+        return 0
+    fi
+    # Node errors should be lines, not arbitrary-size blobs. Bound a single
+    # line as well as the overall file so one message cannot defeat rotation.
+    if [ "${#line}" -ge "$max_bytes" ]; then
+        LC_ALL=C line="${line:0:$((max_bytes - 2))}"
+    fi
+    line_bytes=$(( ${#line} + 1 ))
+    if [ -f "$log_file" ]; then
+        current_bytes=$(wc -c < "$log_file")
+    fi
+    if [ "$current_bytes" -gt 0 ] && [ $((current_bytes + line_bytes)) -gt "$max_bytes" ]; then
+        mv -f "$log_file" "${log_file}.1"
+    fi
+    printf '%s\n' "$line" >> "$log_file"
+}
 
 # Initialize environment for Codex CLI using /data, the persistent Home Assistant
 # add-on storage volume.
@@ -37,7 +107,7 @@ init_environment() {
     if ! mkdir -p "$data_home" "$config_dir" "$cache_dir" "$local_dir" "$state_dir" "$data_dir" \
                   "$codex_home" "$claude_home" "$kimi_home" "$gh_config_dir" "$persist_bin" \
                   "$persist_python" "$guard_bin" "$guard_libexec" "$image_dir" "$log_dir" \
-                  "$monitor_dir/tasks.d" "$supervisor_dir/confirm"; then
+                  "$monitor_dir/tasks.d" "$supervisor_dir/confirm" "$RUNTIME_DIR"; then
         bashio::log.error "Failed to create directories in /data"
         exit 1
     fi
@@ -45,8 +115,11 @@ init_environment() {
     chmod 700 "$data_home" "$config_dir" "$cache_dir" "$local_dir" "$state_dir" \
               "$data_dir" "$codex_home" "$claude_home" "$kimi_home" "$gh_config_dir" "$guard_root" "$guard_bin" \
               "$guard_libexec" "$monitor_dir" "$monitor_dir/tasks.d" "$supervisor_dir" "$supervisor_dir/confirm"
+    chmod 700 "$RUNTIME_DIR"
     chmod 755 "$persist_root" "$persist_bin" "$persist_python" "$image_dir"
     chmod 700 "$log_dir"
+
+    initialize_private_service_credentials
 
     export HOME="$data_home"
     export XDG_CONFIG_HOME="$config_dir"
@@ -209,11 +282,7 @@ ensure_github_codex_mcp_ready() {
     fi
 
     if "$disabler"; then
-        if [ -n "${GITHUB_PAT_TOKEN:-}" ]; then
-            bashio::log.info "GitHub Codex MCP: PAT is present; transport configuration left unchanged"
-        else
-            bashio::log.info "GitHub Codex MCP: disabled legacy PAT-backed transport; GitHub plugin and gh CLI preserved"
-        fi
+        bashio::log.info "GitHub Codex MCP: disabled unsupported legacy PAT-backed transport; GitHub plugin and gh CLI preserved"
         return 0
     fi
 
@@ -397,7 +466,13 @@ install_tools() {
 
 log_startup_diagnostics() {
     local app_name="${APP_NAME:-${ADDON_NAME:-Codex Terminal Pro}}"
-    local app_version="${BUILD_VERSION:-${APP_VERSION:-2.8.2}}"
+    local metadata_version=""
+    local app_version
+
+    if [ -r /opt/codex-terminal/config.yaml ]; then
+        metadata_version="$(sed -n 's/^version:[[:space:]]*"\([^"]*\)".*/\1/p' /opt/codex-terminal/config.yaml | head -n 1)"
+    fi
+    app_version="${BUILD_VERSION:-${APP_VERSION:-${metadata_version:-unknown}}}"
 
     bashio::log.info "Startup diagnostics:"
     bashio::log.info "  - Date: $(date)"
@@ -585,12 +660,13 @@ ensure_consultant_defaults() {
 }
 
 setup_shell_dispatch_profile() {
-    if [ -f "/opt/scripts/codex-terminal-shell-dispatch.sh" ]; then
-        cp /opt/scripts/codex-terminal-shell-dispatch.sh /etc/profile.d/codex-terminal-shell-dispatch.sh
+    if [ -f "/opt/scripts/codex-terminal-shell-dispatch-profile.sh" ] && \
+       [ -f "/opt/scripts/codex-terminal-shell-dispatch.sh" ]; then
+        cp /opt/scripts/codex-terminal-shell-dispatch-profile.sh /etc/profile.d/codex-terminal-shell-dispatch.sh
         chmod 644 /etc/profile.d/codex-terminal-shell-dispatch.sh
         bashio::log.info "Shell dispatch profile installed for raw Shell mode"
     else
-        bashio::log.warning "Shell dispatch profile missing: /opt/scripts/codex-terminal-shell-dispatch.sh"
+        bashio::log.warning "Shell dispatch profile or Bash payload is missing"
     fi
 }
 
@@ -645,7 +721,7 @@ setup_persistent_packages() {
 
     restore_persisted_apk_packages
     restore_persisted_python_packages
-    if ! auto_install_packages; then
+    if ! /opt/scripts/persistent-packages.sh auto-install; then
         bashio::log.warning "Some configured persistent packages could not be installed"
     fi
 }
@@ -660,75 +736,6 @@ restore_persisted_python_packages() {
     if ! /opt/scripts/persistent-packages.sh restore-pip; then
         bashio::log.warning "Persisted Python requirements could not be restored for the current interpreter"
     fi
-}
-
-is_safe_package_name() {
-    case "$1" in
-        ''|-*|*[!A-Za-z0-9@._:+!=\>\<,\[\]~-]*)
-            return 1
-            ;;
-        *)
-            return 0
-            ;;
-    esac
-}
-
-auto_install_packages() {
-    local apk_packages
-    local pip_packages
-    local pkg
-    local status=0
-    local persist_install_bin="${PERSIST_INSTALL_BIN:-/usr/local/bin/persist-install}"
-    local apk_args=()
-    local pip_args=()
-
-    if ! apk_packages="$(bashio::config 'persistent_apk_packages' '')"; then
-        bashio::log.error "Could not read persistent_apk_packages configuration"
-        return 1
-    fi
-    if ! pip_packages="$(bashio::config 'persistent_pip_packages' '')"; then
-        bashio::log.error "Could not read persistent_pip_packages configuration"
-        return 1
-    fi
-
-    # bashio emits array values one per line; it does not return JSON here.
-    if [ -n "$apk_packages" ]; then
-        bashio::log.info "Auto-installing system packages from config..."
-        while IFS= read -r pkg; do
-            [ -n "$pkg" ] || continue
-            if ! is_safe_package_name "$pkg"; then
-                bashio::log.warning "Rejected invalid system package name: $pkg"
-                status=1
-                continue
-            fi
-            apk_args+=("$pkg")
-        done <<< "$apk_packages"
-
-        if [ "${#apk_args[@]}" -gt 0 ]; then
-            bashio::log.info "  Installing: ${apk_args[*]}"
-            "$persist_install_bin" "${apk_args[@]}" || status=$?
-        fi
-    fi
-
-    if [ -n "$pip_packages" ]; then
-        bashio::log.info "Auto-installing Python packages from config..."
-        while IFS= read -r pkg; do
-            [ -n "$pkg" ] || continue
-            if ! is_safe_package_name "$pkg"; then
-                bashio::log.warning "Rejected invalid Python package name: $pkg"
-                status=1
-                continue
-            fi
-            pip_args+=("$pkg")
-        done <<< "$pip_packages"
-
-        if [ "${#pip_args[@]}" -gt 0 ]; then
-            bashio::log.info "  Installing: ${pip_args[*]}"
-            "$persist_install_bin" --python "${pip_args[@]}" || status=$?
-        fi
-    fi
-
-    return "$status"
 }
 
 write_codex_terminal_agents_block() {
@@ -862,16 +869,15 @@ setup_supervisor_broker() {
     mkdir -p "$guard_dir" "$supervisor_dir/confirm" "/data/logs"
     chmod 700 "/data/packages/guard" "$guard_dir" "$supervisor_dir" "$supervisor_dir/confirm" "/data/logs"
 
-    if [ -n "${SUPERVISOR_TOKEN:-}" ]; then
-        printf '%s\n' "$SUPERVISOR_TOKEN" > "$supervisor_dir/token"
-        chmod 600 "$supervisor_dir/token"
-    elif [ ! -s "$supervisor_dir/token" ]; then
+    if [ ! -s "$supervisor_dir/token" ]; then
         bashio::log.warning "SUPERVISOR_TOKEN is not available; brokered ha commands may fail"
     fi
 
     cat > "$supervisor_dir/broker.conf" << BROKER_CONF
 SUPERVISOR_BROKER_ENABLED="${broker_enabled}"
 SUPERVISOR_BROKER_T1_TTL_SECONDS="${broker_ttl}"
+SUPERVISOR_BROKER_PRIMARY_TMUX_TARGET="${CODEX_TMUX_TARGET}"
+SUPERVISOR_BROKER_RAW_TMUX_TARGET="${RAW_TMUX_TARGET}"
 BROKER_CONF
     chmod 600 "$supervisor_dir/broker.conf"
 
@@ -1099,7 +1105,7 @@ prepare_tmux_session() {
     local transcript_max_bytes="$6"
     local transcript_backups="$7"
     local history_limit="$8"
-    local transcript_writer="/tmp/codex-terminal-transcript-writer.sh"
+    local transcript_writer="${RUNTIME_DIR}/codex-terminal-transcript-writer.sh"
 
     if ! tmux -f "${tmux_config}" has-session -t "${session}" 2>/dev/null; then
         bashio::log.info "Creating tmux session '${session}'"
@@ -1131,10 +1137,9 @@ start_image_service() {
     local service_dir="/opt/image-service"
     local server_file="${service_dir}/server.js"
     local service_log="/data/logs/image-service.log"
+    local service_log_max_bytes=1048576
     local image_retention_days
     local image_retention_max_bytes
-    local image_service_ready="false"
-    local i
 
     bashio::log.info "Starting image upload service on port ${image_port}..."
 
@@ -1164,47 +1169,50 @@ start_image_service() {
     fi
 
     # One rotated backup, so a crash-loop cannot erase its own evidence.
-    if [ -f "${service_log}" ] && [ "$(wc -c < "${service_log}")" -gt 1048576 ]; then
+    if [ -f "${service_log}" ] && [ "$(wc -c < "${service_log}")" -gt "${service_log_max_bytes}" ]; then
         mv -f "${service_log}" "${service_log}.1" 2>/dev/null || true
     fi
 
-    # tee first: when node dies at startup, the container teardown races the
-    # bashio reader below and can drop its traceback from the add-on log, but
-    # the file write has already happened by then.
+    # Persist each line before forwarding it to bashio so startup failures are
+    # retained, while rotating during the run instead of only at next boot.
     node "${server_file}" > >(
-        tee -a "${service_log}" | while IFS= read -r line; do
+        while IFS= read -r line || [ -n "$line" ]; do
+            append_bounded_log_line "${service_log}" "${service_log_max_bytes}" "$line"
             bashio::log.info "[Image Service] $line"
         done
     ) 2>&1 &
 
     IMAGE_SERVICE_PID=$!
     bashio::log.info "Image service started (PID: ${IMAGE_SERVICE_PID})"
+}
 
-    for i in $(seq 1 20); do
+wait_for_web_readiness() {
+    local image_port="${IMAGE_SERVICE_PORT:-7680}"
+    local service_log="/data/logs/image-service.log"
+    local i
+
+    for i in $(seq 1 100); do
         if curl -fsS "http://127.0.0.1:${image_port}/health" >/dev/null 2>&1; then
-            image_service_ready="true"
-            break
+            bashio::log.info "Image service and terminal transport are ready"
+            return 0
         fi
 
-        if ! kill -0 "${IMAGE_SERVICE_PID}" 2>/dev/null; then
+        if ! kill -0 "${IMAGE_SERVICE_PID}" 2>/dev/null || \
+           ! kill -0 "${TTYD_PID}" 2>/dev/null; then
             break
         fi
 
         sleep 0.1
     done
 
-    if [ "${image_service_ready}" = "true" ]; then
-        bashio::log.info "Image service is running successfully"
-    else
-        bashio::log.error "Image service failed to start"
-        if [ -s "${service_log}" ]; then
-            bashio::log.error "Last lines of ${service_log}:"
-            tail -n 25 "${service_log}" 2>/dev/null | while IFS= read -r line; do
-                bashio::log.error "[Image Service] $line"
-            done || true
-        fi
-        return 1
+    bashio::log.error "Image service or terminal transport failed to become ready"
+    if [ -s "${service_log}" ]; then
+        bashio::log.error "Last lines of ${service_log}:"
+        tail -n 25 "${service_log}" 2>/dev/null | while IFS= read -r line; do
+            bashio::log.error "[Image Service] $line"
+        done || true
     fi
+    return 1
 }
 
 stop_web_processes() {
@@ -1241,6 +1249,7 @@ supervise_web_processes() {
         wait "$TTYD_PID" 2>/dev/null || true
         wait "$SSH_BRIDGE_PID" 2>/dev/null || true
         wait "$HA_MONITOR_PID" 2>/dev/null || true
+        cleanup_runtime_sockets
         trap - TERM INT
         return 0
     fi
@@ -1268,6 +1277,7 @@ supervise_web_processes() {
     wait "$TTYD_PID" 2>/dev/null || true
     wait "$SSH_BRIDGE_PID" 2>/dev/null || true
     wait "$HA_MONITOR_PID" 2>/dev/null || true
+    cleanup_runtime_sockets
     trap - TERM INT
     return "$exit_status"
 }
@@ -1291,19 +1301,18 @@ start_ssh_bridge() {
 }
 
 start_web_terminal() {
-    local port=7681
     local launch_command
     local auto_launch_codex
-    local tmux_session="codex-terminal"
+    local tmux_session="${TMUX_SESSION}"
     local tmux_config="/data/.tmux.conf"
-    local tmux_launcher="/tmp/codex-terminal-launch.sh"
+    local tmux_launcher="${RUNTIME_DIR}/codex-terminal-launch.sh"
     local transcript="/data/logs/codex-terminal.log"
     local transcript_enabled
     local transcript_max_bytes
     local transcript_backups
     local terminal_history_limit
 
-    bashio::log.info "Starting web terminal on port ${port}..."
+    bashio::log.info "Starting web terminal..."
     bashio::log.info "Environment variables:"
     bashio::log.info "CODEX_HOME=${CODEX_HOME}"
     bashio::log.info "GH_CONFIG_DIR=${GH_CONFIG_DIR}"
@@ -1318,22 +1327,25 @@ start_web_terminal() {
     bashio::log.info "Auto-launch Codex: ${auto_launch_codex}"
     bashio::log.info "Persistent terminal session: tmux session '${tmux_session}'"
     bashio::log.info "Terminal history limit: ${terminal_history_limit}"
-    export TMUX_SESSION="${tmux_session}"
-    export TMUX_TARGET="${tmux_session}:0.0"
-    export CODEX_TMUX_TARGET="${TMUX_TARGET}"
+    export TMUX_SESSION
+    export TMUX_TARGET="${CODEX_TMUX_TARGET}"
+    export CODEX_TMUX_TARGET RAW_TMUX_TARGET
+    export SHELL_DISPATCH_SOCKET_PATH TTYD_SOCKET_PATH
     write_tmux_config "${tmux_config}" "${terminal_history_limit}"
     write_tmux_launch_script "${tmux_launcher}" "${launch_command}"
 
+    prepare_runtime_socket_path "${SHELL_DISPATCH_SOCKET_PATH}"
+    prepare_runtime_socket_path "${TTYD_SOCKET_PATH}"
     start_image_service
     prepare_tmux_session "${tmux_session}" "${tmux_launcher}" "${tmux_config}" "${transcript}" \
         "${transcript_enabled}" "${transcript_max_bytes}" "${transcript_backups}" "${terminal_history_limit}"
     start_ssh_bridge
 
-    bashio::log.info "Final ttyd command: ttyd --port ${port} --interface 127.0.0.1 --writable --ping-interval 30 --client-option reconnect=5 --client-option macOptionClickForcesSelection=true --client-option rightClickSelectsWord=true tmux -f ${tmux_config} attach-session -t ${tmux_session}"
+    bashio::log.info "Final ttyd transport: private Unix socket ${TTYD_SOCKET_PATH}"
 
     ttyd \
-        --port "${port}" \
-        --interface 127.0.0.1 \
+        --interface "${TTYD_SOCKET_PATH}" \
+        --socket-owner root:root \
         --writable \
         --ping-interval 30 \
         --client-option reconnect=5 \
@@ -1342,6 +1354,15 @@ start_web_terminal() {
         tmux -f "${tmux_config}" attach-session -t "${tmux_session}" &
     TTYD_PID=$!
     bashio::log.info "ttyd started (PID: ${TTYD_PID}); supervising ttyd and image service"
+
+    if ! wait_for_web_readiness; then
+        stop_web_processes TERM
+        wait "$IMAGE_SERVICE_PID" 2>/dev/null || true
+        wait "$TTYD_PID" 2>/dev/null || true
+        wait "$SSH_BRIDGE_PID" 2>/dev/null || true
+        cleanup_runtime_sockets
+        return 1
+    fi
 
     supervise_web_processes
 }

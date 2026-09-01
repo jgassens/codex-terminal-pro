@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import struct
 import sys
@@ -21,10 +22,6 @@ if os.path.isdir(MODBUS_SITE) and MODBUS_SITE not in sys.path:
     sys.path.insert(0, MODBUS_SITE)
 
 VERSION = "0.1.28"
-
-if "--version" in sys.argv[1:]:
-    print(f"modbus-read {VERSION}")
-    sys.exit(0)
 
 READ_METHODS = {
     "holding": ("read_holding_registers", "registers", 0x03),
@@ -88,7 +85,14 @@ def build_parser() -> argparse.ArgumentParser:
     transport.add_argument("--serial", help="Modbus RTU serial device, if exposed to the add-on")
 
     parser.add_argument("--port", type=int, default=502, help="Modbus TCP port (default: 502)")
-    parser.add_argument("--unit", "--slave", dest="unit", type=int, default=1, help="Unit/slave ID (default: 1)")
+    parser.add_argument(
+        "--unit",
+        "--slave",
+        dest="unit",
+        type=int,
+        default=1,
+        help="Unit/slave ID (TCP: 0-255; RTU: 0-247; default: 1)",
+    )
     parser.add_argument(
         "--type",
         choices=sorted(READ_METHODS),
@@ -111,9 +115,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout", type=float, default=3.0, help="Connection/read timeout in seconds")
 
     parser.add_argument("--baudrate", type=int, default=9600, help="RTU baud rate")
-    parser.add_argument("--bytesize", type=int, default=8, help="RTU byte size")
+    parser.add_argument("--bytesize", type=int, default=8, choices=(5, 6, 7, 8), help="RTU byte size")
     parser.add_argument("--parity", default="N", choices=("N", "E", "O"), help="RTU parity")
-    parser.add_argument("--stopbits", type=int, default=1, help="RTU stop bits")
+    parser.add_argument("--stopbits", type=int, default=1, choices=(1, 2), help="RTU stop bits")
 
     parser.add_argument("--byte-order", choices=("big", "little"), default="big", help="Byte order inside each register")
     parser.add_argument("--word-order", choices=("big", "little"), default="big", help="Word order for 32-bit values")
@@ -180,6 +184,46 @@ def validate_read_count(kind: str, count: int) -> None:
         )
 
 
+def validate_connection_args(args: argparse.Namespace) -> None:
+    if not math.isfinite(args.timeout) or args.timeout <= 0:
+        raise ValueError("timeout must be a finite number greater than zero")
+
+    if args.host is not None:
+        host = args.host.strip()
+        if (
+            not host
+            or host != args.host
+            or any(
+                character.isspace() or ord(character) < 32 or ord(character) == 127
+                for character in host
+            )
+        ):
+            raise ValueError(
+                "TCP host must be a non-empty hostname or address without whitespace or control characters"
+            )
+        if args.port < 1 or args.port > 65535:
+            raise ValueError("TCP port must be between 1 and 65535")
+        if args.unit < 0 or args.unit > 255:
+            raise ValueError("TCP unit must be between 0 and 255")
+        return
+
+    serial = args.serial or ""
+    if (
+        serial != serial.strip()
+        or not serial
+        or any(ord(character) < 32 or ord(character) == 127 for character in serial)
+    ):
+        raise ValueError("serial device must be a non-empty path without control characters")
+    if args.unit < 0 or args.unit > 247:
+        raise ValueError("RTU unit must be between 0 and 247")
+    if args.baudrate <= 0:
+        raise ValueError("RTU baudrate must be greater than zero")
+    if args.bytesize not in {5, 6, 7, 8}:
+        raise ValueError("RTU byte size must be between 5 and 8")
+    if args.stopbits not in {1, 2}:
+        raise ValueError("RTU stop bits must be 1 or 2")
+
+
 def make_client(args: argparse.Namespace) -> tuple[Any, str]:
     serial_client, tcp_client = load_modbus_clients()
 
@@ -203,25 +247,10 @@ def make_client(args: argparse.Namespace) -> tuple[Any, str]:
 
 
 def call_read(method: Callable[..., Any], address: int, count: int, unit: int) -> Any:
-    attempts = (
-        lambda: method(address=address, count=count, device_id=unit),
-        lambda: method(address=address, count=count, slave=unit),
-        lambda: method(address, count=count, device_id=unit),
-        lambda: method(address, count=count, slave=unit),
-        lambda: method(address, count=count, unit=unit),
-        lambda: method(address, count),
-    )
-    last_error: Exception | None = None
-
-    for attempt in attempts:
-        try:
-            return attempt()
-        except TypeError as exc:
-            last_error = exc
-
-    if last_error is not None:
-        raise last_error
-    raise RuntimeError("no Modbus read attempt was made")
+    # The image pins pymodbus 3.13, whose read methods use ``device_id``.
+    # Do not interpret a TypeError from inside pymodbus as a signature mismatch:
+    # retrying it could send the same physical read several times.
+    return method(address=address, count=count, device_id=unit)
 
 
 def response_is_error(response: Any) -> bool:
@@ -282,12 +311,10 @@ def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
 
-    if args.unit < 0 or args.unit > 247:
-        parser.error("--unit must be between 0 and 247")
-
     method_name, attr_name, function_code = READ_METHODS[args.type]
 
     try:
+        validate_connection_args(args)
         validate_read_count(args.type, args.count)
         address_zero_based = normalize_address(args.type, args.address, args.address_base)
         validate_address_span(address_zero_based, args.count)

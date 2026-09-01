@@ -63,12 +63,11 @@ issues, persistent `ha-monitor` findings, prepared dispatch deltas, live
 `ha-api config` reachability, and `ha-mcp-status` so you can inspect the blast
 radius before a reload or restart. It can copy the summary or run Mall Cop.
 Opening Change Desk asks Mall Cop to observe and report at most once every 24
-hours, and the footer **Ask Mall Cop** action forces a fresh run. Mall Cop sends
-a chronic-condition packet to `codex exec` in read-only mode, stores memory
-under `/data/monitor/change-desk-mall-cop-memory.json`, and renders the returned
-**Mall Cop: To Observe and Report** summary back in Change Desk. The subprocess
-runs as an unprivileged user inside a minimal filesystem jail with no `/config`
-or `/data` tree.
+hours, and the footer **Ask Mall Cop** action forces a fresh run. Mall Cop
+renders the bounded chronic-condition packet locally, stores memory under
+`/data/monitor/change-desk-mall-cop-memory.json`, and shows the resulting
+**Mall Cop: To Observe and Report** summary in Change Desk. It does not launch
+Codex, copy a login credential, or make an outbound model request.
 
 ## Shell Mode And `,,` Dispatch
 
@@ -201,7 +200,9 @@ fingerprint changes, deterministic triage posture, and reasoning budget gates.
 Repeated Modbus, Wi-Fi, socket, timeout, and unavailable-entity noise is labeled
 as localized connectivity trouble with low system-wide risk unless the entity
 looks safety, security, or otherwise critical. Configuration, auth, and
-system-health patterns remain review findings. It does not call services,
+system-health patterns remain review findings. `ha-monitor once` succeeds when
+collection and saving succeed; add `--fail-on-problems` when a calling script
+should also fail on observed errors or unavailable services. It does not call services,
 reload, restart, edit `/config`, execute arbitrary task files, or call an LLM.
 Change Desk separately groups the monitor's persistent/current findings into a
 chronic-condition ledger. Mall Cop memory compares the current ledger with the
@@ -285,11 +286,12 @@ install, usually shown with a `local_` slug, is only for development testing and
 does not track GitHub.
 
 When publishing a release, use the same release number in `config.yaml`, the
-Dockerfile `io.hass.version` label, the `run.sh` fallback `APP_VERSION`, and a
-new `CHANGELOG.md` heading. Change the Dockerfile `CODEX_CLI_VERSION` only when
-the bundled Codex CLI is also changing. After the release is pushed, reload the
-Home Assistant add-on store and update from the UI; version detection comes
-from `config.yaml`.
+Dockerfile `io.hass.version` label, and a new `CHANGELOG.md` heading. Runtime
+diagnostics read the image's copied `config.yaml`; there is no separate
+hand-maintained fallback in `run.sh`. Change the Dockerfile
+`CODEX_CLI_VERSION` only when the bundled Codex CLI is also changing. After the
+release is pushed, reload the Home Assistant add-on store and update from the
+UI; version detection comes from `config.yaml`.
 
 ## Configuration
 
@@ -340,8 +342,8 @@ persistent_pip_packages: []
 - `ha_monitor_max_issues`: Maximum current/persistent issue samples retained in
   monitor summaries.
 - `ha_monitor_summary_interval_seconds`: Low-reasoning eligibility interval
-  recorded in dispatch budget gates. HA monitor itself does not call a model;
-  Change Desk's Mall Cop path is the gated read-only model call.
+  recorded in dispatch budget gates for future explicit reasoning workflows.
+  HA monitor and Mall Cop are both deterministic and do not call a model.
 - `ha_monitor_reasoning_cooldown_seconds`: Cooldown metadata for repeated
   dispatch packets with the same underlying fingerprints.
 - `ha_monitor_reasoning_daily_budget`: Scheduled reasoning-call cap recorded in
@@ -369,9 +371,9 @@ The helper sets `CODEX_HOME=/data/.codex`, ensures file credential storage in
 `/data/.codex/config.toml`, and fixes `/data/.codex/auth.json` permissions to
 `600` if present.
 
-Plain browser login is not reliable in the add-on because Codex completes OAuth
-through `localhost:1455`, which points at your browser machine instead of the
-Home Assistant container. Use device-code login or import `auth.json`.
+If browser login stops at `localhost:1455` or `localhost:1457`, leave the login
+running and paste the complete failed callback URL into the add-on's sign-in
+dialog. The add-on forwards it only to the matching live Codex listener.
 
 Fallback import is supported by copying a local `~/.codex/auth.json` into
 `/data/.codex/auth.json`. Treat that file like a password because it contains
@@ -381,10 +383,9 @@ ChatGPT subscriptions are used through Codex account auth. API-key auth would
 use OpenAI API billing and is not part of the MVP add-on configuration.
 
 GitHub CLI authentication is separate: use `gh auth login` for the bundled
-CLI. If `GITHUB_PAT_TOKEN` is absent, the Codex launch guard disables only
-known legacy PAT-backed GitHub MCP subserver entries that would otherwise fail
-at startup. It preserves the GitHub plugin, leaves unrelated custom MCP servers
-alone, and does not synthesize or copy a token.
+CLI. The Codex launch guard disables only known unsupported legacy PAT-backed
+GitHub MCP subserver entries that would otherwise fail at startup. It preserves
+the GitHub plugin and leaves unrelated custom MCP servers alone.
 
 ## Safety
 

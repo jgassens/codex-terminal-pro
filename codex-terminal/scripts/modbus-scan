@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import ipaddress
 import json
+import math
 import socket
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -25,13 +26,27 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--port", type=int, default=502, help="TCP port to check (default: 502)")
     parser.add_argument("--timeout", type=float, default=0.75, help="Socket timeout in seconds")
     parser.add_argument("--workers", type=int, default=32, help="Concurrent connection attempts")
-    parser.add_argument("--max-hosts", type=int, default=512, help="Safety cap for expanded CIDR hosts")
+    parser.add_argument(
+        "--max-hosts",
+        type=int,
+        default=512,
+        help="Safety cap for the final deduplicated target set",
+    )
     parser.add_argument("--open-only", action="store_true", help="Only print hosts that accept connections")
     return parser
 
 
 def expand_targets(raw_targets: Iterable[str], max_hosts: int) -> list[str]:
     expanded: list[str] = []
+    seen: set[str] = set()
+
+    def add_target(target: str) -> None:
+        if target in seen:
+            return
+        seen.add(target)
+        expanded.append(target)
+        if len(expanded) > max_hosts:
+            raise ValueError(f"target expansion exceeds --max-hosts {max_hosts}")
 
     for raw_target in raw_targets:
         for item in raw_target.split(","):
@@ -41,40 +56,39 @@ def expand_targets(raw_targets: Iterable[str], max_hosts: int) -> list[str]:
 
             if "/" in target:
                 network = ipaddress.ip_network(target, strict=False)
-                hosts = [str(host) for host in network.hosts()]
-                if len(expanded) + len(hosts) > max_hosts:
-                    raise ValueError(f"target expansion exceeds --max-hosts {max_hosts}")
-                expanded.extend(hosts)
+                for host in network.hosts():
+                    add_target(str(host))
             else:
-                expanded.append(target)
+                add_target(target)
 
-    return sorted(dict.fromkeys(expanded))
+    return sorted(expanded)
 
 
 def probe(host: str, port: int, timeout: float) -> dict[str, object]:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.settimeout(timeout)
-        try:
-            sock.connect((host, port))
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
             return {"host": host, "port": port, "open": True}
-        except OSError as exc:
-            return {"host": host, "port": port, "open": False, "error": str(exc)}
+    except OSError as exc:
+        return {"host": host, "port": port, "open": False, "error": str(exc)}
+
+
+def validate_scan_options(port: int, timeout: float, workers: int, max_hosts: int) -> None:
+    if port <= 0 or port > 65535:
+        raise ValueError("--port must be between 1 and 65535")
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("--timeout must be a finite number greater than zero")
+    if workers <= 0:
+        raise ValueError("--workers must be greater than zero")
+    if max_hosts <= 0:
+        raise ValueError("--max-hosts must be greater than zero")
 
 
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
 
-    if args.port <= 0 or args.port > 65535:
-        parser.error("--port must be between 1 and 65535")
-    if args.timeout <= 0:
-        parser.error("--timeout must be greater than zero")
-    if args.workers <= 0:
-        parser.error("--workers must be greater than zero")
-    if args.max_hosts <= 0:
-        parser.error("--max-hosts must be greater than zero")
-
     try:
+        validate_scan_options(args.port, args.timeout, args.workers, args.max_hosts)
         targets = expand_targets(args.targets, args.max_hosts)
     except ValueError as exc:
         parser.error(str(exc))

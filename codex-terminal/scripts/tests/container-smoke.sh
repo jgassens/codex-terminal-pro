@@ -125,16 +125,44 @@ smoke_human_terminal_broker() {
     docker exec "$name" bash -se <<'INNER'
 set -euo pipefail
 
-response="$(curl -fsS \
-    -H 'Origin: http://127.0.0.1:7680' \
-    -H 'Content-Type: application/json' \
-    --data '{"command":"/data/packages/guard/bin/supervisor-broker ha core restart"}' \
-    http://127.0.0.1:7680/terminal-shell-command)"
-[ "$(jq -r '.exitCode' <<< "$response")" -eq 0 ]
-if grep -Eq 'Type exactly|Refusing non-interactive' <<< "$response"; then
-    printf 'browser shell dispatch received a duplicate broker prompt:\n%s\n' "$response" >&2
+if ! response="$(codex-shell-dispatch /data/packages/guard/bin/supervisor-broker ha core restart 2>&1)"; then
+    printf 'Codex shell dispatch failed:\n%s\n' "$response" >&2
     exit 1
 fi
+if grep -Eq 'Type exactly|Refusing non-interactive' <<< "$response"; then
+    printf 'Codex shell dispatch received a duplicate broker prompt:\n%s\n' "$response" >&2
+    exit 1
+fi
+
+[ -S /run/codex-terminal/shell-dispatch.sock ]
+[ -S /run/codex-terminal/ttyd.sock ]
+[ "$(stat -c '%a' /run/codex-terminal/shell-dispatch.sock)" = "600" ]
+curl -fsS --unix-socket /run/codex-terminal/ttyd.sock http://localhost/ >/dev/null
+if curl -fsS --max-time 1 http://127.0.0.1:7681/ >/dev/null 2>&1; then
+    printf 'ttyd unexpectedly accepts TCP loopback connections\n' >&2
+    exit 1
+fi
+python3 - <<'PY'
+import os
+import socket
+
+os.setgroups([])
+os.setgid(65534)
+os.setuid(65534)
+for path in (
+    "/run/codex-terminal/shell-dispatch.sock",
+    "/run/codex-terminal/ttyd.sock",
+):
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        client.connect(path)
+    except PermissionError:
+        pass
+    else:
+        raise SystemExit(f"unprivileged user connected to {path}")
+    finally:
+        client.close()
+PY
 
 status_file="/tmp/human-broker-status"
 stdout_file="/tmp/human-broker-stdout"
@@ -155,14 +183,15 @@ if grep -Eq 'Type exactly|Refusing non-interactive' "$stderr_file"; then
     cat "$stderr_file" >&2
     exit 1
 fi
-[ "$(grep -c 'reason=human-terminal' /data/logs/supervisor-broker.log)" -ge 2 ]
+[ "$(grep -c 'reason=human-terminal' /data/logs/supervisor-broker.log)" -ge 1 ]
+[ "$(grep -c 'reason=codex-approval-policy' /data/logs/supervisor-broker.log)" -ge 1 ]
 INNER
 }
 
 start_container "$normal_name"
 wait_for_health "$normal_name"
+smoke_agent_identities "$normal_name"
 smoke_human_terminal_broker "$normal_name"
-smoke_mall_cop_jail "$normal_name"
 docker stop --time 10 "$normal_name" >/dev/null
 normal_exit="$(docker inspect --format '{{.State.ExitCode}}' "$normal_name")"
 [ "$normal_exit" -eq 0 ]

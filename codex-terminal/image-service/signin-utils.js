@@ -109,11 +109,47 @@ function isSignInWrapperProcess(args) {
     return WRAPPER_PROCESS_PATTERNS.some((pattern) => pattern.test(args.trim()));
 }
 
+// An allowlisted URL is not proof that a login is active: an ordinary
+// program (including the agent itself) can print one. Attribute the live
+// non-wrapper process independently and require both sources to agree before
+// the UI offers the URL or a destructive Cancel action.
+function signInProcessLabel(args) {
+    const command = String(args || '').trim();
+    if (!command) {
+        return null;
+    }
+
+    const first = command.split(/\s+/, 1)[0].split('/').pop();
+    if (
+        first === 'codex' &&
+        /(?:^|\s)login(?:\s|$)/.test(command)
+    ) {
+        return 'Codex';
+    }
+    if (
+        first === 'claude' ||
+        /@anthropic-ai\/claude-code|(?:^|\/)claude(?:\.js)?(?:\s|$)/.test(command)
+    ) {
+        return 'Claude Code';
+    }
+    if (
+        /(?:^|\s)login(?:\s|$)/.test(command) &&
+        (
+            first === 'kimi' ||
+            /@moonshot-ai\/kimi-code|(?:^|\/)kimi(?:\.js)?(?:\s|$)/.test(command)
+        )
+    ) {
+        return 'Kimi Code';
+    }
+    return null;
+}
+
 // Codex's browser-flow login redirects to a listener on the CLI's own
-// loopback (localhost:1455), which from the user's browser is a dead end.
-// The pasted failing URL can instead be delivered to the listener inside
-// the container. Only this exact port and path are forwardable.
-const LOOPBACK_CALLBACK = /^(?:https?:\/\/)?(?:localhost|127\.0\.0\.1):1455(\/auth\/callback)\?(\S+)$/i;
+// loopback. The pinned CLI prefers 1455 and falls back to 1457 when that port
+// remains occupied. From the user's browser either address is a dead end, so
+// the pasted URL can instead be delivered to the listener in the container.
+// Only those two ports and the exact callback path are forwardable.
+const LOOPBACK_CALLBACK = /^(?:https?:\/\/)?(?:localhost|127\.0\.0\.1):(1455|1457)(\/auth\/callback)\?(\S+)$/i;
 
 function parseLoopbackCallback(text) {
     if (typeof text !== 'string') {
@@ -123,16 +159,17 @@ function parseLoopbackCallback(text) {
     if (!match) {
         return null;
     }
-    const [, path, query] = match;
+    const [, port, path, query] = match;
     if (/[\s<>"'`]/.test(query)) {
         return null;
     }
-    return { port: 1455, path, query };
+    return { port: Number(port), path, query };
 }
 
 module.exports = {
     extractSignInUrl,
     isSignInWrapperProcess,
     parseLoopbackCallback,
+    signInProcessLabel,
     signInUrlLabel
 };

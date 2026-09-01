@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import stat
@@ -12,15 +13,36 @@ import sys
 import tempfile
 from pathlib import Path
 
-from codex_config_utils import locked_config, read_config
+from codex_config_utils import assert_config_unchanged, locked_config, read_config
 
 DIRECTORY = getattr(os, "O_DIRECTORY", 0)
 NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 
 
-def write_atomic_json(path: Path, data: dict) -> None:
-    text = json.dumps(data, indent=2, sort_keys=True) + "\n"
-    json.loads(text)
+def reject_nonfinite_constant(value: str) -> None:
+    raise ValueError(f"non-finite JSON number is not supported: {value}")
+
+
+def require_finite_numbers(value: object) -> None:
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError("non-finite JSON numbers are not supported")
+    if isinstance(value, list):
+        for item in value:
+            require_finite_numbers(item)
+    elif isinstance(value, dict):
+        for item in value.values():
+            require_finite_numbers(item)
+
+
+def load_strict_json(text: str) -> object:
+    value = json.loads(text, parse_constant=reject_nonfinite_constant)
+    require_finite_numbers(value)
+    return value
+
+
+def write_atomic_json(path: Path, data: dict, *, expected_text: str | None = None) -> None:
+    text = json.dumps(data, indent=2, sort_keys=True, allow_nan=False) + "\n"
+    load_strict_json(text)
     try:
         existing = path.lstat()
         if not stat.S_ISREG(existing.st_mode) or existing.st_nlink != 1:
@@ -37,6 +59,8 @@ def write_atomic_json(path: Path, data: dict) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         os.chmod(temporary, mode)
+        if expected_text is not None:
+            assert_config_unchanged(path, expected_text)
         os.replace(temporary, path)
         directory_fd = os.open(path.parent, os.O_RDONLY | DIRECTORY | NOFOLLOW)
         try:
@@ -72,18 +96,18 @@ def main() -> int:
         parser.error("key must be a dotted path of simple identifiers")
 
     try:
-        value = json.loads(args.value)
-    except json.JSONDecodeError as exc:
-        parser.error(f"value must be valid JSON: {exc}")
+        value = load_strict_json(args.value)
+    except (json.JSONDecodeError, ValueError) as exc:
+        parser.error(f"value must be valid finite JSON: {exc}")
 
     try:
         with locked_config(args.settings):
             original = read_config(args.settings)
-            data = json.loads(original) if original.strip() else {}
+            data = load_strict_json(original) if original.strip() else {}
             if not isinstance(data, dict):
                 raise ValueError("Claude settings root must be a JSON object")
             if set_dotted_value(data, args.key, value):
-                write_atomic_json(args.settings, data)
+                write_atomic_json(args.settings, data, expected_text=original)
         return 0
     except Exception as exc:
         print(f"Claude settings value was left unchanged: {exc}", file=sys.stderr)

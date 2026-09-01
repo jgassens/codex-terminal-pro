@@ -153,5 +153,27 @@ class MonitorAtomicWriteTests(unittest.TestCase):
             self.assertEqual(MODULE.load_state(args.state_file)["counter"], 2)
 
 
+class MonitorOnceExitContractTests(unittest.TestCase):
+    def run_status(self, status: str, *, fail_on_problems: bool = False) -> int:
+        args = types.SimpleNamespace(json=False, fail_on_problems=fail_on_problems)
+        summary = {"status": status, "checks": {}, "persistent_issues": []}
+        with (
+            mock.patch.object(MODULE, "collect_and_save_summary", return_value=summary),
+            mock.patch.object(MODULE, "print_human_status"),
+        ):
+            return MODULE.run_once(args)
+
+    def test_default_exit_reports_collection_success_for_all_health_states(self) -> None:
+        for status in ("clean", "warning", "error", "unavailable"):
+            with self.subTest(status=status):
+                self.assertEqual(self.run_status(status), 0)
+
+    def test_strict_exit_reports_error_or_unavailable(self) -> None:
+        self.assertEqual(self.run_status("clean", fail_on_problems=True), 0)
+        self.assertEqual(self.run_status("warning", fail_on_problems=True), 0)
+        self.assertEqual(self.run_status("error", fail_on_problems=True), 1)
+        self.assertEqual(self.run_status("unavailable", fail_on_problems=True), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

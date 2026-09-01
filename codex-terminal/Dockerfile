@@ -50,22 +50,12 @@ RUN apk add --no-cache \
 ARG CODEX_CLI_VERSION=0.147.0
 RUN npm install -g "@openai/codex@${CODEX_CLI_VERSION}" \
     && codex --version \
-    && CODEX_NATIVE="$(find /usr/local/lib/node_modules/@openai/codex -path '*/vendor/*/bin/codex' -type f -perm -0100 | head -n 1)" \
-    && test -n "${CODEX_NATIVE}" \
-    && install -d -m 0755 /opt/mall-cop-jail/bin /opt/mall-cop-jail/etc/ssl /opt/mall-cop-jail/proc/self /opt/mall-cop-jail/work \
-    && ln "${CODEX_NATIVE}" /opt/mall-cop-jail/bin/codex \
-    && ln -s /bin/codex /opt/mall-cop-jail/proc/self/exe \
-    && cp -a /etc/ssl/. /opt/mall-cop-jail/etc/ssl/ \
-    && cp /etc/resolv.conf /opt/mall-cop-jail/etc/resolv.conf \
-    && cp /etc/hosts /opt/mall-cop-jail/etc/hosts \
-    && chmod 0755 /opt/mall-cop-jail /opt/mall-cop-jail/bin /opt/mall-cop-jail/work \
-    && chmod 0555 /opt/mall-cop-jail/bin/codex \
-    && chmod -R go-w /opt/mall-cop-jail/etc \
     && rm -rf /root/.npm
 
 # Install the optional consultant CLIs. They are inert without credentials:
 # Codex remains this add-on's agent, and these are only reachable through the
-# `consult` command, which runs them read-only as an unprivileged user.
+# `consult` command, which runs each provider read-only as its own unprivileged
+# user.
 ARG CLAUDE_CODE_VERSION=2.1.251
 RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
     && DISABLE_AUTOUPDATER=1 claude --version \
@@ -134,6 +124,13 @@ RUN RESOLVED_ARCH="${TARGETARCH:-${BUILD_ARCH:-$(apk --print-arch)}}" && \
     rm -rf /tmp/gh* && \
     echo "GitHub CLI v${GH_CLI_VERSION} installed successfully"
 
+# Each optional consultant gets a fixed, non-login kernel identity. Disposable
+# homes are mode 0700 and the process also receives a Landlock filesystem rule.
+RUN addgroup -S -g 61001 ctp-claude \
+    && adduser -S -D -H -h /nonexistent -u 61001 -G ctp-claude -s /sbin/nologin ctp-claude \
+    && addgroup -S -g 61002 ctp-kimi \
+    && adduser -S -D -H -h /nonexistent -u 61002 -G ctp-kimi -s /sbin/nologin ctp-kimi
+
 WORKDIR /config
 
 RUN mkdir -p /opt/modbus /opt/solar /opt/home-assistant
@@ -142,6 +139,7 @@ COPY modbus/ /opt/modbus/
 COPY SOLAR.md /opt/solar/SOLAR.md
 COPY HA.md /opt/home-assistant/HA.md
 COPY skills/ /opt/skills/
+COPY config.yaml /opt/codex-terminal/config.yaml
 
 # Copy and install image service.
 COPY image-service/ /opt/image-service/
@@ -170,7 +168,7 @@ RUN mkdir -p /usr/libexec/codex-terminal \
     && chmod +x /opt/scripts/persist-install \
     && chmod +x /opt/scripts/update-apk-manifest \
     && chmod +x /opt/scripts/codex-terminal-ssh-mailbox.py \
-    && chmod +x /opt/scripts/codex-terminal-mall-cop-jail.py \
+    && chmod +x /opt/scripts/codex-terminal-port-owner.py \
     && chmod +x /opt/scripts/codex-prune-plugins \
     && chmod +x /opt/scripts/codex-shell-dispatch \
     && chmod +x /opt/scripts/codex-terminal-briefing \

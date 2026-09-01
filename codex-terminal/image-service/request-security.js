@@ -32,7 +32,8 @@ function parseTrustedIngressAddresses(value) {
 function buildRequestSecurityPolicy(env = process.env) {
     return {
         trustedIngressAddresses: new Set(parseTrustedIngressAddresses(env.HA_INGRESS_PROXY_ADDRESSES)),
-        allowLoopbackDevelopment: parseExplicitBoolean(env.IMAGE_SERVICE_ALLOW_LOOPBACK_DEVELOPMENT)
+        allowLoopbackDevelopment: parseExplicitBoolean(env.IMAGE_SERVICE_ALLOW_LOOPBACK_DEVELOPMENT),
+        allowDockerBridgeDevelopment: parseExplicitBoolean(env.IMAGE_SERVICE_ALLOW_DOCKER_BRIDGE_DEVELOPMENT)
     };
 }
 
@@ -48,10 +49,13 @@ function isAllowedRequestSource(req, policy, options = {}) {
     if (options.allowLoopback && isLoopbackAddress(remoteAddress)) {
         return true;
     }
-    // This switch exists only for explicit local development. Docker-published
-    // traffic normally arrives from the bridge gateway rather than 127.0.0.1,
-    // so the opt-in must cover that source as well. Production never sets it.
-    return policy.allowLoopbackDevelopment;
+    if (policy.allowLoopbackDevelopment && isLoopbackAddress(remoteAddress)) {
+        return true;
+    }
+    // Docker-published traffic arrives from its bridge gateway, not 127.0.0.1.
+    // Keep that broader trust behind a separately named, explicit development
+    // switch; its host port must be published on 127.0.0.1 only.
+    return policy.allowDockerBridgeDevelopment;
 }
 
 function requestHeader(req, name) {

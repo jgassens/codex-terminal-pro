@@ -39,7 +39,9 @@ show_menu() {
 get_user_choice() {
     local choice
     printf "Enter your choice [1-7] (default: 1): " >&2
-    read -r choice
+    if ! IFS= read -r choice; then
+        return 1
+    fi
     if [ -z "$choice" ]; then
         choice=1
     fi
@@ -51,15 +53,16 @@ start_codex() {
     if [ ! -f "${CODEX_HOME:-/data/.codex}/auth.json" ]; then
         echo "Codex auth is missing."
         echo ""
-        echo "The normal Codex browser login uses a localhost callback such as"
-        echo "http://localhost:1455/auth/callback. In a Home Assistant add-on,"
-        echo "that localhost is your browser machine, not this container, so the"
-        echo "standard web login usually cannot finish here."
+        echo "Device-code login is preferred. If browser login stops at a"
+        echo "localhost:1455 or localhost:1457 callback, leave login running and"
+        echo "paste the complete failed URL into the add-on's sign-in dialog."
         echo ""
         echo "Use menu option 3 for device-code login or auth.json import."
         echo ""
         printf "Start Codex anyway? [y/N]: " >&2
-        read -r confirm
+        if ! IFS= read -r confirm; then
+            confirm=""
+        fi
         case "$confirm" in
             y|Y|yes|YES) ;;
             *)
@@ -143,7 +146,10 @@ main() {
     while true; do
         show_banner
         show_menu
-        choice=$(get_user_choice)
+        if ! choice="$(get_user_choice)"; then
+            echo "Input closed. Exiting." >&2
+            return 0
+        fi
 
         case "$choice" in
             1) start_codex ;;

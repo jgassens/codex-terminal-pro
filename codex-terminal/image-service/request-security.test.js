@@ -42,7 +42,12 @@ test('loopback is limited to explicitly internal routes unless development acces
         IMAGE_SERVICE_ALLOW_LOOPBACK_DEVELOPMENT: 'true'
     });
     assert.equal(isAllowedRequestSource(loopbackRequest, developmentPolicy), true);
-    assert.equal(isAllowedRequestSource(request('192.168.1.50'), developmentPolicy), true);
+    assert.equal(isAllowedRequestSource(request('192.168.1.50'), developmentPolicy), false);
+
+    const dockerDevelopmentPolicy = buildRequestSecurityPolicy({
+        IMAGE_SERVICE_ALLOW_DOCKER_BRIDGE_DEVELOPMENT: 'true'
+    });
+    assert.equal(isAllowedRequestSource(request('172.17.0.1'), dockerDevelopmentPolicy), true);
 });
 
 test('sensitive browser requests require a matching Origin or Referer', () => {

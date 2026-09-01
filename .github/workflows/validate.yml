@@ -47,7 +47,7 @@ jobs:
               *bash*) bash -n "$file" ;;
               *'/sh'|*' sh') sh -n "$file" ;;
             esac
-          done < <(find codex-terminal/scripts -maxdepth 1 -type f -print0)
+          done < <(find codex-terminal/scripts config/scripts dev -type f -print0)
           bash -n codex-terminal/run.sh
 
       - name: Validate YAML and JSON

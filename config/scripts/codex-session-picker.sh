@@ -17,6 +17,12 @@ show_menu() {
     else
         echo "Codex CLI: not found"
     fi
+    if [ -f "${CODEX_HOME:-/data/.codex}/auth.json" ]; then
+        echo "Codex auth: auth.json present"
+    else
+        echo "Codex auth: missing - use option 3 before starting Codex"
+        echo "Note: browser login from this add-on redirects to localhost on your computer, not the add-on."
+    fi
     echo ""
     echo "Choose an action:"
     echo ""
@@ -33,7 +39,9 @@ show_menu() {
 get_user_choice() {
     local choice
     printf "Enter your choice [1-7] (default: 1): " >&2
-    read -r choice
+    if ! IFS= read -r choice; then
+        return 1
+    fi
     if [ -z "$choice" ]; then
         choice=1
     fi
@@ -42,6 +50,28 @@ get_user_choice() {
 
 start_codex() {
     cd /config
+    if [ ! -f "${CODEX_HOME:-/data/.codex}/auth.json" ]; then
+        echo "Codex auth is missing."
+        echo ""
+        echo "Device-code login is preferred. If browser login stops at a"
+        echo "localhost:1455 or localhost:1457 callback, leave login running and"
+        echo "paste the complete failed URL into the add-on's sign-in dialog."
+        echo ""
+        echo "Use menu option 3 for device-code login or auth.json import."
+        echo ""
+        printf "Start Codex anyway? [y/N]: " >&2
+        if ! IFS= read -r confirm; then
+            confirm=""
+        fi
+        case "$confirm" in
+            y|Y|yes|YES) ;;
+            *)
+                echo "Returning to menu."
+                pause
+                return
+                ;;
+        esac
+    fi
     echo "Starting Codex in /config..."
     sleep 1
     CODEX_TERMINAL_AGENT_EXECUTION=1 codex
@@ -116,7 +146,10 @@ main() {
     while true; do
         show_banner
         show_menu
-        choice=$(get_user_choice)
+        if ! choice="$(get_user_choice)"; then
+            echo "Input closed. Exiting." >&2
+            return 0
+        fi
 
         case "$choice" in
             1) start_codex ;;

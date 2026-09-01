@@ -1340,22 +1340,32 @@
 
         // Fetch configuration and load ttyd
         // Use relative paths for Home Assistant ingress compatibility
-        fetch(ingressPath('config'))
-            .then(res => res.json())
-            .then(config => {
-                ttydPort = config.ttydPort;
-                uploadDir = config.uploadDir;
-                loadedUiBuildId = config.uiBuildId || null;
-                setTerminalModeState(config.terminalMode || 'codex', false);
-                console.log('Config loaded:', config);
-                // Load ttyd via proxy endpoint
-                loadTerminal();
-            })
-            .catch(err => {
-                console.error('Failed to load config:', err);
-                // Fallback: load terminal anyway
-                loadTerminal();
-            });
+        function loadInitialConfig(attempt = 0) {
+            fetch(ingressPath('config'))
+                .then(res => {
+                    if (!res.ok) {
+                        throw new Error(`HTTP ${res.status}`);
+                    }
+                    return res.json();
+                })
+                .then(config => {
+                    ttydPort = config.ttydPort;
+                    uploadDir = config.uploadDir;
+                    loadedUiBuildId = config.uiBuildId || null;
+                    setTerminalModeState(config.terminalMode || 'codex', false);
+                    console.log('Config loaded:', config);
+                    loadTerminal();
+                })
+                .catch(err => {
+                    if (attempt < 100) {
+                        setTimeout(() => loadInitialConfig(attempt + 1), 100);
+                        return;
+                    }
+                    console.error('Failed to load terminal configuration:', err);
+                    setStatus('The terminal did not become ready. Restart the add-on and check its logs.', 'error');
+                });
+        }
+        loadInitialConfig();
 
         // Use an ingress-aware absolute path to avoid //terminal/ when Home
         // Assistant serves the add-on from a double-slash ingress base URL.
@@ -2537,46 +2547,13 @@
             return normalized.slice(SHELL_DISPATCH_PREFIX.length).replace(/^\s+/, '');
         }
 
-        function repairDuplicateFanout(text) {
-            const pending = [];
-            let repaired = '';
-
-            for (const char of String(text || '')) {
-                const index = pending.indexOf(char);
-                if (index !== -1 && index < 3) {
-                    pending.splice(index, 1);
-                    continue;
-                }
-
-                repaired += char;
-                pending.push(char);
-                if (pending.length > 3) {
-                    pending.shift();
-                }
-            }
-
-            return repaired.replace(/\s+/g, ' ').trim();
-        }
-
         function normalizeDispatchCommand(command) {
             let normalized = String(command || '').trim();
-            let strippedPrefixFragment = false;
 
             while (normalized.startsWith(SHELL_DISPATCH_PREFIX)) {
                 normalized = normalized.slice(SHELL_DISPATCH_PREFIX.length).replace(/^\s+/, '');
-                strippedPrefixFragment = true;
             }
-
-            if (!strippedPrefixFragment) {
-                return String(command || '').trim();
-            }
-
-            const repaired = repairDuplicateFanout(normalized);
-            const reduction = normalized.length > 0
-                ? (normalized.length - repaired.length) / normalized.length
-                : 0;
-
-            return reduction >= 0.35 ? repaired : normalized;
+            return normalized;
         }
 
         function promptPasteText(text) {
@@ -4073,11 +4050,17 @@
                 return false;
             }
 
-            if (file.type && file.type.startsWith('image/')) {
-                return true;
+            if (file.type) {
+                return new Set([
+                    'image/jpeg',
+                    'image/png',
+                    'image/gif',
+                    'image/webp',
+                    'image/svg+xml'
+                ]).has(file.type.toLowerCase());
             }
 
-            return /\.(heic|heif|jpe?g|png|gif|webp|svg)$/i.test(file.name || '');
+            return /\.(jpe?g|png|gif|webp|svg)$/i.test(file.name || '');
         }
 
         function imageFilesFromFileList(fileList) {
@@ -4565,6 +4548,7 @@
         // phone, and takes the returned code back without terminal typing.
 
         let renderedSignInUrl = null;
+        let renderedSignInTargetMode = null;
         let dismissedSignInUrl = null;
         let loadedUiBuildId = null;
         let signInSubmitInFlight = false;
@@ -4596,28 +4580,30 @@
             const who = source || 'The consultant';
             // Claude Code hands back a code to paste here. Codex normally
             // takes its code on the website, but its browser-flow fallback
-            // dead ends on a localhost:1455 URL that can be pasted instead.
+            // dead ends on a localhost:1455/1457 URL that can be pasted instead.
             signinCodeRow.classList.toggle('hidden', source !== 'Claude Code' && source !== 'Codex');
             if (source === 'Claude Code') {
                 signinCodeInput.placeholder = 'Paste the code from the authorize page here';
                 signinLinkMessage.textContent =
                     `${who} is waiting on this sign-in link. Click it to open it in this browser, or scan the QR code with your phone. When the authorize page gives you a code, paste it in the field below.`;
             } else if (source === 'Codex') {
-                signinCodeInput.placeholder = 'Or paste a failed localhost:1455 URL here';
+                signinCodeInput.placeholder = 'Or paste a failed localhost callback URL here';
                 signinLinkMessage.textContent =
-                    `${who} is waiting on this sign-in link. Open it and enter the one-time code shown in the terminal. If your browser instead ends on a localhost:1455 "can't connect" page, copy that address and paste it below to finish.`;
+                    `${who} is waiting on this sign-in link. Open it and enter the one-time code shown in the terminal. If your browser instead ends on a localhost:1455 or localhost:1457 "can't connect" page, copy that address and paste it below to finish.`;
             } else {
                 signinLinkMessage.textContent =
                     `${who} is waiting on this sign-in link. Click it to open it in this browser, or scan the QR code with your phone, and enter the one-time code shown in the terminal there.`;
             }
             signinLinkPanel.classList.add('active');
             renderedSignInUrl = data.url;
+            renderedSignInTargetMode = data.targetMode;
         }
 
         function closeSignInPanel() {
             signinLinkPanel.classList.remove('active');
             signinLinkQr.innerHTML = '';
             renderedSignInUrl = null;
+            renderedSignInTargetMode = null;
         }
 
         // Pop the dialog on its own when a sign-in link appears, and drop it
@@ -4665,7 +4651,14 @@
         signinLinkCancel.addEventListener('click', async () => {
             setStatus('Cancelling sign-in…');
             try {
-                const res = await protectedIngressFetch('terminal-cancel-signin', { method: 'POST' });
+                const res = await protectedIngressFetch('terminal-cancel-signin', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        mode: renderedSignInTargetMode,
+                        url: renderedSignInUrl
+                    })
+                });
                 const data = await res.json().catch(() => null);
                 if (!res.ok || !data || !data.success) {
                     throw new Error((data && data.error) || `HTTP ${res.status}`);
@@ -4699,11 +4692,15 @@
             try {
                 // A pasted localhost callback goes to the CLI's own listener
                 // inside the container rather than into the terminal.
-                if (/^(https?:\/\/)?(localhost|127\.0\.0\.1):1455\/auth\/callback\?/i.test(value)) {
+                if (/^(https?:\/\/)?(localhost|127\.0\.0\.1):(1455|1457)\/auth\/callback\?/i.test(value)) {
                     const res = await protectedIngressFetch('agent-callback-forward', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ url: value })
+                        body: JSON.stringify({
+                            url: value,
+                            mode: renderedSignInTargetMode,
+                            signInUrl: renderedSignInUrl
+                        })
                     });
                     const data = await res.json().catch(() => null);
                     if (!res.ok || !data || !data.success) {
@@ -4717,10 +4714,18 @@
                     return;
                 }
 
-                const inserted = await insertTextIntoTerminal(value);
-                const entered = inserted && await sendTerminalControl('enter');
-                if (!inserted || !entered) {
-                    setStatus('Could not send the code to the terminal.', 'error');
+                const res = await protectedIngressFetch('terminal-signin-code', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        code: value,
+                        mode: renderedSignInTargetMode,
+                        url: renderedSignInUrl
+                    })
+                });
+                const data = await res.json().catch(() => null);
+                if (!res.ok || !data || !data.success) {
+                    setStatus((data && data.error) || 'Could not send the code to the sign-in process.', 'error');
                     return;
                 }
                 signinCodeInput.value = '';

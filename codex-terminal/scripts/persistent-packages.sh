@@ -8,7 +8,6 @@ set -euo pipefail
 PERSIST_ROOT="${PERSIST_ROOT:-/data/packages}"
 PERSIST_BIN="$PERSIST_ROOT/bin"
 PERSIST_PYTHON="$PERSIST_ROOT/python"
-PERSIST_APK_CACHE="$PERSIST_ROOT/apk-cache"
 PERSIST_APK_MANIFEST="$PERSIST_ROOT/apk-packages.txt"
 PERSIST_PIP_MANIFEST="$PERSIST_PYTHON/requirements.txt"
 PERSIST_PYTHON_MARKER="$PERSIST_PYTHON/interpreter-version"
@@ -298,30 +297,6 @@ quarantine_legacy_package_copies() {
     fi
 }
 
-# Initialize persistent package directories
-init_persistent_storage() {
-    bashio::log.info "Initializing persistent package storage..."
-
-    mkdir -p "$PERSIST_BIN" \
-             "$PERSIST_PYTHON" \
-             "$PERSIST_APK_CACHE"
-
-    chmod 755 "$PERSIST_ROOT" "$PERSIST_BIN" "$PERSIST_PYTHON"
-
-    bashio::log.info "Persistent storage ready at: $PERSIST_ROOT"
-}
-
-# Setup environment variables for persistent packages
-setup_environment() {
-    # Guarded/system commands win; unique persistent tools remain available.
-    export PATH="$PERSIST_PYTHON/venv/bin:$PATH:$PERSIST_BIN"
-
-    # Python virtual environment
-    export VIRTUAL_ENV="$PERSIST_PYTHON/venv"
-
-    bashio::log.info "Environment configured for persistent packages"
-}
-
 record_apk_manifest() {
     "$PERSIST_MANIFEST_UPDATER" --kind apk "$PERSIST_APK_MANIFEST" "$@"
 }
@@ -495,42 +470,35 @@ list_persistent_packages() {
     fi
 }
 
-# Main execution when sourced
-case "${1:-init}" in
-    init)
-        quarantine_legacy_package_copies
-        init_persistent_storage
-        setup_environment
-        restore_apk_manifest
-        restore_python_environment
-        auto_install_packages
-        ;;
-    migrate)
-        quarantine_legacy_package_copies
-        ;;
-    restore)
-        restore_apk_manifest
-        ;;
-    restore-pip)
-        restore_python_environment
-        ;;
-    install-apk)
-        shift
-        persist_apk_install "$@"
-        ;;
-    install-pip)
-        shift
-        persist_pip_install "$@"
-        ;;
-    list)
-        list_persistent_packages
-        ;;
-    env)
-        setup_environment
-        ;;
-    *)
-        bashio::log.error "Unknown command: $1"
-        echo "Usage: $0 {init|migrate|restore|restore-pip|install-apk|install-pip|list|env}"
-        exit 1
-        ;;
-esac
+if [ "${PERSIST_PACKAGE_MANAGER_LIBRARY_ONLY:-false}" != "true" ]; then
+    case "${1:-}" in
+        migrate)
+            quarantine_legacy_package_copies
+            ;;
+        restore)
+            restore_apk_manifest
+            ;;
+        restore-pip)
+            restore_python_environment
+            ;;
+        auto-install)
+            auto_install_packages
+            ;;
+        install-apk)
+            shift
+            persist_apk_install "$@"
+            ;;
+        install-pip)
+            shift
+            persist_pip_install "$@"
+            ;;
+        list)
+            list_persistent_packages
+            ;;
+        *)
+            bashio::log.error "Unknown command: ${1:-<missing>}"
+            echo "Usage: $0 {migrate|restore|restore-pip|auto-install|install-apk|install-pip|list}"
+            exit 1
+            ;;
+    esac
+fi

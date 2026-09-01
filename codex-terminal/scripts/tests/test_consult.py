@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 SCRIPTS = Path(__file__).resolve().parents[1]
@@ -34,11 +35,25 @@ class ConsultantSpecTests(unittest.TestCase):
         for agent, spec in consult.CONSULTANTS.items():
             self.assertTrue(spec["label"].strip(), agent)
             self.assertTrue(spec["binary"].strip(), agent)
+            self.assertIsInstance(spec["uid"], int, agent)
+            self.assertIsInstance(spec["gid"], int, agent)
             self.assertRegex(spec["home_env"], r"^[A-Z][A-Z0-9_]*$")
             self.assertTrue(spec["default_home"].startswith("/data/."), agent)
             self.assertTrue(spec["credential_files"], agent)
             self.assertTrue(spec["auth_helper"].endswith("auth-helper"), agent)
             self.assertTrue(callable(spec["build_args"]), agent)
+
+    def test_consultants_have_distinct_fixed_identities(self) -> None:
+        identities = {(spec["uid"], spec["gid"]) for spec in consult.CONSULTANTS.values()}
+        self.assertEqual(len(identities), len(consult.CONSULTANTS))
+        self.assertEqual(
+            (consult.CONSULTANTS["claude"]["uid"], consult.CONSULTANTS["claude"]["gid"]),
+            (61001, 61001),
+        )
+        self.assertEqual(
+            (consult.CONSULTANTS["kimi"]["uid"], consult.CONSULTANTS["kimi"]["gid"]),
+            (61002, 61002),
+        )
 
     def test_claude_copies_account_state_not_just_the_token(self) -> None:
         # A token with no account attached makes Claude report "Not logged in",
@@ -167,7 +182,9 @@ class ConsultCredentialCopyTests(unittest.TestCase):
             link = root / "link"
             link.symlink_to(secret)
             # O_NOFOLLOW must refuse the symlink rather than follow it out.
-            self.assertFalse(consult.copy_credential(link, root / "copied"))
+            self.assertFalse(
+                consult.copy_credential(link, root / "copied", os.geteuid(), os.getegid())
+            )
             self.assertFalse((root / "copied").exists())
 
     def test_credential_copy_writes_owner_only(self) -> None:
@@ -176,21 +193,168 @@ class ConsultCredentialCopyTests(unittest.TestCase):
             source = root / "creds.json"
             source.write_text('{"token": "abc"}')
             destination = root / "out.json"
-            if os.geteuid() != 0:
-                # fchown to nobody needs root; the mode is still asserted.
-                try:
-                    consult.copy_credential(source, destination)
-                except PermissionError:
-                    self.skipTest("credential chown requires root")
-            else:
-                consult.copy_credential(source, destination)
+            consult.copy_credential(source, destination, os.geteuid(), os.getegid())
             self.assertEqual(destination.read_text(), '{"token": "abc"}')
             self.assertEqual(destination.stat().st_mode & 0o777, 0o600)
+
+    def test_credential_copy_handles_short_reads_and_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "creds.json"
+            destination = root / "out.json"
+            expected = b'{"token":"partial-io-must-not-truncate"}'
+            source.write_bytes(expected)
+            real_read = os.read
+            real_write = os.write
+
+            def short_read(fd: int, size: int) -> bytes:
+                return real_read(fd, min(size, 3))
+
+            def short_write(fd: int, payload) -> int:
+                return real_write(fd, payload[:2])
+
+            with mock.patch.object(consult.os, "read", side_effect=short_read), \
+                    mock.patch.object(consult.os, "write", side_effect=short_write):
+                consult.copy_credential(
+                    source, destination, os.geteuid(), os.getegid()
+                )
+            self.assertEqual(destination.read_bytes(), expected)
+
+    def test_credential_copy_rejects_content_over_the_bound(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "creds.json"
+            destination = root / "out.json"
+            source.write_bytes(b"x" * (consult.MAX_CREDENTIAL_BYTES + 1))
+            with self.assertRaisesRegex(consult.ConsultError, "larger than expected"):
+                consult.copy_credential(
+                    source, destination, os.geteuid(), os.getegid()
+                )
+            self.assertFalse(destination.exists())
 
     def test_missing_credential_is_not_an_error(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            self.assertFalse(consult.copy_credential(root / "absent", root / "out"))
+            self.assertFalse(
+                consult.copy_credential(root / "absent", root / "out", 61001, 61001)
+            )
+
+
+class ConsultWorkspaceProjectionTests(unittest.TestCase):
+    def test_projection_excludes_secret_stores_and_redacts_inline_values(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "config"
+            target = root / "projection"
+            (source / ".storage").mkdir(parents=True)
+            (source / "automations").mkdir()
+            (source / "configuration.yaml").write_text(
+                "demo_token: github_pat_abcdefghijklmnopqrstuvwxyz123456\n"
+                "ordinary: visible\n",
+                encoding="utf-8",
+            )
+            (source / "secrets.yaml").write_text("password: actual-secret\n")
+            (source / ".storage" / "auth").write_text("root-token")
+            (source / "automations" / "safe.yaml").write_text("alias: Lamp\n")
+            outside = root / "outside"
+            outside.write_text("do-not-follow")
+            (source / "linked.yaml").symlink_to(outside)
+
+            result = consult.build_filtered_workspace(source, target)
+
+            self.assertEqual(result["files"], 2)
+            projected = (target / "configuration.yaml").read_text()
+            self.assertIn("ordinary: visible", projected)
+            self.assertNotIn("github_pat_", projected)
+            self.assertIn("[redacted]", projected)
+            self.assertFalse((target / "secrets.yaml").exists())
+            self.assertFalse((target / ".storage").exists())
+            self.assertFalse((target / "linked.yaml").exists())
+            self.assertEqual((target / "automations" / "safe.yaml").read_text(), "alias: Lamp\n")
+            self.assertEqual((target / "configuration.yaml").stat().st_mode & 0o777, 0o444)
+            self.assertEqual((target / "automations").stat().st_mode & 0o777, 0o555)
+
+    def test_projection_skips_binary_and_oversized_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "config"
+            target = root / "projection"
+            source.mkdir()
+            (source / "binary.yaml").write_bytes(b"safe\x00secret")
+            (source / "large.yaml").write_bytes(b"x" * (consult.MAX_WORKSPACE_FILE_BYTES + 1))
+
+            result = consult.build_filtered_workspace(source, target)
+
+            self.assertEqual(result, {"files": 0, "bytes": 0})
+
+    def test_projection_skips_hardlinks_that_can_alias_a_blocked_secret(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "config"
+            target = root / "projection"
+            source.mkdir()
+            secret = source / "secrets.yaml"
+            secret.write_text("innocent_name: actual-secret\n", encoding="utf-8")
+            os.link(secret, source / "safe-looking.yaml")
+
+            result = consult.build_filtered_workspace(source, target)
+
+            self.assertEqual(result, {"files": 0, "bytes": 0})
+            self.assertFalse((target / "safe-looking.yaml").exists())
+
+    def test_landlock_abi_masks_include_write_denials(self) -> None:
+        abi_one = consult.landlock_handled_access(1)
+        abi_three = consult.landlock_handled_access(3)
+        self.assertTrue(abi_one & consult.LANDLOCK_ACCESS_FS_WRITE_FILE)
+        self.assertFalse(abi_one & consult.LANDLOCK_ACCESS_FS_TRUNCATE)
+        self.assertTrue(abi_three & consult.LANDLOCK_ACCESS_FS_TRUNCATE)
+
+
+class ConsultSandboxBaseTests(unittest.TestCase):
+    def test_sandbox_base_refuses_a_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "target"
+            target.mkdir(mode=0o700)
+            link = root / "consult"
+            link.symlink_to(target)
+            original_base = consult.SANDBOX_BASE
+            consult.SANDBOX_BASE = str(link)
+            try:
+                with self.assertRaisesRegex(consult.ConsultError, "real root-owned"):
+                    consult.ensure_sandbox_base()
+            finally:
+                consult.SANDBOX_BASE = original_base
+            self.assertEqual(target.stat().st_mode & 0o777, 0o700)
+
+    def test_sandbox_base_refuses_an_unprivileged_owner(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory) / "consult"
+            base.mkdir(mode=0o711)
+            base.chmod(0o711)
+            if os.geteuid() == 0:
+                os.chown(base, 65534, 65534)
+            original_base = consult.SANDBOX_BASE
+            consult.SANDBOX_BASE = str(base)
+            try:
+                with self.assertRaisesRegex(consult.ConsultError, "real root-owned"):
+                    consult.ensure_sandbox_base()
+            finally:
+                consult.SANDBOX_BASE = original_base
+
+    @unittest.skipUnless(os.geteuid() == 0, "root-owned sandbox creation requires root")
+    def test_sandbox_base_creates_the_expected_root_owned_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory) / "consult"
+            original_base = consult.SANDBOX_BASE
+            consult.SANDBOX_BASE = str(base)
+            try:
+                self.assertEqual(consult.ensure_sandbox_base(), base)
+            finally:
+                consult.SANDBOX_BASE = original_base
+            info = base.lstat()
+            self.assertEqual((info.st_uid, info.st_gid), (0, 0))
+            self.assertEqual(info.st_mode & 0o777, 0o711)
 
 
 class ConsultCliTests(unittest.TestCase):
@@ -219,13 +383,30 @@ class ConsultCliTests(unittest.TestCase):
 
     def test_unsigned_consultant_explains_how_to_set_it_up(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_dir = root / "config"
+            config_dir.mkdir()
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            invoked = root / "claude-invoked"
+            fake_claude = bin_dir / "claude"
+            fake_claude.write_text(
+                "#!/bin/sh\nprintf 'invoked\\n' > \"$FAKE_CLAUDE_INVOKED\"\nexit 99\n",
+                encoding="utf-8",
+            )
+            fake_claude.chmod(0o755)
             result = self.run_consult(
                 "--agent", "claude", "does this look right?",
-                env={"CLAUDE_CONFIG_DIR": directory},
+                env={
+                    "CLAUDE_CONFIG_DIR": str(config_dir),
+                    "FAKE_CLAUDE_INVOKED": str(invoked),
+                    "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+                },
             )
             self.assertEqual(result.returncode, 2)
             self.assertIn("not set up yet", result.stderr)
             self.assertIn("claude-auth-helper", result.stderr)
+            self.assertFalse(invoked.exists(), "unsigned consultant must not be executed")
 
     def test_empty_question_is_rejected(self) -> None:
         result = self.run_consult("--agent", "claude", "   ")
@@ -317,6 +498,57 @@ class KimiAuthHelperTests(unittest.TestCase):
         self.assertNotIn('AUTH_FILE="$KIMI_CODE_HOME/credentials.json"', text)
         self.assertIn('CRED_DIR="$KIMI_CODE_HOME/credentials"', text)
 
+    def test_helper_tightens_the_credentials_directory_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory) / "kimi"
+            credentials = home / "credentials"
+            credentials.mkdir(parents=True)
+            credentials.chmod(0o777)
+
+            self.source_helper(home, "ensure_kimi_home")
+
+            self.assertEqual(credentials.stat().st_mode & 0o777, 0o700)
+
+    def test_login_tightens_a_recreated_credentials_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            home = root / "kimi"
+            credentials = home / "credentials"
+            credentials.mkdir(parents=True)
+            (credentials / "stale.json").write_text("{}")
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            fake_kimi = fake_bin / "kimi"
+            fake_kimi.write_text(
+                "#!/bin/sh\n"
+                'mkdir -p "$KIMI_CODE_HOME/credentials"\n'
+                'chmod 0777 "$KIMI_CODE_HOME/credentials"\n'
+                'printf "{}" > "$KIMI_CODE_HOME/credentials/new.json"\n'
+                'chmod 0666 "$KIMI_CODE_HOME/credentials/new.json"\n',
+                encoding="utf-8",
+            )
+            fake_kimi.chmod(0o755)
+            env = {
+                **os.environ,
+                "KIMI_AUTH_HELPER_NO_MAIN": "1",
+                "KIMI_CODE_HOME": str(home),
+                "PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}",
+            }
+
+            result = subprocess.run(
+                ["bash", "-c", '. "$1"; device_login', "test", str(self.HELPER)],
+                input="\n\n",
+                capture_output=True,
+                text=True,
+                check=False,
+                env=env,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(credentials.stat().st_mode & 0o777, 0o700)
+            self.assertEqual((credentials / "new.json").stat().st_mode & 0o777, 0o600)
+            self.assertTrue(list(home.glob("credentials.superseded-*")))
+
     def test_helper_offers_to_clear_a_half_finished_sign_in(self) -> None:
         text = self.HELPER.read_text(encoding="utf-8")
         self.assertIn("has_token && ! has_model", text)
@@ -349,9 +581,11 @@ class ConsultPromptFramingTests(unittest.TestCase):
         self.assertIn('the model "kimi-code/k3"', framed)
         self.assertNotIn("reasoning effort", framed)
 
-    def test_an_unconfigured_consult_is_left_alone(self) -> None:
+    def test_every_consult_warns_against_reading_credentials(self) -> None:
         for spec in consult.CONSULTANTS.values():
-            self.assertEqual(consult.framed_prompt(spec, "plain question", "", ""), "plain question")
+            framed = consult.framed_prompt(spec, "plain question", "", "")
+            self.assertIn("Do not open, quote, or report secrets.yaml", framed)
+            self.assertTrue(framed.endswith("plain question"))
 
 
 class KimiEffortTests(unittest.TestCase):

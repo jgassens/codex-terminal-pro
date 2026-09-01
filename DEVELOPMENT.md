@@ -17,7 +17,7 @@ docker build -t local/codex-terminal-pro:test ./codex-terminal
 mkdir -p /tmp/codex-terminal-data /tmp/ha-config
 install -m 600 config/options.json /tmp/codex-terminal-data/options.json
 docker run --rm -it \
-  -e IMAGE_SERVICE_ALLOW_LOOPBACK_DEVELOPMENT=true \
+  -e IMAGE_SERVICE_ALLOW_DOCKER_BRIDGE_DEVELOPMENT=true \
   -p 127.0.0.1:7680:7680 \
   -v /tmp/codex-terminal-data:/data \
   -v /tmp/ha-config:/config \
@@ -26,9 +26,13 @@ docker run --rm -it \
 
 Open `http://localhost:7680`.
 
-The development override accepts loopback traffic only. Production add-on
-traffic remains restricted to Home Assistant's authenticated ingress proxy;
-the ttyd port is internal and is reached through the image-service proxy.
+The Docker-specific override trusts traffic arriving through Docker's bridge,
+so the `-p 127.0.0.1:7680:7680` host binding is a required security boundary;
+do not publish that port on `0.0.0.0`. The host-native `dev/dev-run.sh` harness
+uses the narrower loopback override and binds its server to `127.0.0.1`.
+Production add-on traffic remains restricted to Home Assistant's authenticated
+ingress proxy. Its writable ttyd endpoint uses a root-only Unix socket and is
+reachable only through the image-service proxy.
 
 ## Validation
 
@@ -48,16 +52,17 @@ not depend on installing PyYAML first.
 
 ## Release Checklist
 
-Use one release number in all four release surfaces:
+Use one release number in all three release surfaces:
 
 1. `codex-terminal/config.yaml` `version`
 2. `codex-terminal/Dockerfile` `io.hass.version`
-3. The fallback `APP_VERSION` in `codex-terminal/run.sh`
-4. A new heading in `codex-terminal/CHANGELOG.md`
+3. A new heading in `codex-terminal/CHANGELOG.md`
 
 Change `CODEX_CLI_VERSION` in the Dockerfile only when the bundled Codex CLI is
-also being upgraded. The repository contract test checks that the first three
-release-version values agree.
+also being upgraded. When it changes, update the matching pinned-version checks
+in `codex-terminal/scripts/tests/container-smoke.sh` and run that smoke test
+against the rebuilt image. Startup reads its diagnostic fallback from the
+image's copied `config.yaml`, so there is no third hand-maintained version.
 
 ## Auth Testing
 

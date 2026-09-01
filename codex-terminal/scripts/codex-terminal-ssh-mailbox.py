@@ -59,6 +59,57 @@ def open_directory_without_symlinks(path: str) -> int:
         raise
 
 
+def ensure_private_directory_without_symlinks(path: str) -> None:
+    """Create and secure a directory without following any path symlink."""
+
+    if not os.path.isabs(path):
+        raise UnsafeMailbox("mailbox path must be absolute")
+
+    components = Path(path).parts[1:]
+    if not components:
+        raise UnsafeMailbox("refusing to change permissions on the filesystem root")
+
+    fd = os.open("/", os.O_RDONLY | DIRECTORY | CLOEXEC)
+    try:
+        for component in components:
+            if component in {"", ".", ".."}:
+                raise UnsafeMailbox("mailbox path has an unsafe component")
+            try:
+                next_fd = os.open(
+                    component,
+                    os.O_RDONLY | DIRECTORY | NOFOLLOW | CLOEXEC,
+                    dir_fd=fd,
+                )
+            except FileNotFoundError:
+                try:
+                    os.mkdir(component, mode=0o700, dir_fd=fd)
+                except FileExistsError:
+                    # Another bridge instance may have created the directory
+                    # between the failed open and mkdir.  Re-open it with
+                    # O_NOFOLLOW instead of trusting the raced path.
+                    pass
+                next_fd = os.open(
+                    component,
+                    os.O_RDONLY | DIRECTORY | NOFOLLOW | CLOEXEC,
+                    dir_fd=fd,
+                )
+            os.close(fd)
+            fd = next_fd
+
+        info = os.fstat(fd)
+        if info.st_uid != os.geteuid():
+            raise UnsafeMailbox("mailbox directory has an unexpected owner")
+        os.fchmod(fd, 0o700)
+    finally:
+        os.close(fd)
+
+
+def prepare(args: argparse.Namespace) -> int:
+    for path in args.paths:
+        ensure_private_directory_without_symlinks(path)
+    return 0
+
+
 def request_name(request_root: str, request_dir: str) -> str:
     root = os.path.abspath(request_root)
     candidate = os.path.abspath(request_dir)
@@ -290,9 +341,12 @@ def cleanup(args: argparse.Namespace) -> int:
             try:
                 info = os.fstat(request_fd)
                 done = entry_stat(request_fd, "done")
-                if done is not None and not stat.S_ISREG(done.st_mode):
-                    continue
-                ttl = args.done_ttl if done is not None else args.abandoned_ttl
+                # Only a regular completion marker proves that the bridge
+                # finished the request.  A planted symlink, FIFO, or directory
+                # must age out on the abandoned-request TTL instead of making
+                # the poisoned request immortal.
+                completed = done is not None and stat.S_ISREG(done.st_mode)
+                ttl = args.done_ttl if completed else args.abandoned_ttl
                 if now - int(info.st_mtime) < ttl:
                     continue
             finally:
@@ -310,6 +364,10 @@ def cleanup(args: argparse.Namespace) -> int:
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser()
     subparsers = result.add_subparsers(dest="operation", required=True)
+
+    prepare_parser = subparsers.add_parser("prepare")
+    prepare_parser.add_argument("paths", nargs="+")
+    prepare_parser.set_defaults(function=prepare)
 
     snapshot_parser = subparsers.add_parser("snapshot")
     snapshot_parser.add_argument("request_root")

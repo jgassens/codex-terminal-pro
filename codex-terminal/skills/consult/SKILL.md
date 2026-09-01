@@ -29,7 +29,7 @@ consult --agent kimi "Question here."
 The question is the whole prompt, so write it as you would to a competent
 colleague who has not seen the conversation: state the goal, what you already
 tried, and what specifically you want judged. Name the files worth reading;
-the consultant can open them itself.
+the consultant can open their filtered snapshot copies itself.
 
 A consult usually takes one to three minutes, because the consultant is
 reading files before it answers. That is longer than a normal command, so
@@ -42,19 +42,18 @@ Use `--timeout SECONDS` to allow longer than the configured default, up to
 
 ## What the consultant can see
 
-It runs as an unprivileged user with **read-only access to `/config`**. It can
-read the Home Assistant configuration to answer, and cannot modify anything.
-It does not see your conversation with the user, your session history, or any
-credential file.
+It runs as an unprivileged user inside a Linux Landlock filesystem policy. It
+can read a bounded, root-owned text snapshot of `/config`, and cannot read the
+live `/config`, `/data`, `.storage`, `secrets.yaml`, credential/key files,
+databases, logs, backups, symlinks, binary files, or oversized files. Common
+inline token and secret assignments are redacted in the snapshot. It can write
+only to its disposable credential home, which is deleted after the answer.
 
-Three things follow. First, give it the context it needs in the question
-itself, because it cannot ask a follow-up. Second, the user's configuration is
-being sent to a third-party model, so do not consult over trivia, and do not
-paste secrets into the question. Third, `/config` can hold real credentials,
-such as `secrets.yaml` and tokens under `.storage`, and a consultant may read
-them while answering. Point it at the files the question needs rather than
-inviting a broad search, and if a consultant reports having seen a credential,
-tell the user plainly instead of burying it.
+Two things follow. First, give it the context it needs in the question itself,
+because it cannot ask a follow-up. Second, the filtered configuration is being
+sent to a third-party model, so do not consult over trivia and never paste a
+secret into the question. The run fails closed if the kernel isolation cannot
+be installed; do not bypass that failure by launching the provider CLI directly.
 
 ## Using the answer
 

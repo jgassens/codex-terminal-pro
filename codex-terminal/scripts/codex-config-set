@@ -25,6 +25,8 @@ def main() -> int:
     args = parser.parse_args()
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*", args.key):
         parser.error("key must be a simple top-level TOML key")
+    if "\r" in args.value or "\n" in args.value:
+        parser.error("value must be one line and cannot contain CR or LF characters")
 
     try:
         with locked_config(args.config):
@@ -32,7 +34,7 @@ def main() -> int:
             validate_toml(original)
             updated = set_top_level_value(original, args.key, args.value)
             if updated != original:
-                write_atomic_validated(args.config, updated)
+                write_atomic_validated(args.config, updated, expected_text=original)
         return 0
     except Exception as exc:
         print(f"Codex config value was left unchanged: {exc}", file=sys.stderr)

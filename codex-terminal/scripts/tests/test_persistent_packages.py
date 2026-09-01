@@ -297,50 +297,10 @@ exit 64
             self.assertNotIn("Python packages installed!", completed.stdout)
             self.assertIn("Failed to install or persist Python packages", completed.stdout)
 
-    def test_run_script_reads_newline_config_arrays_and_rejects_options(self):
-        with tempfile.TemporaryDirectory() as tempdir:
-            install_log = Path(tempdir) / "install.log"
-            installer = Path(tempdir) / "persist-install"
-            self.make_executable(
-                installer,
-                '#!/bin/sh\nprintf "%s\\n" "$*" >> "$INSTALL_LOG"\n',
-            )
-            command = r'''
-function bashio::log.info() { :; }
-function bashio::log.warning() { :; }
-function bashio::log.error() { :; }
-function bashio::config() {
-    case "$1" in
-        persistent_apk_packages) printf 'curl\ngit\n--repository=attacker\n' ;;
-        persistent_pip_packages) printf 'requests==2.32.0\nhttpx\n--editable\n' ;;
-    esac
-}
-export CODEX_TERMINAL_RUN_LIBRARY_ONLY=true
-source "$RUN_SCRIPT_UNDER_TEST"
-if auto_install_packages; then
-    exit 0
-else
-    exit $?
-fi
-'''
-            completed = subprocess.run(
-                ["bash", "-c", command],
-                text=True,
-                capture_output=True,
-                env={
-                    **os.environ,
-                    "RUN_SCRIPT_UNDER_TEST": str(RUN_SCRIPT),
-                    "PERSIST_INSTALL_BIN": str(installer),
-                    "INSTALL_LOG": str(install_log),
-                },
-                check=False,
-            )
-
-            self.assertNotEqual(completed.returncode, 0)
-            self.assertEqual(
-                install_log.read_text(encoding="utf-8").splitlines(),
-                ["curl git", "--python requests==2.32.0 httpx"],
-            )
+    def test_run_script_delegates_auto_install_to_package_manager(self):
+        run_text = RUN_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("/opt/scripts/persistent-packages.sh auto-install", run_text)
+        self.assertNotIn("auto_install_packages()", run_text)
 
     def test_package_manager_reads_newline_config_arrays_without_jq(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -352,11 +312,11 @@ function bashio::log.warning() { :; }
 function bashio::log.error() { :; }
 function bashio::config() {
     case "$1" in
-        persistent_apk_packages) printf 'curl\ngit\n' ;;
-        persistent_pip_packages) printf 'requests==2.32.0\nhttpx\n' ;;
+        persistent_apk_packages) printf 'curl\ngit\n--repository=attacker\n' ;;
+        persistent_pip_packages) printf 'requests==2.32.0\nhttpx\n--editable\n' ;;
     esac
 }
-set -- env
+export PERSIST_PACKAGE_MANAGER_LIBRARY_ONLY=true
 source "$SCRIPT_UNDER_TEST"
 persist_apk_install() { printf 'apk:%s\n' "$*" >> "$AUTO_LOG"; }
 persist_pip_install() { printf 'pip:%s\n' "$*" >> "$AUTO_LOG"; }
@@ -375,7 +335,7 @@ auto_install_packages
                 check=False,
             )
 
-            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertNotEqual(completed.returncode, 0)
             self.assertEqual(
                 auto_log.read_text(encoding="utf-8").splitlines(),
                 ["apk:curl git", "pip:requests==2.32.0 httpx"],

@@ -86,6 +86,10 @@ bridge_status_request() {
     request_root="${bridge_root}/requests"
     timeout="${CODEX_TERMINAL_PRO_BRIDGE_TIMEOUT:-30}"
 
+    # The bridge refuses request inputs that another user can modify.  Do not
+    # inherit a permissive umask from the host SSH shell when creating them.
+    umask 077
+
     case "$timeout" in
         ''|*[!0-9]*)
             timeout=30

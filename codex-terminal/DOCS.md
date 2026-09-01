@@ -88,10 +88,12 @@ To receive updates from GitHub, install Codex Terminal Pro from the custom
 repository URL above. A local `/addons` copy is not GitHub-managed.
 
 When publishing an update, use the same release number in `config.yaml`, the
-Dockerfile `io.hass.version` label, the `run.sh` fallback `APP_VERSION`, and a
-new `CHANGELOG.md` heading. Change `CODEX_CLI_VERSION` only when the bundled
-Codex CLI is also changing. Then push to GitHub and reload the Home Assistant
-add-on store. Home Assistant uses the `config.yaml` version to offer updates.
+Dockerfile `io.hass.version` label, and a new `CHANGELOG.md` heading. Runtime
+diagnostics read the image's copied `config.yaml`; there is no separate
+hand-maintained fallback in `run.sh`. Change `CODEX_CLI_VERSION` only when the
+bundled Codex CLI is also changing. Then push to GitHub and reload the Home
+Assistant add-on store. Home Assistant uses the `config.yaml` version to offer
+updates.
 
 ## Home Assistant SSH Access
 
@@ -159,9 +161,12 @@ trusted machine and copy `~/.codex/auth.json` into:
 Then run `codex-auth-helper` again and fix permissions. The file must be mode
 `600`. Do not print or share it.
 
-Avoid plain browser login inside the add-on. A callback URL like
-`http://localhost:1455/auth/callback?...` points at the browser machine, not the
-Home Assistant container, so the OAuth completion usually cannot reach Codex.
+Device-code login remains the preferred flow. If Codex falls back to plain
+browser login, the browser may stop at a `localhost:1455` or `localhost:1457`
+callback URL because those addresses point at the browser machine, not the
+Home Assistant container. Copy the complete failed URL into the sign-in dialog;
+the add-on forwards it only when the matching live Codex process owns that exact
+callback listener.
 
 ChatGPT subscriptions are used through Codex account auth. API-key auth would
 use OpenAI API billing and is deferred until the add-on has a safe
@@ -234,10 +239,9 @@ front of `PATH`, so manual and automatic Codex launches re-apply the disabled
 plugin entries and prune those copies before the CLI starts. This cleanup does
 not read or modify `/data/.codex/auth.json`.
 
-When `GITHUB_PAT_TOKEN` is absent, startup disables only known legacy
-PAT-backed GitHub MCP subserver entries so they cannot produce a missing-token
-warning. The GitHub plugin remains enabled, and unrelated custom MCP servers
-are not changed.
+Startup disables only known unsupported legacy PAT-backed GitHub MCP subserver
+entries so they cannot produce a missing-token warning. The GitHub plugin
+remains enabled, and unrelated custom MCP servers are not changed.
 
 ## Configuration
 
@@ -274,8 +278,8 @@ and ingress is admin-only. With this option enabled, model-initiated commands
 run as Full access without approval prompts. Set `codex_full_access: false` to
 leave Codex's native approval policy, Auto-review choice, and sandbox settings
 under your control; the add-on does not add a second prompt after Codex admits
-a command. Change Desk's Mall Cop is unaffected: it always runs `codex exec`
-with `--ignore-user-config --sandbox read-only` inside its jail.
+a command. Change Desk's Mall Cop is unaffected because it is a local,
+deterministic renderer and does not launch Codex.
 
 Terminal transcript logging stays enabled by default for debugging, but the log
 rotates under `/data/logs`. Uploaded images stay in `/data/images` long enough
@@ -294,15 +298,16 @@ config fingerprints, deterministic triage posture, and reasoning budget gates.
 Modbus, Wi-Fi, socket, timeout, and unavailable-entity noise is treated as
 localized connectivity trouble unless it matches safety/security/critical
 wording; configuration, auth, and system-health patterns stay review findings.
-The monitor does not call services, reload, restart, edit `/config`, execute
-arbitrary user task files, or call an LLM. Change Desk can run Mall Cop through
-`codex exec` in read-only mode: opening Change Desk triggers the run at most
-once every 24 hours, and the footer **Ask Mall Cop** action forces a fresh run.
+`ha-monitor once` succeeds when collection and saving succeed; add
+`--fail-on-problems` when a calling script should also fail on observed errors
+or unavailable services. The monitor does not call services, reload, restart, edit `/config`, execute
+arbitrary user task files, or call an LLM. Change Desk renders Mall Cop locally:
+opening Change Desk triggers the run at most once every 24 hours, and the footer
+**Ask Mall Cop** action forces a fresh run.
 Mall Cop memory is stored at `/data/monitor/change-desk-mall-cop-memory.json`
 so each run can compare current conditions with the prior observation and call
-out new, resolved, changed, and unchanged issues. Its subprocess runs as an
-unprivileged user inside a minimal filesystem jail that contains neither
-`/config` nor `/data`. `/data/monitor/tasks.d` is reserved for a future explicit
+out new, resolved, changed, and unchanged issues. It does not copy a Codex
+credential or use outbound model access. `/data/monitor/tasks.d` is reserved for a future explicit
 task-manifest design and is ignored by this release.
 
 ## Safe Home Assistant Workflow

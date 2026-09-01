@@ -1,7 +1,8 @@
 #!/bin/bash
 
 # User-friendly command for installing packages persistently
-# Usage: persist-install python git vim
+# Usage: persist-install git vim
+#        persist-install --python requests
 
 set -euo pipefail
 

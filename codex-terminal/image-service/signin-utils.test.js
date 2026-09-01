@@ -6,6 +6,7 @@ const {
     extractSignInUrl,
     isSignInWrapperProcess,
     parseLoopbackCallback,
+    signInProcessLabel,
     signInUrlLabel
 } = require('./signin-utils');
 
@@ -127,6 +128,23 @@ test('isSignInWrapperProcess separates wrapper layers from the CLI itself', () =
     assert.equal(isSignInWrapperProcess(''), false);
 });
 
+test('sign-in process attribution accepts only known live login programs', () => {
+    assert.equal(signInProcessLabel('codex login --device-auth'), 'Codex');
+    assert.equal(
+        signInProcessLabel('node /usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js'),
+        'Claude Code'
+    );
+    assert.equal(
+        signInProcessLabel('node /usr/local/lib/node_modules/@moonshot-ai/kimi-code/dist/main.mjs login'),
+        'Kimi Code'
+    );
+    assert.equal(signInProcessLabel('codex exec print-an-auth-url'), null);
+    assert.equal(signInProcessLabel('node /usr/local/bin/codex login'), null);
+    assert.equal(signInProcessLabel('/bin/bash -c /tmp/codex login'), null);
+    assert.equal(signInProcessLabel('sleep 999'), null);
+    assert.equal(signInProcessLabel('printf https://auth.openai.com/oauth/authorize'), null);
+});
+
 test('parseLoopbackCallback accepts only the fixed Codex callback shape', () => {
     assert.deepEqual(
         parseLoopbackCallback('http://localhost:1455/auth/callback?code=ac_abc.def-ghi&state=xyz'),
@@ -134,6 +152,10 @@ test('parseLoopbackCallback accepts only the fixed Codex callback shape', () => 
     );
     assert.notEqual(parseLoopbackCallback('localhost:1455/auth/callback?code=x&state=y'), null);
     assert.notEqual(parseLoopbackCallback('https://127.0.0.1:1455/auth/callback?code=x'), null);
+    assert.deepEqual(
+        parseLoopbackCallback('http://localhost:1457/auth/callback?code=fallback&state=xyz'),
+        { port: 1457, path: '/auth/callback', query: 'code=fallback&state=xyz' }
+    );
     assert.equal(parseLoopbackCallback('http://localhost:9999/auth/callback?code=x'), null);
     assert.equal(parseLoopbackCallback('http://localhost:1455/other/path?code=x'), null);
     assert.equal(parseLoopbackCallback('http://evil.example.com:1455/auth/callback?code=x'), null);

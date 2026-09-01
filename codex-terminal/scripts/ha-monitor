@@ -1314,7 +1314,11 @@ def run_once(args: argparse.Namespace) -> int:
         print(json.dumps(summary, indent=2, sort_keys=True))
     else:
         print_human_status(summary)
-    return 0 if summary.get("status") in ("clean", "warning", "error", "unavailable") else 1
+    if args.fail_on_problems and summary.get("status") in ("error", "unavailable"):
+        return 1
+    # The default exit status describes whether observation and persistence
+    # completed. Observed HA health remains data, not a process failure.
+    return 0
 
 
 def run_daemon(args: argparse.Namespace) -> int:
@@ -1369,8 +1373,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-mcp-status", action="store_true")
 
     subparsers = parser.add_subparsers(dest="command")
-    once = subparsers.add_parser("once", help="Collect one monitor sample and update state")
+    once = subparsers.add_parser(
+        "once",
+        help="Collect one sample; exit zero when collection succeeds",
+    )
     once.add_argument("--json", action="store_true")
+    once.add_argument(
+        "--fail-on-problems",
+        action="store_true",
+        help="also exit nonzero when the observed status is error or unavailable",
+    )
     daemon = subparsers.add_parser("daemon", help="Run the monitor loop forever")
     daemon.add_argument("--json", action="store_true", help=argparse.SUPPRESS)
     status = subparsers.add_parser("status", help="Read the last saved monitor state")

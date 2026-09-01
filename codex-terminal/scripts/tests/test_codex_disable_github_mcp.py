@@ -58,13 +58,13 @@ class GitHubMcpDisableTests(unittest.TestCase):
         updated, _ = self.run_script(original)
         self.assertEqual(updated, original)
 
-    def test_pat_presence_preserves_explicit_opt_in(self) -> None:
+    def test_extraneous_pat_environment_cannot_enable_unsupported_transport(self) -> None:
         original = (
             '[plugins."github@openai-curated".mcp_servers.github]\n'
             "enabled = true\n"
         )
         updated, _ = self.run_script(original, token="test-token-never-logged")
-        self.assertEqual(updated, original)
+        self.assertIn("enabled = false", updated)
 
     def test_disables_dotted_nested_override_without_duplicate_table(self) -> None:
         original = (
@@ -99,6 +99,31 @@ class GitHubMcpDisableTests(unittest.TestCase):
         updated, result = self.run_script(original)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(updated, original)
+
+    def test_multiline_string_lookalikes_are_preserved_as_data(self) -> None:
+        original = (
+            'banner = """\n'
+            '[mcp_servers.github]\n'
+            'url = "https://api.githubcopilot.com/mcp"\n'
+            'bearer_token_env_var = "GITHUB_PAT_TOKEN"\n'
+            'enabled = true\n'
+            '"""\n'
+            "\n"
+            '[plugins."github@openai-curated"]\n'
+            "note = '''\n"
+            "mcp_servers.github.enabled = true\n"
+            "'''\n"
+        )
+        before = tomllib.loads(original)
+
+        updated, result = self.run_script(original)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        after = tomllib.loads(updated)
+        self.assertEqual(after["banner"], before["banner"])
+        plugin = after["plugins"]["github@openai-curated"]
+        self.assertEqual(plugin["note"], before["plugins"]["github@openai-curated"]["note"])
+        self.assertIs(plugin["mcp_servers"]["github"]["enabled"], False)
 
     def test_invalid_input_is_never_replaced(self) -> None:
         original = '[plugins."github@openai-curated"\nenabled = true\n'

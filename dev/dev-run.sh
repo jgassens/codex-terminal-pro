@@ -76,6 +76,7 @@ fi
 
 cleanup() {
     [ -n "${TTYD_PID:-}" ] && kill "$TTYD_PID" 2>/dev/null || true
+    [ -S "$SHELL_DISPATCH_SOCKET_PATH" ] && rm -f "$SHELL_DISPATCH_SOCKET_PATH" || true
 }
 trap cleanup EXIT
 
@@ -83,6 +84,7 @@ FAKE_TTYD_PORT=7681 node "$DEV_DIR/fake-ttyd/server.js" &
 TTYD_PID=$!
 
 export IMAGE_SERVICE_ALLOW_LOOPBACK_DEVELOPMENT=true
+export IMAGE_SERVICE_BIND_ADDRESS=127.0.0.1
 export IMAGE_SERVICE_PORT=7680
 export TTYD_PORT=7681
 export UPLOAD_DIR="$STATE/uploads"
@@ -98,6 +100,7 @@ export CODEX_HOME="$STATE/codex-home"
 export CONSULT_SETTINGS_FILE="$STATE/settings.json"
 export CLAUDE_CONFIG_DIR="$STATE/claude-home"
 export KIMI_CODE_HOME="$STATE/kimi-home"
+export SHELL_DISPATCH_SOCKET_PATH
 export PATH="$STATE/bin:/opt/homebrew/bin:$PATH"
 
-exec node "$REPO/image-service/server.js"
+node "$REPO/image-service/server.js"

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
+import importlib.util
 import os
 import subprocess
+import sys
 import tempfile
 import tomllib
 import unittest
@@ -12,10 +15,32 @@ SCRIPTS = Path(__file__).resolve().parents[1]
 HEYGEN = SCRIPTS / "codex-disable-heygen-plugin"
 CONFIG_SET = SCRIPTS / "codex-config-set"
 CONFIG_TUI = SCRIPTS / "codex-config-tui"
+CLAUDE_CONFIG_SET = SCRIPTS / "claude-config-set"
 RUN_SCRIPT = SCRIPTS.parent / "run.sh"
+UTILS_SPEC = importlib.util.spec_from_file_location(
+    "codex_config_utils_under_test", SCRIPTS / "codex_config_utils.py"
+)
+assert UTILS_SPEC is not None and UTILS_SPEC.loader is not None
+CONFIG_UTILS = importlib.util.module_from_spec(UTILS_SPEC)
+UTILS_SPEC.loader.exec_module(CONFIG_UTILS)
 
 
 class CodexConfigMutatorTests(unittest.TestCase):
+    def test_atomic_writer_refuses_a_stale_external_revision(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "config.toml"
+            external = 'owner = "external"\n'
+            config.write_text(external, encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "config changed"):
+                CONFIG_UTILS.write_atomic_validated(
+                    config,
+                    'owner = "bundled-mutator"\n',
+                    expected_text='owner = "stale-read"\n',
+                )
+
+            self.assertEqual(config.read_text(encoding="utf-8"), external)
+
     def run_heygen(self, original: str) -> tuple[str, subprocess.CompletedProcess[str]]:
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / "config.toml"
@@ -41,6 +66,29 @@ class CodexConfigMutatorTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertEqual(updated, original)
 
+    def test_heygen_table_syntax_inside_multiline_strings_is_data(self) -> None:
+        original = (
+            'banner = """\n'
+            '[plugins."heygen@openai-curated"]\n'
+            'enabled = true\n'
+            '"""\n'
+            "\n"
+            '[plugins."heygen@openai-curated"]\n'
+            "note = '''\n"
+            "enabled = true\n"
+            "'''\n"
+        )
+        before = tomllib.loads(original)
+
+        updated, result = self.run_heygen(original)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        after = tomllib.loads(updated)
+        self.assertEqual(after["banner"], before["banner"])
+        plugin = after["plugins"]["heygen@openai-curated"]
+        self.assertEqual(plugin["note"], before["plugins"]["heygen@openai-curated"]["note"])
+        self.assertIs(plugin["enabled"], False)
+
     def test_top_level_setter_inserts_before_existing_table(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / "config.toml"
@@ -55,6 +103,104 @@ class CodexConfigMutatorTests(unittest.TestCase):
             updated = config.read_text(encoding="utf-8")
             self.assertTrue(updated.startswith('cli_auth_credentials_store = "file"\n'))
             self.assertEqual(tomllib.loads(updated)["cli_auth_credentials_store"], "file")
+
+    def test_top_level_setter_rejects_line_break_injection(self) -> None:
+        original = 'safe = true\n'
+        for line_break in ("\n", "\r"):
+            with self.subTest(line_break=repr(line_break)), tempfile.TemporaryDirectory() as directory:
+                config = Path(directory) / "config.toml"
+                config.write_text(original, encoding="utf-8")
+                injected = f'"safe"{line_break}extra_key = "injected"'
+
+                result = subprocess.run(
+                    [str(CONFIG_SET), str(config), "theme", injected],
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("cannot contain CR or LF", result.stderr)
+                self.assertEqual(config.read_text(encoding="utf-8"), original)
+
+    def test_tui_sanitizer_handles_multiline_arrays_and_literal_strings(self) -> None:
+        original = (
+            "[tui]\n"
+            "status_line = [\n"
+            "  'run-state',\n"
+            "  'auto-review', # unsupported by the pinned CLI\n"
+            "  'custom\"label',\n"
+            "  \"context-remaining\",\n"
+            "] # preserve this comment\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "config.toml"
+            config.write_text(original, encoding="utf-8")
+            result = subprocess.run(
+                [str(CONFIG_TUI), str(config)],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            updated = config.read_text(encoding="utf-8")
+            parsed = tomllib.loads(updated)
+            self.assertEqual(
+                parsed["tui"]["status_line"],
+                ["run-state", 'custom"label', "context-remaining"],
+            )
+            self.assertIn("# preserve this comment", updated)
+
+    def test_claude_setter_rejects_nonfinite_json_numbers(self) -> None:
+        original = '{"safe": true}\n'
+        for nonfinite in ("NaN", "Infinity", "-Infinity", "1e999"):
+            with self.subTest(nonfinite=nonfinite), tempfile.TemporaryDirectory() as directory:
+                settings = Path(directory) / "settings.json"
+                settings.write_text(original, encoding="utf-8")
+
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(CLAUDE_CONFIG_SET),
+                        str(settings),
+                        "env.value",
+                        "--",
+                        nonfinite,
+                    ],
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("valid finite JSON", result.stderr)
+                self.assertEqual(settings.read_text(encoding="utf-8"), original)
+
+    def test_claude_setter_preserves_valid_finite_json_values(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            settings = Path(directory) / "settings.json"
+            settings.write_text('{"safe": true}\n', encoding="utf-8")
+            value = '{"threshold": 1.5, "enabled": true}'
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CLAUDE_CONFIG_SET),
+                    str(settings),
+                    "env.policy",
+                    value,
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                json.loads(settings.read_text(encoding="utf-8"))["env"]["policy"],
+                {"threshold": 1.5, "enabled": True},
+            )
 
     def test_invalid_toml_is_unchanged_by_top_level_and_tui_mutators(self) -> None:
         original = '[tui\ntheme = "dark"\n'

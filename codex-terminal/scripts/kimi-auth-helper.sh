@@ -28,8 +28,8 @@ has_model() {
 }
 
 ensure_kimi_home() {
-    mkdir -p "$KIMI_CODE_HOME"
-    chmod 700 "$KIMI_CODE_HOME"
+    mkdir -p "$KIMI_CODE_HOME" "$CRED_DIR"
+    chmod 700 "$KIMI_CODE_HOME" "$CRED_DIR"
 }
 
 auth_mode() {
@@ -151,6 +151,11 @@ device_login() {
     echo ""
     # shellcheck disable=SC2086
     kimi login $region_flag || true
+
+    # A stale half-login may have moved the old credentials directory aside,
+    # and Kimi then recreates it using the caller's umask.  Tighten the new
+    # directory before inspecting or reporting its token files.
+    ensure_kimi_home
 
     if has_token; then
         chmod_token_files

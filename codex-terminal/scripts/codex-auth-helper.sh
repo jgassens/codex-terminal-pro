@@ -90,8 +90,9 @@ device_login() {
     echo ""
     echo "Follow the URL and one-time code printed by Codex."
     echo "If device-code login is not enabled for your account or workspace,"
-    echo "Codex may fall back to browser login. If you see a localhost:1455"
-    echo "callback URL, cancel and use the fallback import instructions instead."
+    echo "Codex may fall back to browser login. If it stops at localhost:1455"
+    echo "or localhost:1457, leave login running and paste the complete failed"
+    echo "callback URL into the add-on's sign-in dialog."
     echo ""
     codex login --device-auth
 
@@ -107,7 +108,7 @@ show_import_instructions() {
 
     echo "Fallback: authenticate locally and copy the auth cache"
     echo ""
-    echo "Use this when device-code login falls back to a localhost callback."
+    echo "Use this only if device-code and callback forwarding are unavailable."
     echo ""
     echo "On a trusted local machine with a browser:"
     echo "  1. Run login with an explicit file-credential override:"

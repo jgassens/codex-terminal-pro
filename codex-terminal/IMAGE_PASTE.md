@@ -40,15 +40,21 @@ Please inspect this Home Assistant dashboard screenshot and identify unavailable
 
 - Upload directory: `/data/images`
 - Max file size: 10 MB
-- Accepted types: JPEG, PNG, GIF, WebP, SVG, HEIC, HEIF
+- Accepted types: JPEG, PNG, GIF, WebP, SVG
+- Validation: signature, declared format, dimensions, frame count, decoded
+  pixel budget, and a complete decoder pass before the path is returned
 - Files survive container restarts because they live under `/data`
+
+HEIC/HEIF files are rejected in this release. The portable decoder bundled for
+both supported CPU architectures cannot completely decode patent-encumbered
+HEIC input, so accepting only its file header would weaken the validation gate.
 
 ## Network Access
 
-The image service listens internally on `7680`, and ttyd listens internally on
-loopback port `7681`. Neither port is published to the Home Assistant host.
-Open the authenticated Home Assistant ingress panel rather than a direct
-`http://host:7680` URL.
+The image service listens internally on `7680`. The writable ttyd terminal uses
+a root-only Unix socket and is reachable only through the image-service proxy.
+No terminal port is published to the Home Assistant host. Open the authenticated
+Home Assistant ingress panel rather than a direct `http://host:7680` URL.
 
 ## Troubleshooting
 

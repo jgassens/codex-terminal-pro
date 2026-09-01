@@ -78,8 +78,9 @@ track GitHub releases.
 
 For future releases, use the same release number in
 `codex-terminal/config.yaml` `version`, the Dockerfile `io.hass.version` label,
-the `run.sh` fallback `APP_VERSION`, and a new `codex-terminal/CHANGELOG.md`
-heading. Update the Dockerfile `CODEX_CLI_VERSION` only when the bundled Codex
+and a new `codex-terminal/CHANGELOG.md` heading. Startup reads its displayed
+fallback version from the copied `config.yaml`. Update the Dockerfile
+`CODEX_CLI_VERSION` only when the bundled Codex
 CLI should change. After pushing to GitHub, reload the Home Assistant add-on
 store; Home Assistant compares the installed version with `config.yaml`.
 
@@ -225,10 +226,9 @@ That guidance tells Codex about `,,`, `codex-shell-dispatch`, `ha`,
 `modbus-scan`, and `modbus-read`.
 
 GitHub CLI login and Codex's GitHub MCP transport are separate. `gh auth login`
-continues to configure the CLI under `/data/.config/gh`. When no
-`GITHUB_PAT_TOKEN` is intentionally supplied, startup disables only the legacy
-PAT-backed GitHub MCP subserver so Codex does not print a missing-token warning;
-the GitHub plugin itself remains enabled.
+continues to configure the CLI under `/data/.config/gh`. Startup disables only
+the unsupported legacy PAT-backed GitHub MCP subserver so Codex does not print
+a missing-token warning; the GitHub plugin itself remains enabled.
 
 ## Home Assistant Toolbox And Live API Helpers
 
@@ -270,13 +270,14 @@ collects bounded unavailable/unknown state samples, checks MCP status, and write
 summaries to `/data/monitor/ha-monitor.json` plus dispatch packets to
 `/data/monitor/change-desk-dispatch.json`. It fingerprints deltas between samples
 so Change Desk can say whether anything is new, resolved, persistent, or likely
-unchanged. It does not call services, reload, restart, edit `/config`, execute
-bespoke task files, or call an LLM. Change Desk's Mall Cop path can run
-`codex exec` in read-only mode once every 24 hours on panel open, or immediately
-from the **Ask Mall Cop** button, and stores comparison memory at
-`/data/monitor/change-desk-mall-cop-memory.json`. That subprocess runs as an
-unprivileged user inside a minimal filesystem jail that contains neither
-`/config` nor `/data`.
+unchanged. `ha-monitor once` returns success when that observation was collected
+and saved; use `ha-monitor once --fail-on-problems` when a script should also fail
+if the observation reports errors or unavailable services. It does not call services, reload, restart, edit `/config`, execute
+bespoke task files, or call an LLM. Change Desk's Mall Cop path renders the
+bounded monitor evidence locally once every 24 hours on panel open, or
+immediately from the **Ask Mall Cop** button, and stores comparison memory at
+`/data/monitor/change-desk-mall-cop-memory.json`. It does not launch Codex,
+copy a login credential, or make an outbound model request.
 The monitor also triages issues deterministically: Modbus, Wi-Fi, socket,
 timeout, and unavailable-entity noise is labeled as localized connectivity
 trouble with low system-wide risk unless the entity looks safety, security, or
@@ -345,9 +346,12 @@ Preferred headless flow:
 
 4. Choose **Start device-code login** and follow the URL and one-time code.
 
-Do not use the plain browser-login callback from inside the Home Assistant
-add-on. URLs like `http://localhost:1455/auth/callback?...` point at your
-browser machine, not the add-on container.
+Device-code login remains the preferred flow. If Codex falls back to plain
+browser login, the browser may stop at a `localhost:1455` or `localhost:1457`
+callback URL because those addresses point at the browser machine, not the
+add-on container. Copy the complete failed URL into the sign-in dialog; the
+add-on forwards it only when the matching live Codex process owns that exact
+callback listener.
 
 Fallback import flow:
 

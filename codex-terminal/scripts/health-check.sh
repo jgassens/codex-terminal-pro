@@ -142,15 +142,11 @@ check_github_integrations() {
     fi
 
     if "$github_mcp_guard" --check; then
-        if [ -n "${GITHUB_PAT_TOKEN:-}" ]; then
-            log_info "GitHub MCP PAT is present; transport configuration was left unchanged"
-        else
-            log_info "No unauthenticated legacy GitHub MCP transport is enabled"
-        fi
+        log_info "No unsupported legacy GitHub MCP transport is enabled"
         return 0
     fi
 
-    log_error "Legacy GitHub MCP transport is enabled without GITHUB_PAT_TOKEN"
+    log_error "Unsupported legacy GitHub MCP transport is enabled"
     return 1
 }
 

@@ -22,7 +22,8 @@ class RepositoryContractTests(unittest.TestCase):
         self.assertIsNotNone(version)
         release = version.group(1)
         self.assertIn(f'io.hass.version="{release}"', dockerfile)
-        self.assertIn(f"APP_VERSION:-{release}", run_script)
+        self.assertIn("COPY config.yaml /opt/codex-terminal/config.yaml", dockerfile)
+        self.assertNotRegex(run_script, r"APP_VERSION:-\d+\.\d+\.\d+")
 
     def test_terminal_actor_markers_delegate_to_the_correct_approval_surface(self):
         run_script = (ADDON / "run.sh").read_text(encoding="utf-8")
@@ -32,6 +33,7 @@ class RepositoryContractTests(unittest.TestCase):
         )
         broker = (ADDON / "scripts" / "supervisor-broker.sh").read_text(encoding="utf-8")
 
+        self.assertEqual(example_picker, picker)
         self.assertIn("env CODEX_TERMINAL_AGENT_EXECUTION=1 codex", run_script)
         self.assertIn("export CODEX_TERMINAL_AGENT_EXECUTION=1", run_script)
         self.assertIn("CODEX_TERMINAL_AGENT_EXECUTION=1 codex", picker)
@@ -42,6 +44,23 @@ class RepositoryContractTests(unittest.TestCase):
         self.assertIn("CODEX_TERMINAL_AGENT_EXECUTION=1 codex", example_picker)
         self.assertIn("CODEX_TERMINAL_HUMAN_SHELL=1 bash", example_picker)
         self.assertNotIn('type exactly: restart', example_picker.lower())
+
+    def test_shell_dispatch_profile_wrapper_is_posix_safe(self):
+        wrapper = ADDON / "scripts" / "codex-terminal-shell-dispatch-profile.sh"
+        completed = subprocess.run(
+            ["sh", "-n", str(wrapper)],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+        run_script = (ADDON / "run.sh").read_text(encoding="utf-8")
+        self.assertIn(
+            "cp /opt/scripts/codex-terminal-shell-dispatch-profile.sh /etc/profile.d/codex-terminal-shell-dispatch.sh",
+            run_script,
+        )
+        self.assertIn('[ -n "${BASH_VERSION:-}" ]', wrapper.read_text(encoding="utf-8"))
 
     def test_downloads_and_base_image_are_pinned(self):
         dockerfile = (ADDON / "Dockerfile").read_text(encoding="utf-8")
@@ -58,6 +77,24 @@ class RepositoryContractTests(unittest.TestCase):
         self.assertGreaterEqual(dockerfile.count("amd64|x86_64)"), 2)
         self.assertGreaterEqual(dockerfile.count("apk --print-arch"), 2)
         self.assertNotIn("/usr/bin/ha --version", dockerfile)
+
+    def test_build_context_and_release_checklist_cover_local_only_artifacts(self):
+        dockerignore = (ADDON / ".dockerignore").read_text(encoding="utf-8").splitlines()
+        self.assertIn("scripts/build/", dockerignore)
+
+        installer = (ADDON / "scripts" / "persist-install").read_text(encoding="utf-8")
+        self.assertIn("Usage: persist-install git vim", installer)
+        self.assertIn("persist-install --python requests", installer)
+
+        development = (REPO / "DEVELOPMENT.md").read_text(encoding="utf-8")
+        self.assertIn("CODEX_CLI_VERSION", development)
+        self.assertIn("codex-terminal/scripts/tests/container-smoke.sh", development)
+
+        workflow = (REPO / ".github" / "workflows" / "validate.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("find codex-terminal/scripts -maxdepth 1", workflow)
+        self.assertIn("find codex-terminal/scripts config/scripts dev -type f", workflow)
 
     def test_repository_has_no_unregistered_gitlinks(self):
         result = subprocess.run(

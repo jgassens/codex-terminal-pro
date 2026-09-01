@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import ipaddress
 import json
+import math
 import os
 import re
 import socket
@@ -272,7 +273,20 @@ def parse_ports(raw_ports: str) -> list[int]:
 
 
 def expand_targets(raw_targets: Iterable[str], max_hosts: int) -> list[str]:
+    if max_hosts <= 0:
+        raise ValueError("--max-hosts must be greater than zero")
+
     expanded: list[str] = []
+    seen: set[str] = set()
+
+    def add_target(target: str) -> None:
+        if target in seen:
+            return
+        if len(seen) >= max_hosts:
+            raise ValueError(f"target expansion exceeds --max-hosts {max_hosts}")
+        seen.add(target)
+        expanded.append(target)
+
     for raw_target in raw_targets:
         for item in raw_target.split(","):
             target = item.strip()
@@ -280,33 +294,31 @@ def expand_targets(raw_targets: Iterable[str], max_hosts: int) -> list[str]:
                 continue
             if "/" in target:
                 network = ipaddress.ip_network(target, strict=False)
-                hosts = [str(host) for host in network.hosts()]
-                if len(expanded) + len(hosts) > max_hosts:
-                    raise ValueError(f"target expansion exceeds --max-hosts {max_hosts}")
-                expanded.extend(hosts)
+                # Iterate only until the cap is reached. Materializing hosts()
+                # first lets a /0 or /8 exhaust memory before the safety check.
+                for host in network.hosts():
+                    add_target(str(host))
             else:
-                expanded.append(target)
-    return sorted(dict.fromkeys(expanded))
+                add_target(target)
+    return sorted(expanded)
 
 
 def probe(host: str, port: int, timeout: float) -> dict[str, object]:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.settimeout(timeout)
-        try:
-            sock.connect((host, port))
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
             return {
                 "host": host,
                 "port": port,
                 "open": True,
                 "hint": COMMON_PORTS.get(port, "solar/vendor local service candidate"),
             }
-        except OSError as exc:
-            return {"host": host, "port": port, "open": False, "error": str(exc)}
+    except OSError as exc:
+        return {"host": host, "port": port, "open": False, "error": str(exc)}
 
 
 def run_discover(args: argparse.Namespace) -> int:
-    if args.timeout <= 0:
-        raise ValueError("--timeout must be greater than zero")
+    if not math.isfinite(args.timeout) or args.timeout <= 0:
+        raise ValueError("--timeout must be a finite number greater than zero")
     if args.workers <= 0:
         raise ValueError("--workers must be greater than zero")
     if args.max_hosts <= 0:

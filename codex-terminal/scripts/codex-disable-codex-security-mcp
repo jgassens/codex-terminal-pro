@@ -9,6 +9,7 @@ import re
 from pathlib import Path
 
 from codex_config_utils import (
+    iter_toml_lines,
     locked_config,
     read_config,
     validate_toml,
@@ -51,8 +52,8 @@ def plugin_mcp_names() -> set[str]:
 def split_tables(text: str) -> list[list[str]]:
     blocks: list[list[str]] = []
     current: list[str] = []
-    for line in text.splitlines(keepends=True):
-        if table_name(line) is not None and current:
+    for line, structural in iter_toml_lines(text):
+        if structural and table_name(line) is not None and current:
             blocks.append(current)
             current = []
         current.append(line)
@@ -64,8 +65,8 @@ def split_tables(text: str) -> list[list[str]]:
 def disable_block(block: list[str]) -> list[str]:
     output: list[str] = []
     replaced = False
-    for line in block:
-        match = ENABLED_RE.match(line)
+    for line, structural in iter_toml_lines("".join(block)):
+        match = ENABLED_RE.match(line) if structural else None
         if not replaced and match:
             output.append(
                 f'{match.group("prefix")}false{match.group("suffix")}{match.group("nl")}'
@@ -105,11 +106,11 @@ def disable_codex_security_mcp(text: str) -> str:
     plugin = dotted_plugin_pattern()
     server = rf'(?:{re.escape(SERVER_NAME)}|"{re.escape(SERVER_NAME)}"|\'{re.escape(SERVER_NAME)}\')'
 
-    for line in text.splitlines(keepends=True):
-        if table_name(line) is not None:
+    for line, structural in iter_toml_lines(text):
+        if structural and table_name(line) is not None:
             in_table = True
         updated_line = line
-        if not in_table:
+        if structural and not in_table:
             key = rf"{plugin}\.mcp_servers\.{server}\.enabled"
             updated_line, replaced = replace_boolean_assignment(updated_line, key)
             nested_present = nested_present or replaced
@@ -124,8 +125,12 @@ def disable_codex_security_mcp(text: str) -> str:
         name = table_name(block[0]) if block else None
         if name in parent_names:
             transformed = [block[0]]
-            for line in block[1:]:
-                line, replaced = replace_boolean_assignment(line, local_key)
+            for line, structural in list(iter_toml_lines("".join(block)))[1:]:
+                line, replaced = (
+                    replace_boolean_assignment(line, local_key)
+                    if structural
+                    else (line, False)
+                )
                 nested_present = nested_present or replaced
                 transformed.append(line)
             block = transformed
@@ -168,7 +173,7 @@ def main() -> int:
                 return 0
             if args.check:
                 return 1
-            write_atomic_validated(args.config, updated)
+            write_atomic_validated(args.config, updated, expected_text=original)
             return 0
     except Exception as exc:
         print(f"Codex Security MCP config was left unchanged: {exc}", file=os.sys.stderr)

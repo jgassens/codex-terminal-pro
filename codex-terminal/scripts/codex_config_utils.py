@@ -20,6 +20,12 @@ DIRECTORY = getattr(os, "O_DIRECTORY", 0)
 
 @contextlib.contextmanager
 def locked_config(path: Path) -> Iterator[None]:
+    """Serialize bundled mutators.
+
+    An external writer may ignore this advisory lock. Atomic writers therefore
+    also compare their source revision immediately before replacement and abort
+    rather than knowingly overwriting a concurrent change.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     parent_stat = path.parent.lstat()
     if not stat.S_ISDIR(parent_stat.st_mode) or stat.S_ISLNK(parent_stat.st_mode):
@@ -59,7 +65,10 @@ def read_config(path: Path) -> str:
             raise ValueError("Codex config changed while it was being opened")
         with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
             descriptor = -1
-            return handle.read(MAX_CONFIG_BYTES + 1)
+            text = handle.read(MAX_CONFIG_BYTES + 1)
+            if len(text.encode("utf-8")) > MAX_CONFIG_BYTES:
+                raise ValueError("Codex config is too large")
+            return text
     finally:
         if descriptor >= 0:
             os.close(descriptor)
@@ -69,7 +78,80 @@ def validate_toml(text: str) -> None:
     tomllib.loads(text or "")
 
 
-def write_atomic_validated(path: Path, text: str, mode: int | None = None) -> None:
+def _scan_toml_multiline_state(line: str, state: str | None) -> str | None:
+    """Return the multiline-string delimiter still open after one TOML line.
+
+    The config mutators preserve comments and formatting instead of re-rendering
+    parsed TOML, so they need a small amount of lexical context to distinguish a
+    real table/key line from identical-looking text inside a multiline string.
+    Input is parse-validated with tomllib before mutation; this scanner only
+    supplies that context and deliberately does not try to be a second parser.
+    """
+    index = 0
+    single_line_quote: str | None = None
+
+    while index < len(line):
+        if state is not None:
+            if line.startswith(state, index):
+                state = None
+                index += 3
+                continue
+            if state == '"""' and line[index] == "\\":
+                # In a multiline basic string, an escaped quote cannot close the
+                # string. Skipping the escaped character also handles an even
+                # backslash pair before a real delimiter correctly.
+                index += 2
+                continue
+            index += 1
+            continue
+
+        if single_line_quote is not None:
+            if single_line_quote == '"' and line[index] == "\\":
+                index += 2
+                continue
+            if line[index] == single_line_quote:
+                single_line_quote = None
+            index += 1
+            continue
+
+        if line.startswith('"""', index):
+            state = '"""'
+            index += 3
+        elif line.startswith("'''", index):
+            state = "'''"
+            index += 3
+        elif line[index] in {'"', "'"}:
+            single_line_quote = line[index]
+            index += 1
+        elif line[index] == "#":
+            break
+        else:
+            index += 1
+
+    return state
+
+
+def iter_toml_lines(text: str) -> Iterator[tuple[str, bool]]:
+    """Yield each line and whether it begins outside a multiline string."""
+    state: str | None = None
+    for line in text.splitlines(keepends=True):
+        structural = state is None
+        yield line, structural
+        state = _scan_toml_multiline_state(line, state)
+
+
+def assert_config_unchanged(path: Path, expected_text: str) -> None:
+    if read_config(path) != expected_text:
+        raise ValueError("config changed while it was being updated; retry")
+
+
+def write_atomic_validated(
+    path: Path,
+    text: str,
+    mode: int | None = None,
+    *,
+    expected_text: str | None = None,
+) -> None:
     validate_toml(text)
     if mode is None:
         try:
@@ -88,6 +170,8 @@ def write_atomic_validated(path: Path, text: str, mode: int | None = None) -> No
             handle.flush()
             os.fsync(handle.fileno())
         os.chmod(temporary, mode)
+        if expected_text is not None:
+            assert_config_unchanged(path, expected_text)
         os.replace(temporary, path)
         directory_fd = os.open(path.parent, os.O_RDONLY | DIRECTORY | NOFOLLOW)
         try:

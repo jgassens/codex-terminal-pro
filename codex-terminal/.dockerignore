@@ -4,4 +4,5 @@
 image-service/node_modules/
 image-service/*.test.js
 image-service/server-security.integration.test.js
+scripts/build/
 scripts/tests/

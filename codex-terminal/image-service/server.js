@@ -11,12 +11,14 @@
  * - Handles image uploads via POST /upload
  * - Saves images to /data/images (persistent storage)
  * - Returns file paths for use with Codex CLI
- * - ARM-compatible (no native dependencies)
+ * - ARM/AMD64-compatible bounded image decoding
  */
 
 const express = require('express');
 const QRCode = require('qrcode');
+const sharp = require('sharp');
 const http = require('http');
+const net = require('net');
 const { execFile, spawn } = require('child_process');
 const crypto = require('crypto');
 const multer = require('multer');
@@ -24,17 +26,16 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { createProxyMiddleware } = require('http-proxy-middleware');
-const { normalizeShellCommandForDispatch } = require('./shell-command-normalizer');
 const {
     buildRequestSecurityPolicy,
     isAllowedRequestSource,
     isAuthorizedWebSocketRequest,
-    isLoopbackAddress,
     isSameOriginBrowserRequest,
     requestRemoteAddress
 } = require('./request-security');
 const { parseJsonLinesTail, writeFileAtomic } = require('./persistence-utils');
 const { createSerialTaskQueue } = require('./serial-task-queue');
+const { createBoundedSingleFlight } = require('./bounded-single-flight');
 const {
     buildCodexDispatchedShellCommand,
     buildMarkedShellCommand
@@ -45,24 +46,19 @@ const {
     extractSignInUrl,
     isSignInWrapperProcess,
     parseLoopbackCallback,
+    signInProcessLabel,
     signInUrlLabel
 } = require('./signin-utils');
-const {
-    JAIL_GID,
-    JAIL_ROOT,
-    JAIL_UID,
-    SANDBOX_WORK_ROOT,
-    buildMallCopCodexArgs,
-    buildMallCopCodexEnvironment,
-    buildMallCopJailLauncherArgs,
-    prepareMallCopSandbox,
-    refreshMallCopJailRuntimeFiles,
-    protectMallCopPrompt
-} = require('./mall-cop-isolation');
 
 const app = express();
+const internalShellApp = express();
 const PORT = parsePort(process.env.IMAGE_SERVICE_PORT, 7680);
 const TTYD_PORT = parsePort(process.env.TTYD_PORT, 7681);
+const BIND_ADDRESS = process.env.IMAGE_SERVICE_BIND_ADDRESS || '0.0.0.0';
+const TTYD_SOCKET_PATH = process.env.TTYD_SOCKET_PATH || '';
+const SHELL_DISPATCH_SOCKET_PATH = process.env.SHELL_DISPATCH_SOCKET_PATH || '';
+const SIGNIN_PORT_OWNER_BIN = process.env.SIGNIN_PORT_OWNER_BIN || '/opt/scripts/codex-terminal-port-owner.py';
+const SIGNIN_TRUSTED_PROCESS_USER = process.env.SIGNIN_TRUSTED_PROCESS_USER || os.userInfo().username;
 const UPLOAD_DIR = process.env.UPLOAD_DIR || '/data/images';
 const CONFIG_ROOT = process.env.HA_CONFIG_DIR || '/config';
 const HA_MONITOR_STATE_FILE = process.env.HA_MONITOR_STATE_FILE || '/data/monitor/ha-monitor.json';
@@ -88,6 +84,9 @@ const UI_BUILD_ID = (() => {
 const SETTINGS_FILE = process.env.SETTINGS_FILE || '/data/settings.json';
 const CONSULT_BIN = process.env.CONSULT_BIN || '/usr/local/bin/consult';
 const UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
+const UPLOAD_MAX_DECODED_PIXELS = 40 * 1024 * 1024;
+const UPLOAD_MAX_DIMENSION = 16384;
+const UPLOAD_MAX_FRAMES = 100;
 const RAW_SHELL_COMMAND_MAX_LENGTH = 4096;
 const RAW_SHELL_COMMAND_TIMEOUT_MS = parseNonNegativeInt(process.env.RAW_SHELL_COMMAND_TIMEOUT_MS, 45000);
 const RAW_SHELL_TERMINATION_GRACE_MS = parseNonNegativeInt(process.env.RAW_SHELL_TERMINATION_GRACE_MS, 1500);
@@ -95,6 +94,8 @@ const RAW_SHELL_CAPTURE_LINES = parseNonNegativeInt(process.env.RAW_SHELL_CAPTUR
 const RAW_SHELL_OUTPUT_MAX_CHARS = parseNonNegativeInt(process.env.RAW_SHELL_OUTPUT_MAX_CHARS, 20000);
 const RAW_SHELL_MAX_PENDING_COMMANDS = parseNonNegativeInt(process.env.RAW_SHELL_MAX_PENDING_COMMANDS, 8);
 const RAW_SHELL_QUEUE_WAIT_TIMEOUT_MS = parseNonNegativeInt(process.env.RAW_SHELL_QUEUE_WAIT_TIMEOUT_MS, 5000);
+const READ_WORK_MAX_PENDING = parseNonNegativeInt(process.env.READ_WORK_MAX_PENDING, 8);
+const READ_WORK_MAX_WAIT_MS = parseNonNegativeInt(process.env.READ_WORK_MAX_WAIT_MS, 5000);
 const RAW_SHELL_LAUNCH_COMMAND =
     'env -u CODEX_TERMINAL_AGENT_EXECUTION CODEX_TERMINAL_HUMAN_SHELL=1 /bin/bash -l';
 const CHANGE_DESK_COMMAND_TIMEOUT_MS = parseNonNegativeInt(process.env.CHANGE_DESK_COMMAND_TIMEOUT_MS, 45000);
@@ -103,7 +104,6 @@ const CHANGE_DESK_OUTPUT_MAX_CHARS = parseNonNegativeInt(process.env.CHANGE_DESK
 const CHANGE_DESK_LOG_OUTPUT_MAX_CHARS = parseNonNegativeInt(process.env.CHANGE_DESK_LOG_OUTPUT_MAX_CHARS, 60000);
 const CHANGE_DESK_LOG_LINE_LIMIT = parseNonNegativeInt(process.env.CHANGE_DESK_LOG_LINE_LIMIT, 500);
 const CHANGE_DESK_REPORT_MAX_CHARS = parseNonNegativeInt(process.env.CHANGE_DESK_REPORT_MAX_CHARS, 200000);
-const CHANGE_DESK_MALL_COP_TIMEOUT_MS = parseNonNegativeInt(process.env.CHANGE_DESK_MALL_COP_TIMEOUT_MS, 180000);
 const CHANGE_DESK_MALL_COP_MAX_CHARS = parseNonNegativeInt(process.env.CHANGE_DESK_MALL_COP_MAX_CHARS, 18000);
 const CHANGE_DESK_MALL_COP_AUTO_INTERVAL_SECONDS = parseNonNegativeInt(process.env.CHANGE_DESK_MALL_COP_AUTO_INTERVAL_SECONDS, 86400);
 const HA_MONITOR_HISTORY_READ_MAX_BYTES = parseNonNegativeInt(process.env.HA_MONITOR_HISTORY_READ_MAX_BYTES, 2 * 1024 * 1024);
@@ -128,23 +128,28 @@ const SUPPORTED_TERMINAL_CONTROL_ACTIONS = new Set([
 const TERMINAL_MODES = new Set(['codex', 'raw']);
 let activeTerminalMode = 'codex';
 let mallCopRunInFlight = null;
+let consultantSetupInFlight = false;
 const requestSecurityPolicy = buildRequestSecurityPolicy();
 const rawShellCommandQueue = createSerialTaskQueue({
     maxPending: RAW_SHELL_MAX_PENDING_COMMANDS,
     maxWaitMs: RAW_SHELL_QUEUE_WAIT_TIMEOUT_MS
+});
+const boundedReadWork = createBoundedSingleFlight({
+    maxPending: READ_WORK_MAX_PENDING,
+    maxWaitMs: READ_WORK_MAX_WAIT_MS
+});
+const boundedImageDecodeWork = createBoundedSingleFlight({
+    maxPending: 2,
+    maxWaitMs: 10000
 });
 const ALLOWED_IMAGE_MIMES = new Set([
     'image/jpeg',
     'image/png',
     'image/gif',
     'image/webp',
-    'image/svg+xml',
-    'image/heic',
-    'image/heif',
-    'image/heic-sequence',
-    'image/heif-sequence'
+    'image/svg+xml'
 ]);
-const ALLOWED_IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.heic', '.heif']);
+const ALLOWED_IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg']);
 
 function parseNonNegativeInt(value, fallback) {
     const parsed = Number.parseInt(value, 10);
@@ -168,12 +173,6 @@ function extensionForMime(mimetype) {
             return '.webp';
         case 'image/svg+xml':
             return '.svg';
-        case 'image/heic':
-        case 'image/heic-sequence':
-            return '.heic';
-        case 'image/heif':
-        case 'image/heif-sequence':
-            return '.heif';
         default:
             return '.png';
     }
@@ -181,7 +180,15 @@ function extensionForMime(mimetype) {
 
 function isAllowedImage(file) {
     const ext = path.extname(file.originalname || '').toLowerCase();
-    return ALLOWED_IMAGE_MIMES.has(file.mimetype) || ALLOWED_IMAGE_EXTENSIONS.has(ext);
+    const mimetype = String(file.mimetype || '').toLowerCase();
+    if (ALLOWED_IMAGE_MIMES.has(mimetype)) {
+        return true;
+    }
+    // Some file pickers provide no useful MIME type. In that one case, let
+    // the extension reach the complete decoder; a contradictory/unsupported
+    // image MIME must not be laundered through a safe-looking suffix.
+    return (!mimetype || mimetype === 'application/octet-stream')
+        && ALLOWED_IMAGE_EXTENSIONS.has(ext);
 }
 
 function hasControlCharacters(value) {
@@ -208,13 +215,13 @@ function ascii(buffer, start = 0, end = buffer.length) {
 }
 
 function isValidSvg(buffer) {
-    const text = buffer.toString('utf8').replace(/^\uFEFF/, '').trimStart().slice(0, 4096).toLowerCase();
+    const text = buffer.toString('utf8').replace(/^\uFEFF/, '').trimStart().toLowerCase();
     const svgStart = text.startsWith('<svg') || (text.startsWith('<?xml') && text.includes('<svg'));
-    const activeContent = /<script|onload\s*=|javascript:/i.test(text);
+    const activeContent = /<script|<style|<foreignobject|<!doctype|<!entity|@import|on[a-z]+\s*=|javascript:|\b(?:xlink:)?href\s*=|url\s*\(/i.test(text);
     return svgStart && !activeContent;
 }
 
-function isValidImageContent(filePath, mimetype, filename) {
+function hasValidImageSignature(filePath, mimetype, filename) {
     const ext = path.extname(filename || '').toLowerCase();
     const head = readFileHead(filePath);
 
@@ -245,16 +252,87 @@ function isValidImageContent(filePath, mimetype, filename) {
         return head.length >= 12 && ascii(head, 0, 4) === 'RIFF' && ascii(head, 8, 12) === 'WEBP';
     }
 
-    if (ext === '.heic' || ext === '.heif' || mimetype.includes('heic') || mimetype.includes('heif')) {
-        const brandText = ascii(head, 4, 64).toLowerCase();
-        return brandText.startsWith('ftyp') && /(heic|heix|hevc|hevx|mif1|msf1)/.test(brandText);
-    }
-
     if (ext === '.svg' || mimetype === 'image/svg+xml') {
-        return isValidSvg(head);
+        // Multer already caps uploads at 10 MiB. Inspect the complete bounded
+        // SVG so active content cannot hide after an innocuous 4 KiB prefix.
+        return isValidSvg(fs.readFileSync(filePath));
     }
 
     return false;
+}
+
+function expectedImageFormat(mimetype, filename) {
+    const ext = path.extname(filename || '').toLowerCase();
+    const byExtension = {
+        '.jpg': 'jpeg',
+        '.jpeg': 'jpeg',
+        '.png': 'png',
+        '.gif': 'gif',
+        '.webp': 'webp',
+        '.svg': 'svg'
+    }[ext];
+    const byMime = {
+        'image/jpeg': 'jpeg',
+        'image/png': 'png',
+        'image/gif': 'gif',
+        'image/webp': 'webp',
+        'image/svg+xml': 'svg'
+    }[mimetype];
+    if (byExtension && byMime && byExtension !== byMime) {
+        return null;
+    }
+    return byExtension || byMime || null;
+}
+
+async function isValidImageContent(filePath, mimetype, filename) {
+    if (!hasValidImageSignature(filePath, mimetype, filename)) {
+        return false;
+    }
+    const expectedFormat = expectedImageFormat(mimetype, filename);
+    if (!expectedFormat) {
+        return false;
+    }
+
+    try {
+        const options = {
+            failOn: 'warning',
+            limitInputPixels: UPLOAD_MAX_DECODED_PIXELS,
+            sequentialRead: true,
+            animated: true
+        };
+        const metadata = await sharp(filePath, options).metadata();
+        const width = Number(metadata.width || 0);
+        const pageHeight = Number(metadata.pageHeight || metadata.height || 0);
+        const pages = Number(metadata.pages || 1);
+        const totalPixels = width * pageHeight * pages;
+        if (
+            metadata.format !== expectedFormat
+            || !Number.isInteger(width)
+            || !Number.isInteger(pageHeight)
+            || !Number.isInteger(pages)
+            || width < 1
+            || pageHeight < 1
+            || pages < 1
+            || width > UPLOAD_MAX_DIMENSION
+            || pageHeight > UPLOAD_MAX_DIMENSION
+            || pages > UPLOAD_MAX_FRAMES
+            || !Number.isSafeInteger(totalPixels)
+            || totalPixels > UPLOAD_MAX_DECODED_PIXELS
+        ) {
+            return false;
+        }
+
+        // metadata() does not decode compressed pixels. Force a complete
+        // bounded decode of every frame into a tiny raster so truncation and
+        // malformed payloads are rejected before the path reaches Codex.
+        await sharp(filePath, options)
+            .resize({ width: 1, height: 1, fit: 'fill' })
+            .png()
+            .toBuffer();
+        return true;
+    } catch {
+        return false;
+    }
 }
 
 function runTmux(args, callback, timeout = 3000) {
@@ -1177,23 +1255,6 @@ function buildMallCopMemoryRecord(snapshot, observation, report, previousMemory,
         },
         digest,
         comparison: buildMallCopMemoryComparison(digest, previousMemory?.digest)
-    };
-}
-
-function buildFailedMallCopAttempt(previousMemory, observation, report, trigger) {
-    const generatedAt = new Date().toISOString();
-    return {
-        ...(previousMemory || { version: 1 }),
-        lastAttemptAt: generatedAt,
-        lastAttempt: {
-            generatedAt,
-            trigger,
-            success: false,
-            timedOut: Boolean(observation.timedOut),
-            durationMs: Number.isFinite(observation.durationMs) ? observation.durationMs : 0,
-            exitCode: observation.exitCode,
-            packetPath: report.path
-        }
     };
 }
 
@@ -2137,25 +2198,16 @@ function buildMallCopObservationPacket(snapshot, previousMemory = null) {
     const lines = [
         '# Mall Cop: To Observe and Report',
         '',
-        'Purpose: make sense of changing Home Assistant log and entity states without assuming every repeated warning is a fixable config bug.',
+        'Purpose: record the bounded inputs used by the deterministic Mall Cop renderer without assuming every repeated warning is a fixable config bug.',
         '',
-        'Rules for this response:',
-        '- Return concise advice for a human Change Desk panel.',
+        'Renderer contract:',
+        '- Produce concise evidence for the human Change Desk panel.',
         '- Separate acute health from chronic conditions.',
         '- Use Mall Cop Memory to say what changed, what resolved, and what persisted with no material change since the last Mall Cop run.',
         '- Call out whether each chronic condition looks Codex-fixable, network/device-shaped, auth-shaped, config-shaped, or human-priority-only.',
         '- Treat repeated Modbus, Wi-Fi, timeout, unavailable, and socket noise as localized connectivity unless evidence says it is spreading or critical.',
         '- Do not suggest reload, restart, service calls, config edits, or shell commands as actions unless the packet shows a clear blocker.',
-        '- Do not ask follow-up questions; state assumptions and what to observe next.',
-        '- Do not include the "Mall Cop: To Observe and Report" title in the answer; the UI already labels the report.',
-        '',
-        'Requested output shape:',
-        '1. Bottom line',
-        '2. Acute state',
-        '3. Chronic conditions',
-        '4. What changed',
-        '5. What Codex can and cannot fix',
-        '6. Next observation',
+        '- State what to observe next without inventing missing evidence.',
         '',
         '## Snapshot',
         `Generated: ${snapshot.generatedAt || 'unknown'}`,
@@ -2213,181 +2265,82 @@ function buildMallCopObservationPacket(snapshot, previousMemory = null) {
     lines.push(
         '',
         '## Recommendations Already Computed',
-        ...((snapshot.recommendations || []).map((item) => `- ${item}`)),
-        '',
-        'Now produce the requested Mall Cop summary. Keep it under 500 words.'
+        ...((snapshot.recommendations || []).map((item) => `- ${item}`))
     );
 
     return redactSensitiveText(lines.join('\n'));
 }
 
-function runCodexMallCopObservation(prompt) {
-    return new Promise((resolve) => {
-        const startedAt = Date.now();
-        let tempDir = '';
-        let child;
-        const unsafeTestMode = process.env.NODE_ENV === 'test'
-            && process.env.IMAGE_SERVICE_TEST_MODE === 'true';
-        try {
-            if (unsafeTestMode) {
-                tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'change-desk-mall-cop-'));
-            } else {
-                refreshMallCopJailRuntimeFiles(JAIL_ROOT);
-                tempDir = fs.mkdtempSync(path.join(JAIL_ROOT, 'work', 'run-'));
-            }
-        } catch (err) {
-            resolve({
-                success: false,
-                exitCode: null,
-                timedOut: false,
-                durationMs: Date.now() - startedAt,
-                summary: '',
-                output: '',
-                error: redactSensitiveText(err.message)
-            });
-            return;
-        }
-        const outputFile = path.join(tempDir, 'summary.md');
-        const sourceCodexHome = process.env.CODEX_HOME || '/data/.codex';
+function renderDeterministicMallCopObservation(snapshot, previousMemory = null) {
+    const startedAt = Date.now();
+    const monitor = snapshot.monitor || {};
+    const digest = buildMallCopDigest(snapshot);
+    const comparison = buildMallCopMemoryComparison(digest, previousMemory?.digest);
+    const conditions = Array.isArray(monitor.conditions) ? monitor.conditions : [];
+    const recommendations = Array.isArray(snapshot.recommendations)
+        ? snapshot.recommendations
+        : [];
+    const lines = [
+        '## Bottom line',
+        `Home Assistant observation is **${monitor.status || 'unavailable'}** with ${digest.currentIssueCount} current and ${digest.persistentIssueCount} persistent issue(s).`,
+        '',
+        '## Acute state',
+        `Logs: ${snapshot.logs?.status || 'unavailable'}; core check: ${snapshot.coreCheck?.status || 'unavailable'}; live API: ${snapshot.live?.available ? 'reachable' : 'unavailable'}.`,
+        '',
+        '## Chronic conditions'
+    ];
 
-        try {
-            if (unsafeTestMode) {
-                const directArgs = buildMallCopCodexArgs(tempDir, outputFile);
-                const testCodexPath = process.env.IMAGE_SERVICE_TEST_CODEX_PATH;
-                if (!testCodexPath || !path.isAbsolute(testCodexPath)) {
-                    throw new Error('IMAGE_SERVICE_TEST_CODEX_PATH must be absolute in Mall Cop test mode');
-                }
-                child = spawn(testCodexPath, directArgs, {
-                    cwd: tempDir,
-                    env: buildMallCopCodexEnvironment(
-                        process.env,
-                        tempDir,
-                        tempDir,
-                        sourceCodexHome
-                    ),
-                    stdio: ['pipe', 'pipe', 'pipe']
-                });
-            } else {
-                const sandboxWorkDir = `${SANDBOX_WORK_ROOT}/${path.basename(tempDir)}`;
-                prepareMallCopSandbox(tempDir, sourceCodexHome, JAIL_UID, JAIL_GID);
-                const sandboxOutputFile = `${sandboxWorkDir}/summary.md`;
-                const codexArgs = buildMallCopCodexArgs(sandboxWorkDir, sandboxOutputFile);
-                child = spawn(
-                    '/opt/scripts/codex-terminal-mall-cop-jail.py',
-                    buildMallCopJailLauncherArgs(JAIL_ROOT, sandboxWorkDir, codexArgs),
-                    {
-                    cwd: tempDir,
-                    env: buildMallCopCodexEnvironment(
-                        process.env,
-                        `${sandboxWorkDir}/home`,
-                        `${sandboxWorkDir}/tmp`,
-                        `${sandboxWorkDir}/codex-home`
-                    ),
-                    stdio: ['pipe', 'pipe', 'pipe']
-                    }
-                );
-            }
-        } catch (err) {
-            fs.rm(tempDir, { recursive: true, force: true }, () => {});
-            resolve({
-                success: false,
-                exitCode: null,
-                timedOut: false,
-                durationMs: Date.now() - startedAt,
-                summary: '',
-                output: '',
-                error: redactSensitiveText(err.message)
-            });
-            return;
-        }
-        let stdout = '';
-        let stderr = '';
-        let settled = false;
-        let timeoutTriggered = false;
-        let forceKillTimer = null;
-        const cleanupTempDir = () => {
-            fs.rm(tempDir, { recursive: true, force: true }, () => {});
-        };
-        const settleFailure = (err) => {
-            if (settled) {
-                return;
-            }
-            settled = true;
-            clearTimeout(timeout);
-            if (forceKillTimer) {
-                clearTimeout(forceKillTimer);
-            }
-            child?.kill('SIGTERM');
-            cleanupTempDir();
-            resolve({
-                success: false,
-                exitCode: null,
-                timedOut: false,
-                durationMs: Date.now() - startedAt,
-                summary: '',
-                output: '',
-                error: redactSensitiveText(err.message)
-            });
-        };
-        const timeout = setTimeout(() => {
-            if (settled) {
-                return;
-            }
-            timeoutTriggered = true;
-            child.kill('SIGTERM');
-            forceKillTimer = setTimeout(() => {
-                if (!settled) {
-                    child.kill('SIGKILL');
-                }
-            }, 3000);
-        }, CHANGE_DESK_MALL_COP_TIMEOUT_MS);
+    if (conditions.length === 0) {
+        lines.push('No chronic condition is currently grouped by the monitor.');
+    } else {
+        conditions.slice(0, 8).forEach((condition) => {
+            lines.push(
+                `- ${condition.label || 'Condition'}: ${condition.trajectory || 'unknown trajectory'}; ` +
+                `${condition.activeCount || 0} active, ${condition.chronicCount || 0} chronic; ` +
+                `${condition.codexActionability || 'review current evidence before acting'}.`
+            );
+        });
+    }
 
-        child.stdout.on('data', (chunk) => {
-            stdout += chunk.toString();
-            if (stdout.length > CHANGE_DESK_MALL_COP_MAX_CHARS * 2) {
-                stdout = stdout.slice(-CHANGE_DESK_MALL_COP_MAX_CHARS);
-            }
-        });
-        child.stderr.on('data', (chunk) => {
-            stderr += chunk.toString();
-            if (stderr.length > CHANGE_DESK_MALL_COP_MAX_CHARS * 2) {
-                stderr = stderr.slice(-CHANGE_DESK_MALL_COP_MAX_CHARS);
-            }
-        });
-        child.on('error', settleFailure);
-        child.on('close', (code, signal) => {
-            if (settled) {
-                return;
-            }
-            settled = true;
-            clearTimeout(timeout);
-            if (forceKillTimer) {
-                clearTimeout(forceKillTimer);
-            }
-            let summary = '';
-            try {
-                summary = fs.readFileSync(outputFile, 'utf8');
-            } catch {
-                summary = stdout;
-            }
-            const output = truncateChangeDeskText(stdout, CHANGE_DESK_MALL_COP_MAX_CHARS);
-            const error = truncateChangeDeskText(stderr, CHANGE_DESK_MALL_COP_MAX_CHARS);
-            const text = truncateChangeDeskText(summary || stdout, CHANGE_DESK_MALL_COP_MAX_CHARS);
-            resolve({
-                success: code === 0 && Boolean(text.text.trim()),
-                exitCode: Number.isInteger(code) ? code : null,
-                signal: signal || '',
-                timedOut: timeoutTriggered || signal === 'SIGTERM' || signal === 'SIGKILL',
-                durationMs: Date.now() - startedAt,
-                summary: text.text.trim(),
-                output: output.text,
-                error: error.text,
-                truncated: text.truncated || output.truncated || error.truncated
-            });
-            cleanupTempDir();
-        });
-        endChildStdin(child.stdin, protectMallCopPrompt(prompt), settleFailure);
-    });
+    lines.push('', '## What changed');
+    appendMallCopIssueList(lines, 'New', comparison.newIssues);
+    appendMallCopIssueList(lines, 'Resolved', comparison.resolvedIssues);
+    appendMallCopIssueList(
+        lines,
+        'Changed',
+        comparison.changedIssues,
+        (issue) => `${summarizeMallCopIssue(issue)}: ${issue.change}`
+    );
+    appendMallCopIssueList(lines, 'Unchanged', comparison.unchangedIssues);
+
+    lines.push('', '## What Codex can and cannot fix');
+    if (recommendations.length === 0) {
+        lines.push('No repair recommendation is justified by the current bounded observation.');
+    } else {
+        recommendations.slice(0, 8).forEach((item) => lines.push(`- ${item}`));
+    }
+    lines.push(
+        '',
+        '## Next observation',
+        monitor.dispatch?.meaningfulDelta
+            ? 'Review the current delta before changing configuration; compare the next monitor sample afterward.'
+            : 'Wait for a meaningful monitor delta or run a manual observation after a relevant state change.'
+    );
+
+    const rendered = truncateChangeDeskText(
+        redactSensitiveText(lines.join('\n')),
+        CHANGE_DESK_MALL_COP_MAX_CHARS
+    );
+    return {
+        success: true,
+        exitCode: 0,
+        timedOut: false,
+        durationMs: Date.now() - startedAt,
+        summary: rendered.text,
+        output: '',
+        error: '',
+        truncated: rendered.truncated
+    };
 }
 
 async function runMallCopForSnapshot(snapshot, trigger = 'manual') {
@@ -2399,23 +2352,11 @@ async function runMallCopForSnapshot(snapshot, trigger = 'manual') {
         const previousMemory = loadMallCopMemory();
         const packet = buildMallCopObservationPacket(snapshot, previousMemory);
         const report = writeChangeDeskReport(packet);
-        const observation = await runCodexMallCopObservation(packet);
-
-        if (!observation.success) {
-            const failedMemory = buildFailedMallCopAttempt(
-                previousMemory,
-                observation,
-                report,
-                trigger
-            );
-            saveMallCopMemory(failedMemory);
-            return {
-                success: false,
-                report,
-                observation,
-                memory: failedMemory
-            };
-        }
+        // Mall Cop is deliberately local and deterministic. The snapshot has
+        // already done the bounded collection and classification work, so a
+        // reusable Codex credential and arbitrary model egress add risk rather
+        // than a necessary capability here.
+        const observation = renderDeterministicMallCopObservation(snapshot, previousMemory);
 
         const memory = buildMallCopMemoryRecord(snapshot, observation, report, previousMemory, trigger);
         saveMallCopMemory(memory);
@@ -2498,17 +2439,16 @@ app.use((req, res, next) => {
 
 app.use((req, res, next) => {
     const healthCheck = req.path === '/health';
-    // The bundled codex-shell-dispatch helper talks to this one endpoint over
-    // container loopback. All browser-facing routes remain ingress-only.
-    const internalShellDispatch = req.path === '/terminal-shell-command';
     if (isAllowedRequestSource(req, requestSecurityPolicy, {
-        allowLoopback: healthCheck || internalShellDispatch
+        allowLoopback: healthCheck
     })) {
         next();
         return;
     }
 
-    console.warn(`Rejected non-ingress request from ${requestRemoteAddress(req) || 'unknown source'} to ${req.path}`);
+    // A direct request can put Home Assistant's opaque ingress session token in
+    // its path. Log only shape and source, never the attacker-controlled path.
+    console.warn(`Rejected non-ingress ${req.method} request from ${requestRemoteAddress(req) || 'unknown source'}`);
     res.status(403).json({ success: false, error: 'This service is available only through Home Assistant ingress' });
 });
 
@@ -2640,14 +2580,38 @@ const upload = multer({
 // API routes MUST come before static files middleware
 // Otherwise static middleware will intercept API requests
 app.use(express.json({ limit: '512kb' }));
+internalShellApp.use(express.json({ limit: '512kb' }));
+
+function runtimeTransportsReady() {
+    for (const socketPath of [SHELL_DISPATCH_SOCKET_PATH, TTYD_SOCKET_PATH]) {
+        if (!socketPath) {
+            continue;
+        }
+        try {
+            if (!fs.lstatSync(socketPath).isSocket()) {
+                return false;
+            }
+        } catch {
+            return false;
+        }
+    }
+    return true;
+}
 
 // Health check endpoint
 app.get('/health', (req, res) => {
+    if (!runtimeTransportsReady()) {
+        return res.status(503).json({ status: 'starting' });
+    }
     res.json({ status: 'ok', uploadDir: UPLOAD_DIR, workspace: CONFIG_ROOT });
 });
 
 // Provide ttyd port to frontend
 app.get('/config', (req, res) => {
+    if (!runtimeTransportsReady()) {
+        res.setHeader('Retry-After', '1');
+        return res.status(503).json({ success: false, error: 'Terminal transport is still starting' });
+    }
     res.json({
         ttydPort: TTYD_PORT,
         uploadDir: UPLOAD_DIR,
@@ -2677,6 +2641,26 @@ function readConsultantStatus(callback) {
             callback(parseErr);
         }
     });
+}
+
+function readConsultantStatusBounded() {
+    return boundedReadWork.run('consultant-status', () => new Promise((resolve, reject) => {
+        readConsultantStatus((err, consultants) => err ? reject(err) : resolve(consultants));
+    }));
+}
+
+function collectChangeDeskSnapshotBounded() {
+    return boundedReadWork.run('change-desk-snapshot', collectChangeDeskSnapshot);
+}
+
+function readAttachedClientCountBounded() {
+    return boundedReadWork.run('terminal-client-count', () => new Promise((resolve, reject) => {
+        readAttachedClientCount((err, count) => err ? reject(err) : resolve(count));
+    }));
+}
+
+function isReadWorkCapacityError(error) {
+    return error?.code === 'READ_WORK_FULL' || error?.code === 'READ_WORK_WAIT_TIMEOUT';
 }
 
 const DEFAULT_PREFERENCES = Object.freeze({
@@ -2710,16 +2694,13 @@ function readPreferences() {
     }
 }
 
-app.get('/settings', (req, res) => {
+app.get('/settings', async (req, res) => {
     if (!isSameOriginBrowserRequest(req)) {
         return res.status(403).json({ success: false, error: 'Cross-origin settings access is not allowed' });
     }
 
-    readConsultantStatus((err, consultants) => {
-        if (err) {
-            console.error('Consultant status lookup failed:', err.message);
-            return res.status(502).json({ success: false, error: 'Failed to read consultant status' });
-        }
+    try {
+        const consultants = await readConsultantStatusBounded();
         res.json({
             success: true,
             consultants,
@@ -2731,10 +2712,14 @@ app.get('/settings', (req, res) => {
                 }
             }
         });
-    });
+    } catch (err) {
+        console.error('Consultant status lookup failed:', err.message);
+        const status = isReadWorkCapacityError(err) ? 429 : 502;
+        res.status(status).json({ success: false, error: status === 429 ? 'Read work is busy; retry shortly' : 'Failed to read consultant status' });
+    }
 });
 
-app.post('/settings', (req, res) => {
+app.post('/settings', async (req, res) => {
     if (!isSameOriginBrowserRequest(req)) {
         return res.status(403).json({ success: false, error: 'Cross-origin settings changes are not allowed' });
     }
@@ -2940,82 +2925,99 @@ app.post('/consultant-setup', (req, res) => {
 
 let signInQrCache = { url: null, svg: null };
 
+function collectAgentLoginUrlState() {
+    return new Promise((resolve, reject) => {
+        const targetMode = activeTerminalMode;
+        const target = targetForMode(targetMode);
+        // The shared window resizes to whichever viewer is active and the TUI
+        // re-wraps its URL at that width, so the pane width is part of the data.
+        runTmux(['display-message', '-p', '-t', target, '#{pane_width} #{pane_pid}'], (dimErr, dimOut) => {
+            const [widthRaw, pidRaw] = dimErr ? [] : String(dimOut).trim().split(/\s+/);
+            const paneWidth = Number.parseInt(widthRaw || '', 10);
+            const panePid = Number.parseInt(pidRaw || '', 10);
+
+            capturePaneVisible(target, (err, output) => {
+                if (err) {
+                    return reject(err);
+                }
+
+                const url = extractSignInUrl(output || '', {
+                    paneWidth: Number.isNaN(paneWidth) ? null : paneWidth
+                });
+                // Only a URL whose host is a known consultant/Codex sign-in host is
+                // treated as pending. An arbitrary auth-looking URL the agent merely
+                // printed must never be dressed up as a trusted sign-in prompt.
+                const label = url ? signInUrlLabel(url) : null;
+                const finish = (verified, qrSvg, running) => resolve({
+                    success: true,
+                    found: Boolean(verified),
+                    url: verified ? url : null,
+                    sourceLabel: verified ? label : null,
+                    qrSvg: verified ? (qrSvg || null) : null,
+                    running: verified ? (running || null) : null,
+                    targetMode: verified ? targetMode : null
+                });
+
+                if (!url || !label || !Number.isInteger(panePid)) {
+                    return finish(false, null, null);
+                }
+
+                findCancelTarget(panePid, (scanErr, found) => {
+                    if (scanErr) {
+                        console.error('Sign-in process attribution failed:', scanErr.message);
+                        return finish(false, null, null);
+                    }
+                    if (!found || found.label !== label) {
+                        return finish(false, null, null);
+                    }
+
+                    // The browser polls this endpoint, so cache the last rendering.
+                    // A QR failure must never break an otherwise verified link.
+                    if (signInQrCache.url === url) {
+                        return finish(true, signInQrCache.svg, found.name);
+                    }
+                    QRCode.toString(url, { type: 'svg', errorCorrectionLevel: 'M', margin: 2 })
+                        .then((svg) => {
+                            signInQrCache = { url, svg };
+                            finish(true, svg, found.name);
+                        })
+                        .catch((qrErr) => {
+                            console.error('Sign-in QR generation failed:', qrErr.message);
+                            finish(true, null, found.name);
+                        });
+                });
+            });
+        });
+    });
+}
+
 // Consultant CLIs print OAuth URLs that the web terminal renders as wrapped,
 // unselectable text. This returns the pending link so the UI can present it
 // as a real link and a QR code, and reports which CLI is running so the UI
 // can offer to cancel it.
-app.get('/agent-login-url', (req, res) => {
+app.get('/agent-login-url', async (req, res) => {
     if (!isSameOriginBrowserRequest(req)) {
         return res.status(403).json({ success: false, error: 'Cross-origin login link access is not allowed' });
     }
 
-    const target = activeTmuxTarget();
-    // The shared window resizes to whichever viewer is active and the TUI
-    // re-wraps its URL at that width, so the pane width is part of the data.
-    runTmux(['display-message', '-p', '-t', target, '#{pane_width} #{pane_pid}'], (dimErr, dimOut) => {
-        const [widthRaw, pidRaw] = dimErr ? [] : String(dimOut).trim().split(/\s+/);
-        const paneWidth = Number.parseInt(widthRaw || '', 10);
-        const panePid = Number.parseInt(pidRaw || '', 10);
-
-        capturePaneVisible(target, (err, output) => {
-            if (err) {
-                console.error(`Failed to capture ${target} for the sign-in link:`, err.message);
-                return res.status(502).json({ success: false, error: 'Failed to read the terminal pane' });
-            }
-
-            const url = extractSignInUrl(output || '', {
-                paneWidth: Number.isNaN(paneWidth) ? null : paneWidth
-            });
-            // Only a URL whose host is a known consultant/Codex sign-in host is
-            // treated as pending. An arbitrary auth-looking URL the agent merely
-            // printed must never be dressed up as a trusted sign-in prompt.
-            const label = url ? signInUrlLabel(url) : null;
-            const pending = Boolean(url && label);
-            const finish = (qrSvg, running) => res.json({
-                success: true,
-                found: pending,
-                url: pending ? url : null,
-                sourceLabel: label,
-                qrSvg: qrSvg || null,
-                running: running || null
-            });
-
-            // Nothing pending: answer without scanning the process table.
-            if (!pending) {
-                return finish(null, null);
-            }
-
-            const respond = (qrSvg) => {
-                if (!Number.isInteger(panePid)) {
-                    return finish(qrSvg, null);
-                }
-                findCancelTarget(panePid, (scanErr, found) => {
-                    finish(qrSvg, !scanErr && found ? found.name : null);
-                });
-            };
-
-            // The browser polls this endpoint, so cache the last rendering.
-            // A QR failure must never break the link itself.
-            if (signInQrCache.url === url) {
-                return respond(signInQrCache.svg);
-            }
-            QRCode.toString(url, { type: 'svg', errorCorrectionLevel: 'M', margin: 2 })
-                .then((svg) => {
-                    signInQrCache = { url, svg };
-                    respond(svg);
-                })
-                .catch((qrErr) => {
-                    console.error('Sign-in QR generation failed:', qrErr.message);
-                    respond(null);
-                });
+    try {
+        const state = await boundedReadWork.run('agent-login-scan', collectAgentLoginUrlState);
+        res.json(state);
+    } catch (err) {
+        console.error('Failed to inspect the terminal pane for a sign-in link:', err.message);
+        const status = isReadWorkCapacityError(err) ? 429 : 502;
+        res.status(status).json({
+            success: false,
+            error: status === 429 ? 'Read work is busy; retry shortly' : 'Failed to read the terminal pane'
         });
-    });
+    }
 });
 
-// Codex's browser sign-in flow redirects to localhost:1455, which resolves to
+// Codex's browser sign-in flow redirects to localhost:1455 (or its 1457
+// fallback), which resolves to
 // the user's own machine rather than this container, so their browser dead
 // ends while the CLI keeps listening. This delivers the failed callback URL
-// to that listener. Only the fixed loopback host, port, and path are allowed.
+// to that listener. Only the fixed loopback host, known ports, and path are allowed.
 app.post('/agent-callback-forward', (req, res) => {
     if (!isSameOriginBrowserRequest(req)) {
         return res.status(403).json({ success: false, error: 'Cross-origin callback forwarding is not allowed' });
@@ -3099,56 +3101,54 @@ app.post('/terminal-cancel-signin', (req, res) => {
         return res.status(403).json({ success: false, error: 'Cross-origin cancel is not allowed' });
     }
 
-    const target = activeTmuxTarget();
-    // Cancel only when a sign-in is genuinely on screen in this pane. Without
-    // this, a stray click when a consultant merely printed an auth-looking URL
-    // (or the dialog lingered) would SIGKILL whatever runs in the pane - in
-    // Codex mode, the user's working Codex session.
-    capturePaneVisible(target, (capErr, paneText) => {
-        if (capErr) {
-            console.error(`Failed to capture ${target} to confirm a pending sign-in:`, capErr.message);
+    const mode = typeof req.body?.mode === 'string' ? req.body.mode : '';
+    const expectedUrl = typeof req.body?.url === 'string' ? req.body.url : '';
+    if (!TERMINAL_MODES.has(mode) || !expectedUrl) {
+        return res.status(400).json({ success: false, error: 'The sign-in target is missing or stale' });
+    }
+
+    const target = targetForMode(mode);
+    findVerifiedSignIn(target, expectedUrl, (findErr, found) => {
+        if (findErr) {
+            console.error('Sign-in cancel process verification failed:', findErr.message);
             return res.status(502).json({ success: false, error: 'Failed to inspect the terminal pane' });
         }
-        const pendingUrl = extractSignInUrl(paneText || '', {});
-        if (!pendingUrl || !signInUrlLabel(pendingUrl)) {
-            return res.json({ success: true, cancelled: false, reason: 'No sign-in is currently pending' });
+        if (!found) {
+            return res.json({
+                success: true,
+                cancelled: false,
+                reason: 'No matching sign-in process is running to cancel'
+            });
         }
 
-        runTmux(['display-message', '-p', '-t', target, '#{pane_pid}'], (paneErr, paneOut) => {
-            const panePid = paneErr ? NaN : Number.parseInt(String(paneOut).trim(), 10);
-            if (!Number.isInteger(panePid)) {
-                return res.status(502).json({ success: false, error: 'Failed to inspect the terminal pane' });
-            }
+        try {
+            process.kill(found.pid, 'SIGTERM');
+        } catch (killErr) {
+            console.error(`Sign-in cancel SIGTERM to ${found.pid} failed:`, killErr.message);
+            return res.status(502).json({ success: false, error: 'Failed to stop the running program' });
+        }
 
-            findCancelTarget(panePid, (findErr, found) => {
-                if (findErr) {
-                    console.error('Sign-in cancel process scan failed:', findErr.message);
-                    return res.status(502).json({ success: false, error: 'Failed to inspect the terminal pane' });
-                }
-                if (!found) {
-                    return res.json({ success: true, cancelled: false, reason: 'Nothing is running to cancel' });
-                }
-
-                try {
-                    process.kill(found.pid, 'SIGTERM');
-                } catch (killErr) {
-                    console.error(`Sign-in cancel SIGTERM to ${found.pid} failed:`, killErr.message);
-                    return res.status(502).json({ success: false, error: 'Failed to stop the running program' });
-                }
-
-                // Escalate only if the CLI ignores SIGTERM.
-                setTimeout(() => {
+        // Escalate only if the same allowlisted CLI process still occupies
+        // the originally bound pane. Re-resolving closes the PID-reuse window.
+        setTimeout(() => {
+            findCancelTarget(found.panePid, (recheckErr, current) => {
+                if (
+                    !recheckErr &&
+                    current &&
+                    current.pid === found.pid &&
+                    current.args === found.args &&
+                    current.label === found.label
+                ) {
                     try {
-                        process.kill(found.pid, 0);
-                        process.kill(found.pid, 'SIGKILL');
-                        console.warn(`Sign-in cancel escalated to SIGKILL for ${found.name} (${found.pid})`);
+                        process.kill(current.pid, 'SIGKILL');
+                        console.warn(`Sign-in cancel escalated to SIGKILL for ${current.name} (${current.pid})`);
                     } catch {
                         // Already exited, which is the normal case.
                     }
-                    res.json({ success: true, cancelled: true, program: found.name });
-                }, 1500);
+                }
+                res.json({ success: true, cancelled: true, program: found.name });
             });
-        });
+        }, 1500);
     });
 });
 
@@ -3168,11 +3168,11 @@ app.get('/change-desk/summary', async (req, res) => {
     }
 
     try {
-        const snapshot = await collectChangeDeskSnapshot();
+        const snapshot = await collectChangeDeskSnapshotBounded();
         res.json(snapshot);
     } catch (err) {
         console.error('Change Desk snapshot failed:', err.message);
-        res.status(500).json({
+        res.status(isReadWorkCapacityError(err) ? 429 : 500).json({
             success: false,
             error: 'Failed to collect Change Desk snapshot'
         });
@@ -3210,7 +3210,7 @@ app.post('/change-desk/mall-cop', async (req, res) => {
     try {
         const automatic = req.body?.mode === 'auto';
         const force = req.body?.force === true || !automatic;
-        const snapshot = await collectChangeDeskSnapshot();
+        const snapshot = await collectChangeDeskSnapshotBounded();
         const currentMemory = loadMallCopMemory();
 
         if (!force && !isMallCopAutoDue(currentMemory)) {
@@ -3228,16 +3228,6 @@ app.post('/change-desk/mall-cop', async (req, res) => {
 
         const result = await runMallCopForSnapshot(snapshot, automatic ? 'auto' : 'manual');
 
-        if (!result.success) {
-            return res.status(result.observation.timedOut ? 504 : 502).json({
-                success: false,
-                error: result.observation.timedOut ? 'Mall Cop summary timed out' : 'Codex did not return a Mall Cop summary',
-                observation: result.observation,
-                packetPath: result.report.path,
-                snapshot
-            });
-        }
-
         snapshot.mallCop = buildMallCopState(result.memory);
 
         res.json({
@@ -3251,7 +3241,7 @@ app.post('/change-desk/mall-cop', async (req, res) => {
         });
     } catch (err) {
         console.error('Mall Cop observation failed:', err.message);
-        res.status(500).json({
+        res.status(isReadWorkCapacityError(err) ? 429 : 500).json({
             success: false,
             error: 'Failed to run Mall Cop observation'
         });
@@ -3267,15 +3257,15 @@ app.get('/terminal-mode', (req, res) => {
 // stays attached (so a single device never reloads on return), while additional
 // clients release so the visible device is not sized down to fit a screen
 // nobody is looking at.
-app.get('/terminal-clients', (req, res) => {
-    readAttachedClientCount((err, count) => {
-        if (err) {
-            console.error('Failed to count terminal clients:', err.message);
-            return res.status(502).json({ success: false, error: 'Failed to count terminal clients' });
-        }
-
+app.get('/terminal-clients', async (req, res) => {
+    try {
+        const count = await readAttachedClientCountBounded();
         res.json({ success: true, count });
-    });
+    } catch (err) {
+        console.error('Failed to count terminal clients:', err.message);
+        const status = isReadWorkCapacityError(err) ? 429 : 502;
+        res.status(status).json({ success: false, error: status === 429 ? 'Read work is busy; retry shortly' : 'Failed to count terminal clients' });
+    }
 });
 
 app.post('/terminal-mode', (req, res) => {
@@ -3300,17 +3290,35 @@ app.post('/terminal-mode', (req, res) => {
 });
 
 // Image upload endpoint
-app.post('/upload', requireSameOriginBrowserRequest, upload.single('image'), (req, res) => {
+app.post('/upload', requireSameOriginBrowserRequest, upload.single('image'), async (req, res) => {
     if (!req.file) {
         return res.status(400).json({ error: 'No image file provided' });
     }
 
     const filePath = path.join(UPLOAD_DIR, req.file.filename);
-    if (!isValidImageContent(filePath, req.file.mimetype || '', req.file.filename)) {
+    let validImage;
+    try {
+        validImage = await boundedImageDecodeWork.run(
+            req.file.filename,
+            () => isValidImageContent(filePath, req.file.mimetype || '', req.file.filename)
+        );
+    } catch (err) {
         try {
             fs.unlinkSync(filePath);
-        } catch (err) {
-            console.error(`Unable to remove rejected upload ${filePath}:`, err.message);
+        } catch (cleanupErr) {
+            console.error(`Unable to remove unprocessed upload ${filePath}:`, cleanupErr.message);
+        }
+        const status = isReadWorkCapacityError(err) ? 429 : 500;
+        return res.status(status).json({
+            success: false,
+            error: status === 429 ? 'Image decoder is busy; retry shortly' : 'Image validation failed'
+        });
+    }
+    if (!validImage) {
+        try {
+            fs.unlinkSync(filePath);
+        } catch (cleanupErr) {
+            console.error(`Unable to remove rejected upload ${filePath}:`, cleanupErr.message);
         }
         return res.status(400).json({ success: false, error: 'Uploaded file is not a valid supported image' });
     }
@@ -3422,18 +3430,9 @@ app.post('/terminal-paste', (req, res) => {
     }, target);
 });
 
-// Dispatch an explicit browser ",," command or the Codex loopback fallback to
-// the raw shell pane. Browser ingress keeps human-lane provenance; loopback
-// dispatch is wrapped with Codex provenance before it reaches the pane.
-app.post('/terminal-shell-command', (req, res) => {
+function dispatchTerminalShellCommand(req, res, actor) {
     const requestedCommand = typeof req.body?.command === 'string' ? req.body.command.trim() : '';
-    const command = normalizeShellCommandForDispatch(requestedCommand);
-
-    const internalLoopbackRequest = isLoopbackAddress(requestRemoteAddress(req));
-    const sameOriginBrowserRequest = isSameOriginBrowserRequest(req);
-    if (!internalLoopbackRequest && !sameOriginBrowserRequest) {
-        return res.status(403).json({ success: false, error: 'Cross-origin shell command dispatch is not allowed' });
-    }
+    const command = requestedCommand;
 
     if (!command) {
         return res.status(400).json({ success: false, error: 'No shell command provided' });
@@ -3481,9 +3480,24 @@ app.post('/terminal-shell-command', (req, res) => {
             truncated: Boolean(result.truncated)
         });
     }, {
-        actor: sameOriginBrowserRequest ? 'human' : 'codex',
+        actor,
         signal: queuedRequest.signal
     });
+}
+
+// Browser dispatch is reachable only through authenticated Home Assistant
+// ingress (or the explicit loopback-only development mode) and stays human.
+app.post('/terminal-shell-command', (req, res) => {
+    if (!isSameOriginBrowserRequest(req)) {
+        return res.status(403).json({ success: false, error: 'Cross-origin shell command dispatch is not allowed' });
+    }
+    dispatchTerminalShellCommand(req, res, 'human');
+});
+
+// Codex's fallback helper uses a root-only Unix socket. UID-dropped
+// consultants share the TCP network namespace but cannot open this socket.
+internalShellApp.post('/terminal-shell-command', (req, res) => {
+    dispatchTerminalShellCommand(req, res, 'codex');
 });
 
 app.post('/terminal-control', (req, res) => {
@@ -3545,7 +3559,15 @@ app.use('/terminal', (req, res, next) => {
 });
 
 const terminalProxy = createProxyMiddleware({
-    target: `http://localhost:${TTYD_PORT}`,
+    target: TTYD_SOCKET_PATH
+        ? {
+            protocol: 'http:',
+            host: 'localhost',
+            hostname: 'localhost',
+            port: 80,
+            socketPath: TTYD_SOCKET_PATH
+        }
+        : `http://localhost:${TTYD_PORT}`,
     changeOrigin: true,
     ws: true, // Enable WebSocket proxying
     pathRewrite: {
@@ -3619,8 +3641,54 @@ app.use((err, req, res, next) => {
     next();
 });
 
+internalShellApp.use((err, req, res, next) => {
+    if (err?.type === 'entity.too.large' || err?.status === 413) {
+        return res.status(413).json({ success: false, error: 'Request body is too large' });
+    }
+    if (err?.type === 'entity.parse.failed' || (err instanceof SyntaxError && 'body' in err)) {
+        return res.status(400).json({ success: false, error: 'Request body is not valid JSON' });
+    }
+    if (err) {
+        console.error('Internal shell dispatch error:', err.message);
+        return res.status(500).json({ success: false, error: 'Request failed' });
+    }
+    next();
+});
+
+function assertPrivateSocketParent(socketPath) {
+    const parent = path.dirname(socketPath);
+    const info = fs.lstatSync(parent);
+    const expectedUid = typeof process.geteuid === 'function' ? process.geteuid() : info.uid;
+    if (
+        !info.isDirectory() ||
+        info.isSymbolicLink() ||
+        info.uid !== expectedUid ||
+        (info.mode & 0o077) !== 0
+    ) {
+        throw new Error(`Private socket parent is unsafe: ${parent}`);
+    }
+    try {
+        fs.lstatSync(socketPath);
+        throw new Error(`Private socket path already exists: ${socketPath}`);
+    } catch (err) {
+        if (err.code !== 'ENOENT') {
+            throw err;
+        }
+    }
+}
+
 // Create HTTP server and start listening
 const server = http.createServer({ maxHeaderSize: 16 * 1024 }, app);
+let internalShellServer = null;
+
+if (SHELL_DISPATCH_SOCKET_PATH) {
+    assertPrivateSocketParent(SHELL_DISPATCH_SOCKET_PATH);
+    internalShellServer = http.createServer({ maxHeaderSize: 16 * 1024 }, internalShellApp);
+    internalShellServer.listen(SHELL_DISPATCH_SOCKET_PATH, () => {
+        fs.chmodSync(SHELL_DISPATCH_SOCKET_PATH, 0o600);
+        console.log(`Internal shell dispatch socket: ${SHELL_DISPATCH_SOCKET_PATH}`);
+    });
+}
 
 server.on('upgrade', (req, socket, head) => {
     if (req.url && req.url.startsWith('//')) {
@@ -3638,16 +3706,21 @@ server.on('upgrade', (req, socket, head) => {
     socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
 });
 
-server.listen(PORT, '0.0.0.0', () => {
-    console.log(`Codex Terminal Image Service running on port ${PORT}`);
+server.listen(PORT, BIND_ADDRESS, () => {
+    console.log(`Codex Terminal Image Service running on ${BIND_ADDRESS}:${PORT}`);
     console.log(`Upload directory: ${UPLOAD_DIR}`);
     console.log(`Upload retention: ${IMAGE_RETENTION_DAYS} day(s), ${IMAGE_RETENTION_MAX_BYTES} bytes`);
-    console.log(`ttyd terminal on port: ${TTYD_PORT}`);
+    console.log(TTYD_SOCKET_PATH
+        ? `ttyd terminal socket: ${TTYD_SOCKET_PATH}`
+        : `ttyd terminal on port: ${TTYD_PORT}`);
     console.log(`tmux Codex target: ${CODEX_TMUX_TARGET}`);
     console.log(`tmux raw shell target: ${RAW_TMUX_TARGET}`);
     console.log(`Terminal proxy available at /terminal/`);
     console.log(`Trusted Home Assistant ingress proxy address(es): ${[...requestSecurityPolicy.trustedIngressAddresses].join(', ')}`);
     if (requestSecurityPolicy.allowLoopbackDevelopment) {
         console.warn('Loopback-only development access is enabled by IMAGE_SERVICE_ALLOW_LOOPBACK_DEVELOPMENT=true');
+    }
+    if (requestSecurityPolicy.allowDockerBridgeDevelopment) {
+        console.warn('Docker-bridge development access is enabled; publish the host port on 127.0.0.1 only');
     }
 });

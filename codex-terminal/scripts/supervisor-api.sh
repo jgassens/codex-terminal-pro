@@ -10,6 +10,14 @@ CONNECT_TIMEOUT="10"
 MAX_TIME="60"
 MAX_CONNECT_TIMEOUT="60"
 MAX_REQUEST_TIME="300"
+SUPERVISOR_PATH_UTILS="${SUPERVISOR_PATH_UTILS:-/opt/scripts/supervisor-path-utils.sh}"
+
+if [ ! -r "$SUPERVISOR_PATH_UTILS" ]; then
+    echo "Codex Terminal Pro: Supervisor path validator is unavailable" >&2
+    exit 1
+fi
+# shellcheck disable=SC1090
+. "$SUPERVISOR_PATH_UTILS"
 
 usage() {
     cat <<EOF
@@ -106,32 +114,6 @@ append_timeout() {
     esac
 }
 
-validate_supervisor_path() {
-    local candidate="$1"
-    local route="${candidate%%\?*}"
-    local lowered
-
-    case "$candidate" in
-        *'#'*) die_usage "URL fragments are not supported" ;;
-    esac
-    case "$route" in
-        *\\*) die_usage "path cannot contain backslashes" ;;
-        *//*|*/.) die_usage "path contains an empty or dot segment" ;;
-        */..) die_usage "path contains a dot segment" ;;
-        */) [ "$route" = "/" ] || die_usage "path cannot end with an empty segment" ;;
-    esac
-    case "/${route#/}/" in
-        */./*|*/../*) die_usage "path contains a dot segment" ;;
-    esac
-
-    lowered="$(printf '%s' "$route" | tr '[:upper:]' '[:lower:]')"
-    case "$lowered" in
-        *%2e*|*%2f*|*%5c*|*%25*)
-            die_usage "encoded dot, slash, backslash, or percent segments are not supported"
-            ;;
-    esac
-}
-
 while [ "$#" -gt 0 ]; do
     case "$1" in
         -X|--request)
@@ -177,7 +159,9 @@ esac
 case "$PATH_PART" in
     *$'\r'*|*$'\n'*) die_usage "path cannot contain newlines" ;;
 esac
-validate_supervisor_path "$PATH_PART"
+if ! normalize_supervisor_path "$PATH_PART" >/dev/null; then
+    die_usage "path is ambiguous or contains an unsupported segment"
+fi
 
 CURL_ARGS=()
 option=""
@@ -244,6 +228,16 @@ fi
 TOKEN="$(<"$TOKEN_FILE")"
 URL="http://supervisor/${PATH_PART#/}"
 
+# Curl reads this header from its standard-input config so the manager token is
+# not exposed in /proc/<pid>/cmdline. Reject config metacharacters rather than
+# allowing a malformed token file to inject another curl option.
+case "$TOKEN" in
+    ''|*$'\r'*|*$'\n'*|*\"*|*\\*)
+        echo "Codex Terminal Pro: supervisor token file is invalid" >&2
+        exit 1
+        ;;
+esac
+
 exec "$CURL_BIN" --disable \
     --fail \
     --silent \
@@ -253,6 +247,8 @@ exec "$CURL_BIN" --disable \
     --connect-timeout "$CONNECT_TIMEOUT" \
     --max-time "$MAX_TIME" \
     -X "$METHOD" \
-    -H "Authorization: Bearer ${TOKEN}" \
+    --config - \
     "${CURL_ARGS[@]}" \
-    "$URL"
+    "$URL" <<CURL_CONFIG
+header = "Authorization: Bearer ${TOKEN}"
+CURL_CONFIG

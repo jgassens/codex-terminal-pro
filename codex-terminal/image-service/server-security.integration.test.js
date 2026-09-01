@@ -3,10 +3,16 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
+const http = require('http');
 const net = require('net');
 const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
+const sharp = require('sharp');
+const VALID_PNG = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+    'base64'
+);
 const MINIMAL_PNG_HEADER = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 async function reservePort() {
@@ -42,8 +48,27 @@ async function waitForHealth(baseUrl, child) {
     throw new Error('image service did not become healthy');
 }
 
+async function waitForProcessExit(pid, timeoutMs = 5000) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        try {
+            process.kill(pid, 0);
+        } catch (err) {
+            if (err.code === 'ESRCH') {
+                return;
+            }
+            throw err;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    throw new Error(`process ${pid} survived its cleanup deadline`);
+}
+
 async function startServer(t, allowLoopbackDevelopment, buildExtraEnvironment = () => ({})) {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ctp-server-test-'));
+    const runtimeDirectory = path.join(directory, 'runtime');
+    const shellDispatchSocket = path.join(runtimeDirectory, 'shell-dispatch.sock');
+    fs.mkdirSync(runtimeDirectory, { mode: 0o700 });
     const port = await reservePort();
     const extraEnvironment = buildExtraEnvironment(directory);
     const child = spawn(process.execPath, [path.join(__dirname, 'server.js')], {
@@ -62,6 +87,8 @@ async function startServer(t, allowLoopbackDevelopment, buildExtraEnvironment = 
             NODE_ENV: 'test',
             IMAGE_SERVICE_TEST_MODE: 'true',
             IMAGE_SERVICE_ALLOW_LOOPBACK_DEVELOPMENT: allowLoopbackDevelopment ? 'true' : 'false',
+            SHELL_DISPATCH_SOCKET_PATH: shellDispatchSocket,
+            SIGNIN_TRUSTED_PROCESS_USER: 'root',
             ...extraEnvironment
         },
         stdio: ['ignore', 'ignore', 'pipe']
@@ -77,10 +104,111 @@ async function startServer(t, allowLoopbackDevelopment, buildExtraEnvironment = 
     const baseUrl = `http://127.0.0.1:${port}`;
     try {
         await waitForHealth(baseUrl, child);
+        const socketDeadline = Date.now() + 2000;
+        while (!fs.existsSync(shellDispatchSocket) && Date.now() < socketDeadline) {
+            await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        if (!fs.existsSync(shellDispatchSocket)) {
+            throw new Error('internal shell dispatch socket did not become ready');
+        }
     } catch (err) {
         throw new Error(`${err.message}\n${stderr}`);
     }
-    return { baseUrl, directory, child, stderr: () => stderr };
+    return { baseUrl, directory, child, shellDispatchSocket, stderr: () => stderr };
+}
+
+async function unixJsonRequest(socketPath, body) {
+    return new Promise((resolve, reject) => {
+        const request = http.request({
+            socketPath,
+            path: '/terminal-shell-command',
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        }, (response) => {
+            let payload = '';
+            response.setEncoding('utf8');
+            response.on('data', (chunk) => { payload += chunk; });
+            response.on('end', () => resolve({
+                status: response.statusCode,
+                body: payload ? JSON.parse(payload) : {}
+            }));
+        });
+        request.on('error', reject);
+        request.end(JSON.stringify(body));
+    });
+}
+
+async function startUnixTerminalBackend(t) {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ctp-ttyd-socket-test-'));
+    const socketPath = path.join(directory, 'ttyd.sock');
+    const server = http.createServer((request, response) => {
+        response.setHeader('Content-Type', 'text/plain');
+        response.end(`unix-terminal:${request.url}`);
+    });
+    server.on('upgrade', (request, socket) => {
+        socket.end([
+            'HTTP/1.1 101 Switching Protocols',
+            'Connection: Upgrade',
+            'Upgrade: websocket',
+            `X-Upstream-Path: ${request.url}`,
+            '',
+            'unix-terminal-upgrade'
+        ].join('\r\n'));
+    });
+    await new Promise((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(socketPath, resolve);
+    });
+    t.after(() => {
+        server.close();
+        fs.rmSync(directory, { recursive: true, force: true });
+    });
+    return socketPath;
+}
+
+async function startCallbackListener(t, port = 1455) {
+    const paths = [];
+    let connections = 0;
+    const server = http.createServer((request, response) => {
+        paths.push(request.url);
+        response.statusCode = 200;
+        response.end('received');
+    });
+    server.on('connection', () => {
+        connections += 1;
+    });
+    await new Promise((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(port, '127.0.0.1', resolve);
+    });
+    t.after(() => server.close());
+    return { paths, connectionCount: () => connections };
+}
+
+async function rawWebSocketUpgrade(port) {
+    return new Promise((resolve, reject) => {
+        const socket = net.connect(port, '127.0.0.1');
+        let response = '';
+        socket.setEncoding('utf8');
+        socket.once('error', reject);
+        socket.on('data', (chunk) => {
+            response += chunk;
+        });
+        socket.on('end', () => resolve(response));
+        socket.on('connect', () => {
+            socket.write([
+                'GET /terminal/ws?client=test HTTP/1.1',
+                `Host: 127.0.0.1:${port}`,
+                `Origin: http://127.0.0.1:${port}`,
+                'Connection: Upgrade',
+                'Upgrade: websocket',
+                'Sec-WebSocket-Version: 13',
+                'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==',
+                '',
+                ''
+            ].join('\r\n'));
+        });
+    });
 }
 
 test('direct loopback access is denied by default while the local health probe remains available', async (t) => {
@@ -150,14 +278,14 @@ esac
 test('explicit loopback development mode still enforces same-origin upload checks', async (t) => {
     const { baseUrl, directory } = await startServer(t, true);
     const withoutOrigin = new FormData();
-    withoutOrigin.set('image', new Blob([MINIMAL_PNG_HEADER], { type: 'image/png' }), 'first.png');
+    withoutOrigin.set('image', new Blob([VALID_PNG], { type: 'image/png' }), 'first.png');
     assert.equal((await fetch(`${baseUrl}/upload`, {
         method: 'POST',
         body: withoutOrigin
     })).status, 403);
 
     const foreignOrigin = new FormData();
-    foreignOrigin.set('image', new Blob([MINIMAL_PNG_HEADER], { type: 'image/png' }), 'second.png');
+    foreignOrigin.set('image', new Blob([VALID_PNG], { type: 'image/png' }), 'second.png');
     assert.equal((await fetch(`${baseUrl}/upload`, {
         method: 'POST',
         headers: {
@@ -170,7 +298,7 @@ test('explicit loopback development mode still enforces same-origin upload check
     const filenames = [];
     for (let index = 0; index < 2; index += 1) {
         const form = new FormData();
-        form.set('image', new Blob([MINIMAL_PNG_HEADER], { type: 'image/png' }), 'valid.png');
+        form.set('image', new Blob([VALID_PNG], { type: 'image/png' }), 'valid.png');
         const response = await fetch(`${baseUrl}/upload`, {
             method: 'POST',
             headers: { Origin: baseUrl },
@@ -183,7 +311,7 @@ test('explicit loopback development mode still enforces same-origin upload check
     // The browser wrapper adds only the request marker. In particular it must
     // leave Content-Type unset so fetch can supply the multipart boundary.
     const markerOnly = new FormData();
-    markerOnly.set('image', new Blob([MINIMAL_PNG_HEADER], { type: 'image/png' }), 'marker.png');
+    markerOnly.set('image', new Blob([VALID_PNG], { type: 'image/png' }), 'marker.png');
     const markerResponse = await fetch(`${baseUrl}/upload`, {
         method: 'POST',
         headers: { 'X-Codex-Terminal-Request': '1' },
@@ -194,6 +322,91 @@ test('explicit loopback development mode still enforces same-origin upload check
 
     assert.notEqual(filenames[0], filenames[1]);
     assert.equal(fs.readdirSync(path.join(directory, 'uploads')).length, 3);
+});
+
+test('every advertised portable image format passes a complete decode', async (t) => {
+    const { baseUrl, directory } = await startServer(t, true);
+    const makeRaster = (format) => sharp({
+        create: {
+            width: 2,
+            height: 2,
+            channels: 4,
+            background: { r: 20, g: 40, b: 60, alpha: 1 }
+        }
+    })[format]().toBuffer();
+    const samples = [
+        ['sample.jpg', 'image/jpeg', await makeRaster('jpeg')],
+        ['sample.png', 'image/png', await makeRaster('png')],
+        ['sample.gif', 'image/gif', await makeRaster('gif')],
+        ['sample.webp', 'image/webp', await makeRaster('webp')],
+        [
+            'sample.svg',
+            'image/svg+xml',
+            Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"><rect width="2" height="2" fill="#123456"/></svg>')
+        ]
+    ];
+
+    for (const [filename, mimetype, payload] of samples) {
+        const form = new FormData();
+        form.set('image', new Blob([payload], { type: mimetype }), filename);
+        const response = await fetch(`${baseUrl}/upload`, {
+            method: 'POST',
+            headers: { Origin: baseUrl },
+            body: form
+        });
+        assert.equal(response.status, 200, filename);
+    }
+    assert.equal(fs.readdirSync(path.join(directory, 'uploads')).length, samples.length);
+});
+
+test('an image signature without decodable pixels is rejected and removed', async (t) => {
+    const { baseUrl, directory } = await startServer(t, true);
+    const form = new FormData();
+    form.set(
+        'image',
+        new Blob([Buffer.concat([MINIMAL_PNG_HEADER, Buffer.from('not-pixels')])], { type: 'image/png' }),
+        'truncated.png'
+    );
+    const response = await fetch(`${baseUrl}/upload`, {
+        method: 'POST',
+        headers: { Origin: baseUrl },
+        body: form
+    });
+    assert.equal(response.status, 400);
+    assert.equal(fs.readdirSync(path.join(directory, 'uploads')).length, 0);
+});
+
+test('HEIC is rejected when the portable decoder cannot provide a complete decode', async (t) => {
+    const { baseUrl, directory } = await startServer(t, true);
+    const fakeHeic = Buffer.from('0000001866747970686569630000000068656963', 'hex');
+    for (const [payload, filename] of [
+        [fakeHeic, 'camera.heic'],
+        [VALID_PNG, 'misleading.png']
+    ]) {
+        const form = new FormData();
+        form.set('image', new Blob([payload], { type: 'image/heic' }), filename);
+        const response = await fetch(`${baseUrl}/upload`, {
+            method: 'POST',
+            headers: { Origin: baseUrl },
+            body: form
+        });
+        assert.equal(response.status, 400);
+    }
+    assert.equal(fs.readdirSync(path.join(directory, 'uploads')).length, 0);
+});
+
+test('SVG active content is rejected even when it appears after 4 KiB', async (t) => {
+    const { baseUrl, directory } = await startServer(t, true);
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg"><desc>${'a'.repeat(5000)}</desc><script>alert(1)</script></svg>`;
+    const form = new FormData();
+    form.set('image', new Blob([svg], { type: 'image/svg+xml' }), 'late-script.svg');
+    const response = await fetch(`${baseUrl}/upload`, {
+        method: 'POST',
+        headers: { Origin: baseUrl },
+        body: form
+    });
+    assert.equal(response.status, 400);
+    assert.equal(fs.readdirSync(path.join(directory, 'uploads')).length, 0);
 });
 
 test('Change Desk accepts browser proof when Origin and Referer are absent', async (t) => {
@@ -385,7 +598,7 @@ test('unsupported uploads and malformed or oversized JSON are client errors', as
     assert.match((await oversized.json()).error, /too large/i);
 });
 
-test('an early Codex exit during Mall Cop input returns an error without crashing the service', async (t) => {
+test('Mall Cop renders locally without launching Codex or consuming a login', async (t) => {
     let attemptFile;
     const { baseUrl, stderr } = await startServer(t, true, (directory) => {
         const binDirectory = path.join(directory, 'bin');
@@ -421,8 +634,10 @@ test('an early Codex exit during Mall Cop input returns an error without crashin
         },
         body: JSON.stringify({ mode: 'auto' })
     });
-    assert.equal(response.status, 502, `${await response.clone().text()}\n${stderr()}`);
-    assert.equal(fs.readFileSync(attemptFile, 'utf8'), 'x');
+    assert.equal(response.status, 200, `${await response.clone().text()}\n${stderr()}`);
+    const firstPayload = await response.json();
+    assert.match(firstPayload.observation.summary, /## Bottom line/);
+    assert.equal(fs.existsSync(attemptFile), false);
 
     const cooledDown = await fetch(`${baseUrl}/change-desk/mall-cop`, {
         method: 'POST',
@@ -431,15 +646,58 @@ test('an early Codex exit during Mall Cop input returns an error without crashin
     });
     assert.equal(cooledDown.status, 200);
     assert.equal((await cooledDown.json()).skipped, true);
-    assert.equal(fs.readFileSync(attemptFile, 'utf8'), 'x');
+    assert.equal(fs.existsSync(attemptFile), false);
 
     const manualRetry = await fetch(`${baseUrl}/change-desk/mall-cop`, {
         method: 'POST',
         headers: { Origin: baseUrl, 'Content-Type': 'application/json' },
         body: JSON.stringify({ force: true })
     });
-    assert.equal(manualRetry.status, 502);
-    assert.equal(fs.readFileSync(attemptFile, 'utf8'), 'xx');
+    assert.equal(manualRetry.status, 200);
+    assert.equal(fs.existsSync(attemptFile), false);
+    assert.equal((await fetch(`${baseUrl}/health`)).status, 200);
+});
+
+test('Mall Cop ignores obsolete external launcher and timeout settings', async (t) => {
+    let launcherPidFile;
+    let descendantPidFile;
+    const { baseUrl, stderr } = await startServer(t, true, (directory) => {
+        const binDirectory = path.join(directory, 'bin');
+        fs.mkdirSync(binDirectory);
+        launcherPidFile = path.join(directory, 'mall-cop-launcher-pid');
+        descendantPidFile = path.join(directory, 'mall-cop-descendant-pid');
+        fs.writeFileSync(
+            path.join(binDirectory, 'codex'),
+            `#!/bin/sh
+descendant=''
+trap 'wait "$descendant" 2>/dev/null || true; exit 0' TERM
+(
+    trap 'exit 0' TERM
+    while :; do sleep 1; done
+) &
+descendant=$!
+printf '%s\n' "$$" > ${JSON.stringify(launcherPidFile)}
+printf '%s\n' "$descendant" > ${JSON.stringify(descendantPidFile)}
+wait "$descendant"
+`,
+            { mode: 0o755 }
+        );
+        return {
+            IMAGE_SERVICE_TEST_CODEX_PATH: path.join(binDirectory, 'codex'),
+            CHANGE_DESK_FAST_COMMAND_TIMEOUT_MS: '10',
+            CHANGE_DESK_COMMAND_TIMEOUT_MS: '10',
+            CHANGE_DESK_MALL_COP_TIMEOUT_MS: '1000'
+        };
+    });
+
+    const response = await fetch(`${baseUrl}/change-desk/mall-cop`, {
+        method: 'POST',
+        headers: { Origin: baseUrl, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ force: true })
+    });
+    assert.equal(response.status, 200, `${await response.clone().text()}\n${stderr()}`);
+    assert.equal(fs.existsSync(launcherPidFile), false);
+    assert.equal(fs.existsSync(descendantPidFile), false);
     assert.equal((await fetch(`${baseUrl}/health`)).status, 200);
 });
 

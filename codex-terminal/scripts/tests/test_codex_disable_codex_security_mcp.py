@@ -77,6 +77,32 @@ class CodexSecurityMcpDisableTests(unittest.TestCase):
         self.assertEqual(updated.count("codex-security"), 2)
         tomllib.loads(updated)
 
+    def test_multiline_string_lookalikes_are_preserved_as_data(self) -> None:
+        original = (
+            'banner = """\n'
+            '[plugins."codex-security@openai-curated-remote".mcp_servers."codex-security"]\n'
+            'enabled = true\n'
+            '"""\n'
+            "\n"
+            '[plugins."codex-security@openai-curated-remote"]\n'
+            "note = '''\n"
+            "mcp_servers.'codex-security'.enabled = true\n"
+            "'''\n"
+        )
+        before = tomllib.loads(original)
+
+        updated, result = self.run_script(original)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        after = tomllib.loads(updated)
+        self.assertEqual(after["banner"], before["banner"])
+        plugin = after["plugins"]["codex-security@openai-curated-remote"]
+        self.assertEqual(
+            plugin["note"],
+            before["plugins"]["codex-security@openai-curated-remote"]["note"],
+        )
+        self.assertIs(plugin["mcp_servers"]["codex-security"]["enabled"], False)
+
     def test_invalid_input_is_never_replaced(self) -> None:
         original = '[plugins."codex-security@openai-curated-remote"\nenabled = true\n'
         updated, result = self.run_script(original)

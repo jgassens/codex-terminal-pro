@@ -285,10 +285,11 @@ def audit_config(args: argparse.Namespace) -> int:
             continue
 
         result["yaml"]["ok"] += 1
-        if isinstance(payload, dict):
+        is_sensitive = path.name in SENSITIVE_FILENAMES
+        if not is_sensitive and isinstance(payload, dict):
             root_key_counter.update(str(key) for key in payload.keys())
 
-        if path.name not in SENSITIVE_FILENAMES:
+        if not is_sensitive:
             text = path.read_text(encoding="utf-8", errors="replace").lower()
             matches = [keyword for keyword in KEYWORDS if keyword in text]
             if matches:

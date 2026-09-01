@@ -1,12 +1,14 @@
 import os
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 SSH_BRIDGE = SCRIPTS / "codex-terminal-ssh-bridge.sh"
+HOST_ATTACH = SCRIPTS / "codex-terminal-host-attach.sh"
 MAILBOX_HELPER = SCRIPTS / "codex-terminal-ssh-mailbox.py"
 
 
@@ -51,6 +53,17 @@ class MailboxSafetyTests(unittest.TestCase):
                 str(request),
             ],
             env=self.env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    def run_bridge_function(
+        self, snippet: str, *, env: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["bash", "-c", '. "$1"; eval "$2"', "test", str(SSH_BRIDGE), snippet],
+            env=env or self.env,
             text=True,
             capture_output=True,
             check=False,
@@ -191,6 +204,144 @@ class MailboxSafetyTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(marker.read_text(), "safe")
+
+    def test_invalid_done_symlink_ages_out_as_abandoned_without_following_it(self):
+        request = self.request("request.poisoned")
+        (request / "command").write_text("status\n")
+        target = self.outside / "done-target"
+        target.write_text("keep-me")
+        (request / "done").symlink_to(target)
+        os.utime(request, (1, 1))
+
+        result = subprocess.run(
+            [
+                "python3",
+                str(MAILBOX_HELPER),
+                "cleanup",
+                str(self.requests),
+                "1000",
+                "10",
+                "100",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(request.exists())
+        self.assertEqual(target.read_text(), "keep-me")
+
+    def test_bridge_directory_setup_refuses_a_planted_symlink_component(self):
+        target = self.outside / "redirect-target"
+        target.mkdir(mode=0o755)
+        marker = target / "keep-me"
+        marker.write_text("safe")
+        planted = self.root / "planted"
+        planted.symlink_to(target, target_is_directory=True)
+        original_mode = target.stat().st_mode & 0o777
+        env = {
+            **self.env,
+            "CODEX_TERMINAL_SSH_BRIDGE_DIR": str(planted / "ssh-bridge"),
+            "CODEX_TERMINAL_SSH_BRIDGE_LOG": str(self.root / "logs" / "bridge.log"),
+        }
+
+        result = self.run_bridge_function("prepare_bridge_directories", env=env)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("failed safely", result.stderr)
+        self.assertEqual(target.stat().st_mode & 0o777, original_mode)
+        self.assertEqual(marker.read_text(), "safe")
+        self.assertFalse((target / "ssh-bridge").exists())
+
+    def test_stale_pid_lock_is_recovered_and_released(self):
+        lock = self.root / "bridge.lock"
+        lock.mkdir(mode=0o700)
+        (lock / "pid").write_text("99999999\n")
+        env = {**self.env, "CODEX_TERMINAL_SSH_LOCK_DIR": str(lock)}
+
+        result = self.run_bridge_function(
+            'acquire_bridge_lock; printf "acquired\\n"', env=env
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "acquired\n")
+        self.assertFalse(lock.exists())
+
+    def test_live_pid_lock_is_left_in_place(self):
+        lock = self.root / "bridge.lock"
+        lock.mkdir(mode=0o700)
+        (lock / "pid").write_text(f"{os.getpid()}\n")
+        env = {**self.env, "CODEX_TERMINAL_SSH_LOCK_DIR": str(lock)}
+
+        result = self.run_bridge_function(
+            'status=0; acquire_bridge_lock || status=$?; printf "%s\\n" "$status"',
+            env=env,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "1\n")
+        self.assertEqual((lock / "pid").read_text(), f"{os.getpid()}\n")
+
+    def test_symlink_lock_is_refused_without_touching_target(self):
+        target = self.outside / "lock-target"
+        target.mkdir(mode=0o700)
+        marker = target / "keep-me"
+        marker.write_text("safe")
+        lock = self.root / "bridge.lock"
+        lock.symlink_to(target, target_is_directory=True)
+        env = {**self.env, "CODEX_TERMINAL_SSH_LOCK_DIR": str(lock)}
+
+        result = self.run_bridge_function(
+            'status=0; acquire_bridge_lock || status=$?; printf "%s\\n" "$status"',
+            env=env,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "2\n")
+        self.assertEqual(marker.read_text(), "safe")
+
+    def test_host_attach_uses_private_modes_under_a_permissive_umask(self):
+        env = {
+            **os.environ,
+            "CODEX_TERMINAL_HOST_ATTACH_LIBRARY_ONLY": "true",
+            "CODEX_TERMINAL_PRO_BRIDGE_DIR": str(self.bridge),
+            "CODEX_TERMINAL_PRO_BRIDGE_TIMEOUT": "30",
+        }
+        process = subprocess.Popen(
+            [
+                "sh",
+                "-c",
+                'umask 000; . "$1"; bridge_status_request',
+                "test",
+                str(HOST_ATTACH),
+            ],
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        try:
+            request = None
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                candidates = list(self.requests.glob("request.*"))
+                if candidates and (candidates[0] / "ready").exists():
+                    request = candidates[0]
+                    break
+                time.sleep(0.02)
+            self.assertIsNotNone(request, "host attach did not publish a request")
+            assert request is not None
+            self.assertEqual(request.stat().st_mode & 0o777, 0o700)
+            self.assertEqual((request / "command").stat().st_mode & 0o777, 0o600)
+            self.assertEqual((request / "ready").stat().st_mode & 0o777, 0o600)
+        finally:
+            process.terminate()
+            try:
+                process.communicate(timeout=3)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.communicate()
 
 
 if __name__ == "__main__":

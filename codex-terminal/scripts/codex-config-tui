@@ -4,11 +4,19 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
+import tomllib
 from pathlib import Path
 
-from codex_config_utils import locked_config, read_config, validate_toml, write_atomic_validated
+from codex_config_utils import (
+    iter_toml_lines,
+    locked_config,
+    read_config,
+    validate_toml,
+    write_atomic_validated,
+)
 
 
 UNSUPPORTED = {"auto-review", "permissions", "approval-mode"}
@@ -30,22 +38,97 @@ status_line = ["run-state", "model-with-reasoning", "fast-mode", "context-remain
 """
 
 
-def sanitize_status_line(text: str) -> str:
-    def sanitize(match: re.Match[str]) -> str:
-        items = re.findall(r'"([^"]+)"', match.group("body"))
-        if not items:
-            return match.group(0)
-        kept = [item for item in items if item not in UNSUPPORTED] or DEFAULT_ITEMS
-        if kept == items:
-            return match.group(0)
-        rendered = ", ".join(f'"{item}"' for item in kept)
-        return f'{match.group("prefix")}[{rendered}]{match.group("suffix")}'
+def find_array_end(text: str, start: int) -> int:
+    """Find a TOML array's closing bracket without mistaking string data."""
+    depth = 0
+    quote: str | None = None
+    multiline = False
+    index = start
+    in_comment = False
 
-    return re.sub(
-        r'(?m)^(?P<prefix>[ \t]*status_line[ \t]*=[ \t]*)\[(?P<body>[^\n\]]*)\](?P<suffix>[ \t]*(?:#.*)?)$',
-        sanitize,
-        text,
-    )
+    while index < len(text):
+        if in_comment:
+            if text[index] == "\n":
+                in_comment = False
+            index += 1
+            continue
+
+        if quote is not None:
+            delimiter = quote * (3 if multiline else 1)
+            if text.startswith(delimiter, index):
+                quote = None
+                multiline = False
+                index += len(delimiter)
+                continue
+            if quote == '"' and text[index] == "\\":
+                index += 2
+                continue
+            index += 1
+            continue
+
+        if text.startswith('"""', index) or text.startswith("'''", index):
+            quote = text[index]
+            multiline = True
+            index += 3
+            continue
+        if text[index] in {'"', "'"}:
+            quote = text[index]
+            index += 1
+            continue
+        if text[index] == "#":
+            in_comment = True
+        elif text[index] == "[":
+            depth += 1
+        elif text[index] == "]":
+            depth -= 1
+            if depth == 0:
+                return index
+        index += 1
+
+    raise ValueError("tui.status_line array has no closing bracket")
+
+
+def status_line_array_span(text: str) -> tuple[int, int] | None:
+    offset = 0
+    at_top_level = True
+    in_tui_table = False
+    for line, structural in iter_toml_lines(text):
+        if structural:
+            table = re.match(r"^[ \t]*\[([^\]]+)\][ \t]*(?:#.*)?$", line.rstrip("\r\n"))
+            if table:
+                at_top_level = False
+                in_tui_table = table.group(1).strip() == "tui"
+            assignment = None
+            if in_tui_table:
+                assignment = re.match(r"^[ \t]*status_line[ \t]*=[ \t]*", line)
+            elif at_top_level:
+                assignment = re.match(r"^[ \t]*tui\.status_line[ \t]*=[ \t]*", line)
+            if assignment:
+                array_start = offset + line.find("[", assignment.end())
+                if array_start < offset:
+                    raise ValueError("tui.status_line must be an array")
+                return array_start, find_array_end(text, array_start) + 1
+        offset += len(line)
+    return None
+
+
+def sanitize_status_line(text: str) -> str:
+    parsed = tomllib.loads(text or "")
+    tui = parsed.get("tui")
+    status_line = tui.get("status_line") if isinstance(tui, dict) else None
+    if not isinstance(status_line, list):
+        return text
+
+    items = [item for item in status_line if isinstance(item, str)]
+    kept = [item for item in items if item not in UNSUPPORTED] or DEFAULT_ITEMS
+    if kept == items and len(items) == len(status_line):
+        return text
+
+    span = status_line_array_span(text)
+    if span is None:
+        raise ValueError("could not safely locate tui.status_line for repair")
+    rendered = "[" + ", ".join(json.dumps(item, ensure_ascii=False) for item in kept) + "]"
+    return text[: span[0]] + rendered + text[span[1] :]
 
 
 def main() -> int:
@@ -60,7 +143,7 @@ def main() -> int:
             if not re.search(r'(?m)^[ \t]*(?:\[tui\]|tui\.)', updated):
                 updated = updated.rstrip("\r\n") + DEFAULT_BLOCK
             if updated != original:
-                write_atomic_validated(args.config, updated)
+                write_atomic_validated(args.config, updated, expected_text=original)
         return 0
     except Exception as exc:
         print(f"Codex TUI config was left unchanged: {exc}", file=sys.stderr)

@@ -8,16 +8,77 @@ log_file="${CODEX_TERMINAL_SSH_BRIDGE_LOG:-/data/logs/ssh-bridge.log}"
 tmux_config="${CODEX_TERMINAL_TMUX_CONFIG:-/data/.tmux.conf}"
 tmux_session="${TMUX_SESSION:-codex-terminal}"
 tmux_target="${CODEX_TMUX_TARGET:-${TMUX_TARGET:-codex-terminal:0.0}}"
-lock_dir="/tmp/codex-terminal-ssh-bridge.lock"
+lock_dir="${CODEX_TERMINAL_SSH_LOCK_DIR:-/tmp/codex-terminal-ssh-bridge.lock}"
 request_done_ttl="${CODEX_TERMINAL_SSH_DONE_TTL:-300}"
 request_abandoned_ttl="${CODEX_TERMINAL_SSH_ABANDONED_TTL:-3600}"
 mailbox_helper="${CODEX_TERMINAL_SSH_MAILBOX_HELPER:-/opt/scripts/codex-terminal-ssh-mailbox.py}"
 
 log() {
     local message="$1"
-    mkdir -p "$(dirname "$log_file")"
     printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$message" >> "$log_file"
     printf '%s\n' "$message"
+}
+
+prepare_bridge_directories() {
+    python3 "$mailbox_helper" prepare \
+        "$bridge_root" "$request_root" "$(dirname "$log_file")"
+}
+
+release_bridge_lock() {
+    local recorded_pid=""
+    local pid_file="${lock_dir}/pid"
+
+    [ ! -L "$lock_dir" ] || return 0
+    [ -d "$lock_dir" ] || return 0
+    [ ! -L "$pid_file" ] || return 0
+    [ -f "$pid_file" ] || return 0
+    IFS= read -r recorded_pid < "$pid_file" || true
+    [ "$recorded_pid" = "$$" ] || return 0
+
+    rm -f -- "$pid_file"
+    rmdir -- "$lock_dir" 2>/dev/null || true
+}
+
+acquire_bridge_lock() {
+    local pid_file="${lock_dir}/pid"
+    local existing_pid=""
+
+    umask 077
+    if mkdir -m 700 -- "$lock_dir" 2>/dev/null; then
+        printf '%s\n' "$$" > "$pid_file"
+        trap release_bridge_lock EXIT
+        return 0
+    fi
+
+    # Refuse non-directory and symlink lock entries.  A stale lock created by
+    # this script contains only a regular PID file; anything else is left
+    # untouched for an operator to inspect.
+    if [ -L "$lock_dir" ] || [ ! -d "$lock_dir" ] || [ ! -O "$lock_dir" ]; then
+        return 2
+    fi
+    if [ -L "$pid_file" ] || { [ -e "$pid_file" ] && [ ! -f "$pid_file" ]; }; then
+        return 2
+    fi
+
+    if [ -f "$pid_file" ]; then
+        [ -O "$pid_file" ] || return 2
+        IFS= read -r existing_pid < "$pid_file" || true
+        if [[ "$existing_pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$existing_pid" 2>/dev/null; then
+            return 1
+        fi
+        rm -f -- "$pid_file" || return 2
+    fi
+
+    # rmdir succeeds only for the exact, now-empty lock directory.  It cannot
+    # recursively remove an entry planted alongside the stale PID file.
+    rmdir -- "$lock_dir" 2>/dev/null || return 2
+    if ! mkdir -m 700 -- "$lock_dir" 2>/dev/null; then
+        # Another instance won the recovery race; leave its lock alone.
+        return 1
+    fi
+    printf '%s\n' "$$" > "$pid_file"
+    trap release_bridge_lock EXIT
+    return 0
 }
 
 cleanup_stale_requests() {
@@ -96,15 +157,26 @@ process_request() {
 }
 
 main() {
-    if ! mkdir "$lock_dir" 2>/dev/null; then
-        log "SSH bridge already running"
-        exit 0
-    fi
-    trap 'rmdir "$lock_dir" 2>/dev/null || true' EXIT
+    local lock_status=0
 
-    mkdir -p "$request_root" "$(dirname "$log_file")"
-    chmod 700 "$bridge_root" "$request_root" 2>/dev/null || true
-    chmod 700 "$(dirname "$log_file")" 2>/dev/null || true
+    if ! prepare_bridge_directories; then
+        printf 'SSH bridge directory setup failed safely.\n' >&2
+        return 1
+    fi
+
+    acquire_bridge_lock || lock_status=$?
+    case "$lock_status" in
+        0)
+            ;;
+        1)
+            log "SSH bridge already running"
+            return 0
+            ;;
+        *)
+            log "SSH bridge lock path is unsafe or cannot be recovered: ${lock_dir}"
+            return 1
+            ;;
+    esac
 
     log "SSH bridge listening in ${request_root}"
 

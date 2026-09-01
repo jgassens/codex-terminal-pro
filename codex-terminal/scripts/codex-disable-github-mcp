@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Disable only legacy PAT-backed GitHub MCP transports when no PAT exists."""
+"""Disable unsupported legacy PAT-backed GitHub MCP transports."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import re
 from pathlib import Path
 
 from codex_config_utils import (
+    iter_toml_lines,
     locked_config,
     read_config,
     validate_toml,
@@ -56,8 +57,8 @@ GLOBAL_GITHUB_NAMES = {
 def split_tables(text: str) -> list[list[str]]:
     blocks: list[list[str]] = []
     current: list[str] = []
-    for line in text.splitlines(keepends=True):
-        if table_name(line) is not None and current:
+    for line, structural in iter_toml_lines(text):
+        if structural and table_name(line) is not None and current:
             blocks.append(current)
             current = []
         current.append(line)
@@ -69,8 +70,8 @@ def split_tables(text: str) -> list[list[str]]:
 def disable_block(block: list[str]) -> list[str]:
     output: list[str] = []
     replaced = False
-    for line in block:
-        match = ENABLED_RE.match(line)
+    for line, structural in iter_toml_lines("".join(block)):
+        match = ENABLED_RE.match(line) if structural else None
         if not replaced and match:
             output.append(f'{match.group("prefix")}false{match.group("suffix")}{match.group("nl")}')
             replaced = True
@@ -84,7 +85,11 @@ def disable_block(block: list[str]) -> list[str]:
 
 
 def is_known_global_github_server(block: list[str]) -> bool:
-    body = "".join(block)
+    body = "".join(
+        line
+        for line, structural in iter_toml_lines("".join(block))
+        if structural
+    )
     token_match = re.search(
         r"^\s*bearer_token_env_var\s*=\s*([\"'])GITHUB_PAT_TOKEN\1\s*(?:#.*)?$",
         body,
@@ -123,8 +128,16 @@ def dotted_plugin_pattern(plugin_id: str) -> str:
 def insert_before_first_table(text: str, additions: list[str]) -> str:
     if not additions:
         return text
-    lines = text.splitlines(keepends=True)
-    insertion = next((index for index, line in enumerate(lines) if table_name(line) is not None), len(lines))
+    annotated_lines = list(iter_toml_lines(text))
+    lines = [line for line, _structural in annotated_lines]
+    insertion = next(
+        (
+            index
+            for index, (line, structural) in enumerate(annotated_lines)
+            if structural and table_name(line) is not None
+        ),
+        len(lines),
+    )
     rendered = "".join(f"{line}\n" for line in additions)
     if insertion > 0 and lines[insertion - 1].strip():
         rendered += "\n"
@@ -140,11 +153,11 @@ def disable_legacy_github_mcp(text: str) -> str:
     nested_present: set[str] = set()
     top_level_lines: list[str] = []
     in_table = False
-    for line in text.splitlines(keepends=True):
-        if table_name(line) is not None:
+    for line, structural in iter_toml_lines(text):
+        if structural and table_name(line) is not None:
             in_table = True
         updated_line = line
-        if not in_table:
+        if structural and not in_table:
             for plugin_id in PLUGIN_IDS:
                 plugin = dotted_plugin_pattern(plugin_id)
                 if re.match(rf"^[ \t]*{plugin}\.enabled[ \t]*=", updated_line):
@@ -180,8 +193,12 @@ def disable_legacy_github_mcp(text: str) -> str:
             parents_present.add(plugin_id)
             local_key = r"mcp_servers\.(?:github|\"github\"|'github')\.enabled"
             transformed = [block[0]]
-            for line in block[1:]:
-                line, replaced = replace_boolean_assignment(line, local_key)
+            for line, structural in list(iter_toml_lines("".join(block)))[1:]:
+                line, replaced = (
+                    replace_boolean_assignment(line, local_key)
+                    if structural
+                    else (line, False)
+                )
                 if replaced:
                     nested_present.add(plugin_id)
                 transformed.append(line)
@@ -219,7 +236,7 @@ def disable_legacy_github_mcp(text: str) -> str:
         if updated and not updated.endswith("\n\n"):
             updated += "\n"
         updated += (
-            f'# Codex Terminal Pro: legacy PAT-backed transport is opt-in.\n'
+            f'# Codex Terminal Pro: unsupported legacy PAT-backed transport.\n'
             f'[plugins."{plugin_id}".mcp_servers.github]\n'
             "enabled = false\n"
         )
@@ -236,8 +253,6 @@ def main() -> int:
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
 
-    if os.environ.get("GITHUB_PAT_TOKEN", "").strip():
-        return 0
     if not args.config.exists():
         return 0
 
@@ -251,7 +266,7 @@ def main() -> int:
                 return 0
             if args.check:
                 return 1
-            write_atomic_validated(args.config, updated)
+            write_atomic_validated(args.config, updated, expected_text=original)
             return 0
     except Exception as exc:
         print(f"GitHub MCP config was left unchanged: {exc}", file=os.sys.stderr)

@@ -8,12 +8,64 @@ AUDIT_LOG="/data/logs/supervisor-broker.log"
 
 SUPERVISOR_BROKER_ENABLED="true"
 SUPERVISOR_BROKER_T1_TTL_SECONDS="120"
-SUPERVISOR_BROKER_PRIMARY_TMUX_TARGET="codex-terminal:0.0"
-SUPERVISOR_BROKER_RAW_TMUX_TARGET="codex-terminal:raw-shell.0"
+SUPERVISOR_BROKER_PRIMARY_TMUX_TARGET=""
+SUPERVISOR_BROKER_RAW_TMUX_TARGET=""
+SUPERVISOR_PATH_UTILS="${SUPERVISOR_PATH_UTILS:-/opt/scripts/supervisor-path-utils.sh}"
 
-if [ -f "$CONF_FILE" ]; then
-    # shellcheck disable=SC1090
-    . "$CONF_FILE"
+if [ ! -r "$SUPERVISOR_PATH_UTILS" ]; then
+    echo "Codex Terminal Pro: Supervisor path validator is unavailable" >&2
+    exit 1
+fi
+# shellcheck disable=SC1090
+. "$SUPERVISOR_PATH_UTILS"
+
+trim_config_value() {
+    local value="$1"
+    value="${value#${value%%[![:space:]]*}}"
+    value="${value%${value##*[![:space:]]}}"
+    case "$value" in
+        \"*\") value="${value#\"}"; value="${value%\"}" ;;
+        \'*\') value="${value#\'}"; value="${value%\'}" ;;
+    esac
+    printf '%s\n' "$value"
+}
+
+load_broker_config() {
+    local line
+    local key
+    local value
+
+    [ -f "$CONF_FILE" ] || return 0
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            ''|'#'*) continue ;;
+            *=*) ;;
+            *) echo "Codex Terminal Pro: invalid broker configuration line" >&2; return 1 ;;
+        esac
+        key="${line%%=*}"
+        key="${key//[[:space:]]/}"
+        value="$(trim_config_value "${line#*=}")"
+        case "$key" in
+            SUPERVISOR_BROKER_ENABLED)
+                case "$value" in true|false) SUPERVISOR_BROKER_ENABLED="$value" ;; *) return 1 ;; esac
+                ;;
+            SUPERVISOR_BROKER_T1_TTL_SECONDS)
+                case "$value" in ''|*[!0-9]*) return 1 ;; *) SUPERVISOR_BROKER_T1_TTL_SECONDS="$value" ;; esac
+                ;;
+            SUPERVISOR_BROKER_PRIMARY_TMUX_TARGET)
+                case "$value" in *[!A-Za-z0-9_.:-]*|'') return 1 ;; *) SUPERVISOR_BROKER_PRIMARY_TMUX_TARGET="$value" ;; esac
+                ;;
+            SUPERVISOR_BROKER_RAW_TMUX_TARGET)
+                case "$value" in *[!A-Za-z0-9_.:-]*|'') return 1 ;; *) SUPERVISOR_BROKER_RAW_TMUX_TARGET="$value" ;; esac
+                ;;
+            *) : ;; # Ignore retired keys without executing them as shell code.
+        esac
+    done < "$CONF_FILE"
+}
+
+if ! load_broker_config; then
+    echo "Codex Terminal Pro: refusing invalid broker configuration" >&2
+    exit 1
 fi
 
 mkdir -p "$CONFIRM_DIR" "$(dirname "$AUDIT_LOG")"
@@ -259,34 +311,6 @@ classify_rest_from_ha() {
     done
 
     classify_rest "$method" "$path"
-}
-
-normalize_supervisor_path() {
-    local candidate="${1:-}"
-    local route
-    local lowered
-
-    candidate="${candidate#http://supervisor/}"
-    candidate="/${candidate#/}"
-    route="${candidate%%\?*}"
-    route="${route%%\#*}"
-
-    case "$candidate" in
-        *'#'*) return 1 ;;
-    esac
-    case "$route" in
-        *\\*|*//*|*/.|*/..) return 1 ;;
-        */) [ "$route" = "/" ] || return 1 ;;
-    esac
-    case "/${route#/}/" in
-        */./*|*/../*) return 1 ;;
-    esac
-    lowered="$(printf '%s' "$route" | tr '[:upper:]' '[:lower:]')"
-    case "$lowered" in
-        *%2e*|*%2f*|*%5c*|*%25*) return 1 ;;
-    esac
-
-    printf '%s\n' "$route"
 }
 
 classify_rest() {
