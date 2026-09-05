@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.11.0
+
+- Upgrade the bundled Codex CLI from `0.147.0` to the stable `0.153.4`
+  release, which adds GPT-6-Astra and makes it the default model when none is
+  configured. The image build stays pinned to that exact package version; the
+  Mall Cop jail and the `consult` path pick up the new binary automatically
+  because the package layout is unchanged.
+
 ## 2.10.2
 
 - Ask consultants in parallel. `consult --agents kimi,claude "..."` runs both
