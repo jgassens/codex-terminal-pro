@@ -4935,7 +4935,9 @@
                 effortName.textContent = 'Reasoning effort';
                 const effortHint = document.createElement('span');
                 effortHint.className = 'settings-state';
-                effortHint.textContent = 'Blank uses the CLI default';
+                effortHint.textContent = consultant.defaultEffort
+                    ? `Blank uses ${consultant.defaultEffort}`
+                    : 'Blank uses the CLI default';
                 effortLabel.append(effortName, effortHint);
 
                 const effortSelect = document.createElement('select');
