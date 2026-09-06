@@ -309,7 +309,11 @@ Mall Cop through `consult`, the same isolation the optional consultants use:
 the run has its own uid, is confined to a filtered projection rather than the
 live `/config` and `/data` trees (by Landlock too where the kernel provides
 it), receives nothing but the
-fenced evidence packet, and its copy of the login is never carried back.
+fenced evidence packet, and its copy of the login is never carried back. That
+projection carries configuration text only: secrets, backups, dependency
+trees, built frontend assets, and media are left out, and if it still reaches
+its size limit the run says so on stderr rather than shrinking what the
+consultant sees in silence.
 Opening Change Desk triggers the run at most once every 24 hours, and the
 footer **Ask Mall Cop** action forces a fresh run. When Codex is signed out or
 the run fails, the same six sections are rendered deterministically and the

@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.12.2
+
+- Stop crowding the real configuration out of what consultants can see. The
+  workspace snapshot each consult builds is capped at 32MB, and on a live
+  system it was hitting that ceiling with 26MB of it spent on minified HACS
+  frontend bundles, `www/community` dashboard cards, and whole second copies
+  of the config under directories like `_codex_backups` - which the old
+  `backup`/`backups` name match never caught. Roughly 21MB of eligible
+  content, including 172 real config and component files, was being dropped
+  without a word, so a consultant answered from a partial view of `/config`
+  while most of what it could read was JavaScript. Dependency trees, bytecode,
+  built frontend assets, source maps, and web fonts are now left out, and any
+  directory whose name ends in `backup` or `backups` is treated as a backup.
+- Say so when the snapshot is still truncated. Hitting the size or file limit
+  now prints which limit was reached and how many files made it, on stderr,
+  instead of quietly shrinking the consultant's view.
+
 ## 2.12.1
 
 - Give Mall Cop its own reasoning effort. Narration summarises a bounded

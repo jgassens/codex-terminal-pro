@@ -115,7 +115,19 @@ LANDLOCK_ACCESS_FS_IOCTL_DEV = 1 << 15
 WORKSPACE_BLOCKED_DIR_NAMES = {
     ".storage", ".git", ".ssh", ".gnupg", ".cloud", ".cache",
     "backups", "backup", "media",
+    # Bulk that is never Home Assistant configuration. Left in, these crowd
+    # the real config out of the size budget: a consultant then answers from
+    # a partial view of /config while most of what it can see is minified
+    # JavaScript.
+    "node_modules", "__pycache__", "deps",
+    "hacs_frontend", "hacs_frontend_experimental",
 }
+# A snapshot directory holds a second copy of the whole config, and they are
+# named freely: _codex_backups, asusrouter-backups. The exact names above
+# never matched those.
+WORKSPACE_BLOCKED_DIR_SUFFIXES = ("backup", "backups")
+# Where HACS installs third-party dashboard cards: built dist JavaScript.
+WORKSPACE_BLOCKED_PATHS = (("www", "community"),)
 WORKSPACE_BLOCKED_FILE_NAMES = {
     "secrets.yaml", "secrets.yml", ".env", "auth.json", ".credentials.json",
     "credentials.json", "known_hosts", "id_rsa", "id_ed25519",
@@ -123,6 +135,9 @@ WORKSPACE_BLOCKED_FILE_NAMES = {
 WORKSPACE_BLOCKED_SUFFIXES = (
     ".key", ".pem", ".p12", ".pfx", ".sqlite", ".sqlite3", ".db", ".log",
     ".tar", ".tgz", ".zip", ".gz", ".bak", ".backup",
+    # Build output and web fonts: bytes without configuration in them.
+    ".map", ".min.js", ".min.css",
+    ".woff", ".woff2", ".ttf", ".otf", ".eot",
 )
 SENSITIVE_ASSIGNMENT_RE = re.compile(
     r"(?im)^(?P<prefix>\s*[\"']?[A-Za-z0-9_.-]*(?:secret|token|password|passwd|api[_-]?key|client[_-]?secret|authorization|credential)[A-Za-z0-9_.-]*[\"']?\s*[:=]\s*)(?P<value>.*)$"
@@ -751,13 +766,23 @@ def redact_workspace_text(text: str) -> str:
     return redacted
 
 
+def blocked_directory_name(name: str) -> bool:
+    """Whether one path component names a directory kept out of the copy."""
+    return (
+        name in WORKSPACE_BLOCKED_DIR_NAMES
+        or name.endswith(WORKSPACE_BLOCKED_DIR_SUFFIXES)
+    )
+
+
 def workspace_entry_allowed(relative: Path, *, directory: bool) -> bool:
     names = [part.lower() for part in relative.parts]
-    if any(name in WORKSPACE_BLOCKED_DIR_NAMES for name in names[:-1] if names):
+    if any(blocked_directory_name(name) for name in names[:-1] if names):
+        return False
+    if any(tuple(names[:len(prefix)]) == prefix for prefix in WORKSPACE_BLOCKED_PATHS):
         return False
     name = names[-1] if names else ""
     if directory:
-        return name not in WORKSPACE_BLOCKED_DIR_NAMES
+        return not blocked_directory_name(name)
     return (
         name not in WORKSPACE_BLOCKED_FILE_NAMES
         and not name.endswith(WORKSPACE_BLOCKED_SUFFIXES)
@@ -811,6 +836,7 @@ def build_filtered_workspace(source_root: Path, destination_root: Path) -> dict[
     destination_root.mkdir(mode=0o755)
     file_count = 0
     byte_count = 0
+    truncated = False
     for current, dirnames, filenames in os.walk(source_root, topdown=True, followlinks=False):
         current_path = Path(current)
         relative_dir = current_path.relative_to(source_root)
@@ -834,6 +860,7 @@ def build_filtered_workspace(source_root: Path, destination_root: Path) -> dict[
 
         for name in sorted(filenames):
             if file_count >= MAX_WORKSPACE_FILES or byte_count >= MAX_WORKSPACE_TOTAL_BYTES:
+                truncated = True
                 break
             relative = relative_dir / name
             if not workspace_entry_allowed(relative, directory=False):
@@ -843,6 +870,7 @@ def build_filtered_workspace(source_root: Path, destination_root: Path) -> dict[
                 continue
             payload = redact_workspace_text(text).encode("utf-8")
             if byte_count + len(payload) > MAX_WORKSPACE_TOTAL_BYTES:
+                truncated = True
                 continue
             target = destination_root / relative
             target.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
@@ -870,7 +898,7 @@ def build_filtered_workspace(source_root: Path, destination_root: Path) -> dict[
         os.chmod(current, 0o555)
         for name in dirnames:
             os.chmod(Path(current) / name, 0o555)
-    return {"files": file_count, "bytes": byte_count}
+    return {"files": file_count, "bytes": byte_count, "truncated": truncated}
 
 
 def set_no_new_privileges() -> None:
@@ -1142,6 +1170,16 @@ def run_consult(agent: str, prompt: str, timeout: int, model: str = "", effort: 
         snapshot = build_filtered_workspace(Path(WORKSPACE), workspace)
         if snapshot["files"] == 0:
             raise ConsultError("No safe text files were available in the consultant workspace")
+        if snapshot["truncated"]:
+            # A partial workspace is answered from as if it were complete, so
+            # never let it happen quietly.
+            print(
+                "consult: workspace snapshot hit its "
+                f"{MAX_WORKSPACE_TOTAL_BYTES // (1024 * 1024)}MB/"
+                f"{MAX_WORKSPACE_FILES}-file limit at {snapshot['files']} files; "
+                "the consultant sees only part of the configuration",
+                file=sys.stderr,
+            )
         for name in spec["credential_files"]:
             copy_credential(home / name, agent_home / name, spec["uid"], spec["gid"])
         for name in spec.get("credential_dirs", ()):

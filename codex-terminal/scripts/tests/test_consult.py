@@ -407,7 +407,7 @@ class ConsultWorkspaceProjectionTests(unittest.TestCase):
 
             result = consult.build_filtered_workspace(source, target)
 
-            self.assertEqual(result, {"files": 0, "bytes": 0})
+            self.assertEqual(result, {"files": 0, "bytes": 0, "truncated": False})
 
     def test_projection_skips_hardlinks_that_can_alias_a_blocked_secret(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -421,8 +421,80 @@ class ConsultWorkspaceProjectionTests(unittest.TestCase):
 
             result = consult.build_filtered_workspace(source, target)
 
-            self.assertEqual(result, {"files": 0, "bytes": 0})
+            self.assertEqual(result, {"files": 0, "bytes": 0, "truncated": False})
             self.assertFalse((target / "safe-looking.yaml").exists())
+
+    def test_projection_leaves_out_bulk_that_is_never_configuration(self) -> None:
+        # These crowd real config out of the size budget: on a live system
+        # they were 26 of the 32MB the consultant could see.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "config"
+            target = root / "projection"
+            for relative in (
+                "_codex_backups/old",
+                "asusrouter-backups/pre-1.1.0",
+                "custom_components/hacs/hacs_frontend",
+                "custom_components/demo/__pycache__",
+                "node_modules/pkg",
+                "deps/lib",
+                "www/community/apexcharts-card",
+                "www/local",
+                "packages",
+            ):
+                (source / relative).mkdir(parents=True)
+            (source / "configuration.yaml").write_text("real: config\n", encoding="utf-8")
+            (source / "packages" / "lights.yaml").write_text("alias: Lamp\n", encoding="utf-8")
+            (source / "www" / "local" / "note.md").write_text("mine\n", encoding="utf-8")
+            (source / "_codex_backups" / "old" / "hacs.repositories").write_text("x\n")
+            (source / "asusrouter-backups" / "pre-1.1.0" / "hacs.data").write_text("x\n")
+            (source / "custom_components" / "hacs" / "hacs_frontend" / "a.js").write_text("x\n")
+            (source / "custom_components" / "demo" / "__pycache__" / "m.pyc").write_text("x\n")
+            (source / "node_modules" / "pkg" / "index.js").write_text("x\n")
+            (source / "deps" / "lib" / "dep.py").write_text("x\n")
+            (source / "www" / "community" / "apexcharts-card" / "card.js").write_text("x\n")
+            (source / "bundle.min.js").write_text("x\n")
+            (source / "bundle.js.map").write_text("x\n")
+            (source / "font.woff2").write_text("x\n")
+
+            result = consult.build_filtered_workspace(source, target)
+
+            self.assertFalse(result["truncated"])
+            self.assertEqual(
+                sorted(p.relative_to(target).as_posix() for p in target.rglob("*") if p.is_file()),
+                ["configuration.yaml", "packages/lights.yaml", "www/local/note.md"],
+            )
+            # www itself stays; only the HACS card directory under it goes.
+            self.assertTrue((target / "www" / "local").is_dir())
+            self.assertFalse((target / "www" / "community").exists())
+
+    def test_projection_reports_when_it_runs_out_of_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "config"
+            target = root / "projection"
+            source.mkdir()
+            for index in range(3):
+                (source / f"{index}.yaml").write_text("y" * 4096, encoding="utf-8")
+
+            with mock.patch.object(consult, "MAX_WORKSPACE_TOTAL_BYTES", 5000):
+                result = consult.build_filtered_workspace(source, target)
+
+            self.assertTrue(result["truncated"])
+            self.assertLess(result["files"], 3)
+
+    def test_projection_keeps_a_complete_snapshot_unflagged(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "config"
+            target = root / "projection"
+            source.mkdir()
+            (source / "configuration.yaml").write_text("real: config\n", encoding="utf-8")
+
+            result = consult.build_filtered_workspace(source, target)
+
+            self.assertEqual(result["files"], 1)
+            self.assertFalse(result["truncated"])
 
     def test_landlock_abi_masks_include_write_denials(self) -> None:
         abi_one = consult.landlock_handled_access(1)
