@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.12.0
+
+- Consult Codex with `gpt-5.6-sol` at `max` reasoning by default. Codex CLI
+  0.153.4 made GPT-6-Astra its own built-in default, and consult runs Codex
+  with the user's config ignored, so a blank model in Settings quietly meant
+  every consult - and every Mall Cop narration - went to the most expensive
+  model. A blank Codex model and effort in Settings now mean `gpt-5.6-sol` at
+  `max`; a model or effort you choose still wins, and the add-on default is
+  skipped when the account's catalog does not list that model.
+- List real Codex models in Settings. The Codex row used to offer only
+  Default or Custom and claimed "No models available until sign-in finishes"
+  even when signed in, because nothing listed Codex models. It now reads the
+  model catalog the Codex CLI caches after its first API call, lists the
+  models that CLI shows in its own picker, and offers each model's own
+  reasoning levels. The Default option says what it means, and a consultant
+  with no list yet gets accurate wording instead of a sign-in claim.
+
 ## 2.11.0
 
 - Upgrade the bundled Codex CLI from `0.147.0` to the stable `0.153.4`

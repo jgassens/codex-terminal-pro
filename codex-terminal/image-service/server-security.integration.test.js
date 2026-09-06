@@ -308,6 +308,53 @@ printf '%s\\n' '{"consultants":[{"id":"claude","label":"Claude Code","installed"
     assert.equal(fs.readFileSync(invocationFile, 'utf8').trim().split('\n').length, 1);
 });
 
+test('settings forward consultant defaults and accept effort for an unknown custom model', async (t) => {
+    const consultant = {
+        id: 'codex',
+        label: 'Codex',
+        installed: true,
+        signedIn: true,
+        ready: true,
+        supportsModel: true,
+        supportsEffort: true,
+        effortDependsOnModel: true,
+        effortLevels: ['low', 'max'],
+        effortLevelsByModel: { '': ['low', 'max'] },
+        defaultModel: 'gpt-5.6-sol',
+        defaultEffort: 'max',
+        models: []
+    };
+    const { baseUrl, directory } = await startServer(t, true, (root) => {
+        const consult = path.join(root, 'consult');
+        fs.writeFileSync(consult, `#!/bin/sh
+printf '%s\\n' '${JSON.stringify({ consultants: [consultant] })}'
+`, { mode: 0o755 });
+        return {
+            CONSULT_BIN: consult,
+            SETTINGS_FILE: path.join(root, 'settings.json')
+        };
+    });
+
+    const getResponse = await fetch(`${baseUrl}/settings`, { headers: { Origin: baseUrl } });
+    assert.equal(getResponse.status, 200);
+    const settings = await getResponse.json();
+    assert.equal(settings.consultants[0].defaultModel, 'gpt-5.6-sol');
+    assert.equal(settings.consultants[0].defaultEffort, 'max');
+
+    const postResponse = await fetch(`${baseUrl}/settings`, {
+        method: 'POST',
+        headers: { Origin: baseUrl, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ consultants: { codex: { model: 'gpt-5.6-sol', effort: 'max' } } })
+    });
+    assert.equal(postResponse.status, 200);
+    const saved = await postResponse.json();
+    assert.deepEqual(saved.preferences.consultants.codex, { model: 'gpt-5.6-sol', effort: 'max' });
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(directory, 'settings.json'), 'utf8')).consultants.codex, {
+        model: 'gpt-5.6-sol',
+        effort: 'max'
+    });
+});
+
 test('an allowlisted URL is hidden unless the live process is the matching login CLI', async (t) => {
     const startWithProcess = (args, options = {}) => startServer(t, true, (root) => {
         const binDirectory = path.join(root, 'bin');

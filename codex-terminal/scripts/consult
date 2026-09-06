@@ -188,6 +188,13 @@ CODEX_DISABLED_FEATURES = (
     "skill_mcp_dependency_install", "tool_call_mcp_elicitation", "tool_suggest",
     "unified_exec", "workspace_dependencies",
 )
+CODEX_DEFAULT_MODEL = "gpt-5.6-sol"
+CODEX_DEFAULT_EFFORT = "max"
+CODEX_EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max", "ultra")
+# Codex writes this catalog itself, as root, but it is still data: keep the
+# read bounded and never follow a symlink out of the consultant home.
+CODEX_MODEL_CACHE_MAX_BYTES = 16 * 1024 * 1024
+CODEX_MODEL_ID_RE = re.compile(r"[A-Za-z0-9._:/-]+")
 
 
 def codex_args(prompt: str, model: str, effort: str) -> list[str]:
@@ -209,6 +216,67 @@ def codex_args(prompt: str, model: str, effort: str) -> list[str]:
         args += ["--config", f'model_reasoning_effort="{effort}"']
     args.append(prompt)
     return args
+
+
+def _codex_model_entries(home: Path) -> list[tuple[str, dict]]:
+    """Validated model entries from Codex's local API catalog cache."""
+    path = home / "models_cache.json"
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(fd, encoding="utf-8") as handle:
+            if os.fstat(fd).st_size > CODEX_MODEL_CACHE_MAX_BYTES:
+                return []
+            data = json.load(handle)
+    except (OSError, ValueError, RecursionError):
+        return []
+    models = data.get("models") if isinstance(data, dict) else None
+    if not isinstance(models, list):
+        return []
+
+    entries = []
+    for entry in models:
+        if not isinstance(entry, dict):
+            continue
+        slug = entry.get("slug")
+        if isinstance(slug, str) and CODEX_MODEL_ID_RE.fullmatch(slug):
+            entries.append((slug, entry))
+    return entries
+
+
+def codex_models(home: Path) -> list[str]:
+    """Visible Codex models, in the order advertised by the API catalog."""
+    visible = [
+        (slug, entry) for slug, entry in _codex_model_entries(home)
+        if entry.get("visibility") == "list"
+    ]
+
+    def priority(item: tuple[str, dict]) -> tuple[bool, int]:
+        value = item[1].get("priority")
+        known = isinstance(value, int) and not isinstance(value, bool)
+        return not known, value if known else 0
+
+    visible.sort(key=priority)
+    return [slug for slug, _entry in visible]
+
+
+def codex_efforts(home: Path, model: str = "") -> list[str]:
+    """Reasoning levels for a cached model, or Codex's known level set."""
+    name = model or CODEX_DEFAULT_MODEL
+    for slug, entry in _codex_model_entries(home):
+        if slug != name:
+            continue
+        levels = entry.get("supported_reasoning_levels")
+        if not isinstance(levels, list):
+            return []
+        return [
+            level["effort"] for level in levels
+            if (
+                isinstance(level, dict)
+                and isinstance(level.get("effort"), str)
+                and level["effort"]
+            )
+        ]
+    return list(CODEX_EFFORT_LEVELS)
 
 
 # Claude Code has no command that lists models, so these are its documented
@@ -356,6 +424,8 @@ CONSULTANTS = {
         "supports_model": True,
         "supports_effort": True,
         "list_efforts": lambda home, model="": ["low", "medium", "high", "xhigh", "max"],
+        "default_model": "",
+        "default_effort": "",
         "model_hint": "opus, sonnet, or a full model id",
         "effort_via_config": None,
     },
@@ -383,6 +453,8 @@ CONSULTANTS = {
         "supports_effort": True,
         # Declared per model in Kimi's own config rather than fixed here.
         "list_efforts": kimi_effort_levels,
+        "default_model": "",
+        "default_effort": "",
         "model_hint": "a model alias from your Kimi provider",
         "effort_via_config": kimi_effort_alias,
     },
@@ -399,15 +471,18 @@ CONSULTANTS = {
         "credential_dirs": (),
         "login_proof": "auth.json",
         "ready_check": always_ready,
-        "list_models": lambda home: [],
+        "list_models": codex_models,
         "extra_env": {},
         "build_args": codex_args,
         "auth_helper": "codex-auth-helper",
         "supports_model": True,
         "supports_effort": True,
-        "list_efforts": lambda home, model="": ["low", "medium", "high", "xhigh", "max"],
-        "model_hint": "a Codex model id, or blank for the CLI default",
+        "list_efforts": codex_efforts,
+        "default_model": CODEX_DEFAULT_MODEL,
+        "default_effort": CODEX_DEFAULT_EFFORT,
+        "model_hint": "a Codex model id; Default is gpt-5.6-sol at max",
         "effort_via_config": None,
+        "effort_depends_on_model": True,
         # Codex prints progress to stdout; the answer is asked for in a file.
         "answer_file": "last-message.md",
         # Never carry this copy back: it is the terminal's own identity, and a
@@ -1185,11 +1260,16 @@ def status_records() -> list[dict]:
             "authHelper": spec["auth_helper"],
             "supportsModel": spec["supports_model"],
             "supportsEffort": spec["supports_effort"],
-            "effortDependsOnModel": spec.get("effort_via_config") is not None,
+            "effortDependsOnModel": spec.get(
+                "effort_depends_on_model",
+                spec.get("effort_via_config") is not None,
+            ),
             "effortLevels": spec["list_efforts"](home, model) if installed else [],
             "effortLevelsByModel": effort_by_model,
             "modelHint": spec["model_hint"],
             "models": models,
+            "defaultModel": spec["default_model"],
+            "defaultEffort": spec["default_effort"],
             "model": model,
             "effort": effort,
         })
@@ -1372,9 +1452,30 @@ def main(argv: list[str]) -> int:
     if agent not in CONSULTANTS:
         raise ConsultError(f"Unknown consultant: {agent}")
 
+    spec = CONSULTANTS[agent]
+    home = consultant_home(spec)
     stored_model, stored_effort = consultant_preferences(settings, agent)
     model = args.model if args.model is not None else stored_model
+    if args.model is None and not model and spec["default_model"]:
+        models = spec["list_models"](home)
+        if not models or spec["default_model"] in models:
+            model = spec["default_model"]
+        else:
+            print(
+                f"consult: {spec['label']} catalog does not list "
+                f"{spec['default_model']}; using the CLI's own default model",
+                file=sys.stderr,
+            )
+
+    # The add-on's effort default belongs to its default model only: a model
+    # the user picked keeps the CLI's own default effort unless they set one.
     effort = args.effort if args.effort is not None else stored_effort
+    if (
+        args.effort is None and not effort and spec["default_effort"]
+        and model and model == spec["default_model"]
+        and spec["default_effort"] in spec["list_efforts"](home, model)
+    ):
+        effort = spec["default_effort"]
     return run_consult(agent, prompt, timeout, model, effort)
 
 

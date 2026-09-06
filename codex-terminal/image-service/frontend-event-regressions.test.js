@@ -49,3 +49,26 @@ test('every origin-protected browser route uses the ingress request marker', () 
     assert.match(upload, /protectedIngressFetch\('upload'/);
     assert.doesNotMatch(upload, /Content-Type/i);
 });
+
+test('consultant settings explain defaults and an empty signed-in model catalog', () => {
+    assert.match(html, /\? `Default \(\$\{consultant\.defaultModel\}\)`/);
+    assert.match(html, /\? `Default \(\$\{consultant\.defaultEffort\}\)`/);
+    const modelSettingsStart = html.indexOf('const available = consultant.models || []');
+    const modelSettingsEnd = html.indexOf('const modelSelect = document.createElement', modelSettingsStart);
+    assert.ok(modelSettingsStart >= 0 && modelSettingsEnd > modelSettingsStart);
+    const modelSettings = html.slice(modelSettingsStart, modelSettingsEnd);
+    assert.match(modelSettings, /if \(consultant\.defaultModel\)[\s\S]*`Default is \$\{consultant\.defaultModel\} at \$\{consultant\.defaultEffort\}`/);
+    // The empty-list explanation is appended, never displaced by a declared
+    // default, and keys on readiness so a signed-in Kimi with no registered
+    // models is still told to finish sign-in.
+    assert.match(modelSettings, /if \(!available\.length\)[\s\S]*consultant\.ready\s*\? 'no model list yet; run this consultant once or enter a model id'\s*:\s*'no models available until sign-in finishes'/);
+    assert.doesNotMatch(modelSettings, /consultant\.signedIn/);
+
+    const effortLevelsStart = html.indexOf('function effortLevelsFor(consultant, model)');
+    const effortLevelsEnd = html.indexOf('function renderConsultantRow(consultant)', effortLevelsStart);
+    assert.ok(effortLevelsStart >= 0 && effortLevelsEnd > effortLevelsStart);
+    const effortLevels = html.slice(effortLevelsStart, effortLevelsEnd);
+    assert.match(effortLevels, /hasOwnProperty\.call\(byModel, model\)/);
+    assert.match(effortLevels, /hasOwnProperty\.call\(byModel, ''\)/);
+    assert.match(effortLevels, /return byModel\[''\] \|\| \[\]/);
+});

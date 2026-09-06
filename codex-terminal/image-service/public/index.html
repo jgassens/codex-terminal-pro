@@ -4792,7 +4792,10 @@
             }
             // A custom model with model-dependent effort: the real options are
             // unknown until the CLI runs, so offer the default model's as a hint.
-            return byModel[''] || consultant.effortLevels || [];
+            if (Object.prototype.hasOwnProperty.call(byModel, '')) {
+                return byModel[''] || [];
+            }
+            return consultant.effortLevels || [];
         }
 
         function renderConsultantRow(consultant) {
@@ -4847,16 +4850,34 @@
                 modelName.textContent = 'Model';
                 const modelHint = document.createElement('span');
                 modelHint.className = 'settings-state';
-                modelHint.textContent = available.length
-                    ? 'Default lets the CLI choose'
-                    : 'No models available until sign-in finishes';
+                // What "Default" means differs per consultant: an add-on default
+                // where one is declared, otherwise whatever the CLI would pick.
+                // An empty list is explained separately: a consultant that is
+                // ready simply has not built its catalog yet, while one whose
+                // sign-in has not registered models (Kimi) still needs sign-in.
+                const hints = [];
+                if (consultant.defaultModel) {
+                    hints.push(consultant.defaultEffort
+                        ? `Default is ${consultant.defaultModel} at ${consultant.defaultEffort}`
+                        : `Default is ${consultant.defaultModel}`);
+                } else if (available.length) {
+                    hints.push('Default lets the CLI choose');
+                }
+                if (!available.length) {
+                    hints.push(consultant.ready
+                        ? 'no model list yet; run this consultant once or enter a model id'
+                        : 'no models available until sign-in finishes');
+                }
+                modelHint.textContent = hints.join('; ');
                 modelLabel.append(modelName, modelHint);
 
                 const modelSelect = document.createElement('select');
                 modelSelect.className = 'settings-input';
                 const defaultOption = document.createElement('option');
                 defaultOption.value = '';
-                defaultOption.textContent = 'Default';
+                defaultOption.textContent = consultant.defaultModel
+                    ? `Default (${consultant.defaultModel})`
+                    : 'Default';
                 modelSelect.appendChild(defaultOption);
                 for (const model of available) {
                     const option = document.createElement('option');
@@ -4930,7 +4951,9 @@
                     effortSelect.textContent = '';
                     const blank = document.createElement('option');
                     blank.value = '';
-                    blank.textContent = 'Default';
+                    blank.textContent = consultant.defaultEffort
+                        ? `Default (${consultant.defaultEffort})`
+                        : 'Default';
                     effortSelect.appendChild(blank);
                     for (const level of levels) {
                         const option = document.createElement('option');

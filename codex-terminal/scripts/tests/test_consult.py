@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
+import contextlib
+import io
 import json
 import os
 import subprocess
@@ -42,6 +44,8 @@ class ConsultantSpecTests(unittest.TestCase):
             self.assertTrue(spec["credential_files"], agent)
             self.assertTrue(spec["auth_helper"].endswith("auth-helper"), agent)
             self.assertTrue(callable(spec["build_args"]), agent)
+            self.assertIsInstance(spec["default_model"], str, agent)
+            self.assertIsInstance(spec["default_effort"], str, agent)
 
     def test_consultants_have_distinct_fixed_identities(self) -> None:
         identities = {(spec["uid"], spec["gid"]) for spec in consult.CONSULTANTS.values()}
@@ -98,6 +102,14 @@ class ConsultantSpecTests(unittest.TestCase):
 
 
 class ConsultModelSettingsTests(unittest.TestCase):
+    def resolved_preferences(
+        self, agent: str, settings: dict, *flags: str
+    ) -> tuple[str, str]:
+        with mock.patch.object(consult, "load_settings", return_value=settings), \
+                mock.patch.object(consult, "run_consult", return_value=0) as run:
+            self.assertEqual(consult.main(["--agent", agent, *flags, "question"]), 0)
+        return run.call_args.args[-2:]
+
     def test_model_and_effort_reach_the_command_line(self) -> None:
         claude = consult.CONSULTANTS["claude"]["build_args"]("q", "opus", "high")
         self.assertEqual(claude[claude.index("--model") + 1], "opus")
@@ -131,6 +143,116 @@ class ConsultModelSettingsTests(unittest.TestCase):
         self.assertEqual(consult.consultant_preferences(settings, "kimi"), ("", ""))
         self.assertEqual(consult.consultant_preferences({}, "claude"), ("", ""))
         self.assertEqual(consult.consultant_preferences({"consultants": None}, "claude"), ("", ""))
+
+    def test_blank_codex_preferences_apply_addon_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
+            os.environ, {"CODEX_HOME": directory}
+        ):
+            model, effort = self.resolved_preferences("codex", {})
+        argv = consult.codex_args("question", model, effort)
+        self.assertEqual(argv[argv.index("--model") + 1], "gpt-5.6-sol")
+        self.assertIn('model_reasoning_effort="max"', argv)
+
+    def test_explicit_codex_preferences_override_addon_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
+            os.environ, {"CODEX_HOME": directory}
+        ):
+            resolved = self.resolved_preferences(
+                "codex", {}, "--model", "gpt-custom", "--effort", "low"
+            )
+        self.assertEqual(resolved, ("gpt-custom", "low"))
+
+    def test_saved_codex_preferences_override_addon_defaults(self) -> None:
+        settings = {
+            "consultants": {"codex": {"model": "gpt-saved", "effort": "high"}}
+        }
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
+            os.environ, {"CODEX_HOME": directory}
+        ):
+            resolved = self.resolved_preferences("codex", settings)
+        self.assertEqual(resolved, ("gpt-saved", "high"))
+
+    def test_blank_claude_and_kimi_preferences_stay_blank(self) -> None:
+        self.assertEqual(self.resolved_preferences("claude", {}), ("", ""))
+        self.assertEqual(self.resolved_preferences("kimi", {}), ("", ""))
+
+    def test_codex_default_is_skipped_when_catalog_does_not_offer_it(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            (home / "models_cache.json").write_text(json.dumps({
+                "models": [{
+                    "slug": "gpt-account-model",
+                    "visibility": "list",
+                    "priority": 1,
+                    "supported_reasoning_levels": [{"effort": "high"}],
+                }]
+            }))
+            with mock.patch.dict(os.environ, {"CODEX_HOME": directory}):
+                resolved = self.resolved_preferences("codex", {})
+        self.assertEqual(resolved, ("", ""))
+
+    def test_skipped_codex_default_is_explained_on_stderr(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            (home / "models_cache.json").write_text(json.dumps({
+                "models": [
+                    {"slug": "gpt-5.6-sol", "visibility": "hide", "priority": 1},
+                    {"slug": "gpt-other", "visibility": "list", "priority": 2},
+                ]
+            }))
+            stderr = io.StringIO()
+            with mock.patch.dict(os.environ, {"CODEX_HOME": directory}), \
+                    contextlib.redirect_stderr(stderr):
+                resolved = self.resolved_preferences("codex", {})
+        self.assertEqual(resolved, ("", ""))
+        self.assertIn("does not list gpt-5.6-sol", stderr.getvalue())
+
+    def test_effort_default_belongs_to_the_default_model_only(self) -> None:
+        # A model the user chose keeps the CLI's own effort: forcing max onto
+        # gpt-5.5, which stops at xhigh, would make the consult fail.
+        settings = {"consultants": {"codex": {"model": "gpt-5.5", "effort": ""}}}
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
+            os.environ, {"CODEX_HOME": directory}
+        ):
+            self.assertEqual(self.resolved_preferences("codex", settings), ("gpt-5.5", ""))
+            sol = {"consultants": {"codex": {"model": "gpt-5.6-sol", "effort": ""}}}
+            self.assertEqual(self.resolved_preferences("codex", sol), ("gpt-5.6-sol", "max"))
+
+    def test_effort_default_is_skipped_when_the_catalog_lacks_it(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            (home / "models_cache.json").write_text(json.dumps({
+                "models": [{
+                    "slug": "gpt-5.6-sol",
+                    "visibility": "list",
+                    "priority": 1,
+                    "supported_reasoning_levels": [{"effort": "low"}, {"effort": "high"}],
+                }]
+            }))
+            with mock.patch.dict(os.environ, {"CODEX_HOME": directory}):
+                resolved = self.resolved_preferences("codex", {})
+        self.assertEqual(resolved, ("gpt-5.6-sol", ""))
+
+    def test_codex_fallback_levels_include_every_catalog_level(self) -> None:
+        # Without a cache the fallback list must not reject a level the real
+        # catalog offers; ultra is the newest.
+        with tempfile.TemporaryDirectory() as directory:
+            levels = consult.codex_efforts(Path(directory), "gpt-5.6-terra")
+        self.assertIn("ultra", levels)
+        self.assertIn("max", levels)
+
+    def test_codex_cache_symlinks_and_oversize_files_are_ignored(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            real = home / "elsewhere.json"
+            real.write_text(json.dumps({"models": [{"slug": "gpt-linked", "visibility": "list"}]}))
+            (home / "models_cache.json").symlink_to(real)
+            self.assertEqual(consult.codex_models(home), [])
+            (home / "models_cache.json").unlink()
+            (home / "models_cache.json").write_text(json.dumps({"models": [{"slug": "gpt-big", "visibility": "list"}]}))
+            with mock.patch.object(consult, "CODEX_MODEL_CACHE_MAX_BYTES", 8):
+                self.assertEqual(consult.codex_models(home), [])
+            self.assertEqual(consult.codex_models(home), ["gpt-big"])
 
     def test_unsupported_effort_is_rejected(self) -> None:
         with self.assertRaises(consult.ConsultError):
@@ -380,6 +502,61 @@ class ConsultCliTests(unittest.TestCase):
             self.assertIn("installed", entry)
             self.assertIn("signedIn", entry)
             self.assertIn("authHelper", entry)
+            self.assertIn("defaultModel", entry)
+            self.assertIn("defaultEffort", entry)
+            self.assertIsInstance(entry["defaultModel"], str)
+            self.assertIsInstance(entry["defaultEffort"], str)
+
+    def test_list_json_reports_codex_catalog_and_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            home = root / "codex-home"
+            home.mkdir()
+            (home / "models_cache.json").write_text(json.dumps({"models": [
+                {
+                    "slug": "gpt-other",
+                    "visibility": "list",
+                    "priority": 2,
+                    "supported_reasoning_levels": [{"effort": "medium"}],
+                },
+                {
+                    "slug": "gpt-5.6-sol",
+                    "visibility": "list",
+                    "priority": 1,
+                    "supported_reasoning_levels": [
+                        {"effort": "low"}, {"effort": "max"}
+                    ],
+                },
+            ]}))
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            fake_codex = bin_dir / "codex"
+            fake_codex.write_text("#!/bin/sh\nexit 0\n")
+            fake_codex.chmod(0o755)
+
+            result = self.run_consult("--list", "--json", env={
+                "CODEX_HOME": str(home),
+                "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+            })
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        records = {item["id"]: item for item in json.loads(result.stdout)["consultants"]}
+        codex_record = records["codex"]
+        self.assertEqual(codex_record["defaultModel"], "gpt-5.6-sol")
+        self.assertEqual(codex_record["defaultEffort"], "max")
+        self.assertTrue(codex_record["effortDependsOnModel"])
+        self.assertEqual(codex_record["models"], ["gpt-5.6-sol", "gpt-other"])
+        self.assertEqual(
+            codex_record["effortLevelsByModel"],
+            {
+                "": ["low", "max"],
+                "gpt-5.6-sol": ["low", "max"],
+                "gpt-other": ["medium"],
+            },
+        )
+        for agent in ("claude", "kimi"):
+            self.assertEqual(records[agent]["defaultModel"], "")
+            self.assertEqual(records[agent]["defaultEffort"], "")
 
     def test_unsigned_consultant_explains_how_to_set_it_up(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -473,6 +650,51 @@ class ConsultModelListingTests(unittest.TestCase):
             (home / "config.toml").write_text("default_yolo = true\n")
             self.assertEqual(consult.CONSULTANTS["kimi"]["list_models"](home), [])
             self.assertEqual(consult.CONSULTANTS["kimi"]["list_models"](Path("/nonexistent")), [])
+
+    def test_codex_lists_visible_models_by_priority(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            (home / "models_cache.json").write_text(json.dumps({"models": [
+                {"slug": "gpt-tied-first", "visibility": "list", "priority": 2},
+                {"slug": "gpt-hidden", "visibility": "hide", "priority": 0},
+                {"slug": "gpt-first", "visibility": "list", "priority": 1},
+                {"slug": "gpt-tied-second", "visibility": "list", "priority": 2},
+                {"slug": "gpt-unknown", "visibility": "list"},
+                {"slug": "bad model", "visibility": "list", "priority": 0},
+                {"slug": 42, "visibility": "list", "priority": 0},
+            ]}))
+            self.assertEqual(consult.codex_models(home), [
+                "gpt-first", "gpt-tied-first", "gpt-tied-second", "gpt-unknown"
+            ])
+
+    def test_codex_model_listing_tolerates_missing_and_corrupt_caches(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            self.assertEqual(consult.codex_models(home), [])
+            (home / "models_cache.json").write_text("not json")
+            self.assertEqual(consult.codex_models(home), [])
+
+    def test_codex_efforts_use_the_cache_and_fall_back_for_custom_models(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            (home / "models_cache.json").write_text(json.dumps({"models": [{
+                "slug": "gpt-5.6-sol",
+                "visibility": "list",
+                "priority": 1,
+                "supported_reasoning_levels": [
+                    {"effort": "low", "description": "Quick"},
+                    {"effort": "max", "description": "Deep"},
+                    {"description": "malformed"},
+                ],
+            }]}))
+            self.assertEqual(consult.codex_efforts(home), ["low", "max"])
+            self.assertEqual(
+                consult.codex_efforts(home, "gpt-5.6-sol"), ["low", "max"]
+            )
+            self.assertEqual(
+                consult.codex_efforts(home, "gpt-custom"),
+                ["low", "medium", "high", "xhigh", "max", "ultra"],
+            )
 
 
 class KimiAuthHelperTests(unittest.TestCase):
