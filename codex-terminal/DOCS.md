@@ -315,7 +315,10 @@ footer **Ask Mall Cop** action forces a fresh run. When Codex is signed out or
 the run fails, the same six sections are rendered deterministically and the
 observation footer says so. Setting `CHANGE_DESK_MALL_COP_NARRATOR` to an
 empty value in the image service environment keeps only the deterministic
-reading.
+reading. Narration runs at its own reasoning effort, `high`, rather than the
+consultant's Settings effort, which is meant for hard questions;
+`CHANGE_DESK_MALL_COP_EFFORT` changes that level, and an empty value defers to
+the consultant's setting.
 Mall Cop memory is stored at `/data/monitor/change-desk-mall-cop-memory.json`
 so each run can compare current conditions with the prior observation and call
 out new, resolved, changed, and unchanged issues. `/data/monitor/tasks.d` is

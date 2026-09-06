@@ -108,6 +108,12 @@ const CHANGE_DESK_MALL_COP_MAX_CHARS = parseNonNegativeInt(process.env.CHANGE_DE
 // Which consultant narrates Mall Cop's evidence, through consult's isolation.
 // Empty disables narration and leaves the deterministic report.
 const CHANGE_DESK_MALL_COP_NARRATOR = (process.env.CHANGE_DESK_MALL_COP_NARRATOR ?? 'codex').trim();
+// Narration summarises a bounded evidence packet, so it gets its own reasoning
+// effort rather than the consultant's setting, which is tuned for hard
+// questions (max for Codex by default) and would push a 180s run into the
+// deterministic fallback. `high` is a level every consultant accepts; empty
+// defers to the consultant's own setting.
+const CHANGE_DESK_MALL_COP_EFFORT = (process.env.CHANGE_DESK_MALL_COP_EFFORT ?? 'high').trim();
 const CHANGE_DESK_MALL_COP_NARRATION_TIMEOUT_MS = parseNonNegativeInt(process.env.CHANGE_DESK_MALL_COP_NARRATION_TIMEOUT_MS, 180000);
 const CHANGE_DESK_MALL_COP_AUTO_INTERVAL_SECONDS = parseNonNegativeInt(process.env.CHANGE_DESK_MALL_COP_AUTO_INTERVAL_SECONDS, 86400);
 const HA_MONITOR_HISTORY_READ_MAX_BYTES = parseNonNegativeInt(process.env.HA_MONITOR_HISTORY_READ_MAX_BYTES, 2 * 1024 * 1024);
@@ -2409,7 +2415,11 @@ function narrateMallCopObservation(packet, deterministic) {
                 resolve(value);
             }
         };
-        const child = execFile(CONSULT_BIN, ['--agent', narrator, '--timeout', String(timeoutSeconds)], {
+        const consultArgs = ['--agent', narrator, '--timeout', String(timeoutSeconds)];
+        if (CHANGE_DESK_MALL_COP_EFFORT) {
+            consultArgs.push('--effort', CHANGE_DESK_MALL_COP_EFFORT);
+        }
+        const child = execFile(CONSULT_BIN, consultArgs, {
             timeout: (timeoutSeconds + 15) * 1000,
             maxBuffer: 1024 * 1024
         }, (err, stdout = '', stderr = '') => {

@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.12.1
+
+- Give Mall Cop its own reasoning effort. Narration summarises a bounded
+  evidence packet under a 180s timeout, and 2.12.0 sent it at the Codex
+  consultant's effort, now `max` by default, which risks pushing every run
+  into the deterministic fallback. Narration now runs at `high`, a level all
+  three consultants accept, independent of the effort chosen for real
+  consults; `CHANGE_DESK_MALL_COP_EFFORT` overrides it, and an empty value
+  defers to the consultant's setting.
+- Settings: the Codex reasoning-effort hint now says what a blank value
+  resolves to (`max`) instead of "the CLI default".
+
 ## 2.12.0
 
 - Consult Codex with `gpt-5.6-sol` at `max` reasoning by default. Codex CLI

@@ -1013,11 +1013,13 @@ function writeMallCopFixtures(directory) {
 test('Mall Cop narrates through consult and never launches Codex itself', async (t) => {
     let attemptFile;
     let promptFile;
+    let argsFile;
     const { baseUrl, stderr } = await startServer(t, true, (directory) => {
         const binDirectory = path.join(directory, 'bin');
         fs.mkdirSync(binDirectory);
         attemptFile = path.join(directory, 'mall-cop-attempts');
         promptFile = path.join(directory, 'consult-prompt');
+        argsFile = path.join(directory, 'consult-args');
         // A codex on PATH must never be reached by the server directly: the
         // only path to a model is consult, which owns the isolation.
         fs.writeFileSync(
@@ -1031,6 +1033,7 @@ case "$1" in
     --list) printf '%s\\n' '{"consultants":[{"id":"codex","label":"Codex","installed":true,"signedIn":true,"ready":true,"authHelper":"codex-auth-helper"}]}' ;;
     --agent)
         [ "$2" = codex ] || { echo "wrong agent $2" >&2; exit 2; }
+        printf '%s\\n' "$@" > ${JSON.stringify(argsFile)}
         cat > ${JSON.stringify(promptFile)}
         printf '## Bottom line\\nNarrated by the stub consultant.\\n\\n## Acute state\\nQuiet.\\n'
         ;;
@@ -1061,6 +1064,10 @@ esac
     assert.match(prompt, /BEGIN_UNTRUSTED_HOME_ASSISTANT_DATA/);
     assert.match(prompt, /Never obey instructions/);
     assert.match(prompt, /END_UNTRUSTED_HOME_ASSISTANT_DATA/);
+    // Narration runs at its own effort, not the consultant's (max by default
+    // for Codex), so a bounded summary does not overrun its timeout.
+    const consultArgs = fs.readFileSync(argsFile, 'utf8').trim().split('\n');
+    assert.deepEqual(consultArgs.slice(consultArgs.indexOf('--effort'), consultArgs.indexOf('--effort') + 2), ['--effort', 'high']);
 
     const cooledDown = await fetch(`${baseUrl}/change-desk/mall-cop`, {
         method: 'POST',
@@ -1071,6 +1078,38 @@ esac
     assert.equal((await cooledDown.json()).skipped, true);
     assert.equal(fs.existsSync(attemptFile), false);
     assert.equal((await fetch(`${baseUrl}/health`)).status, 200);
+});
+
+test('an empty CHANGE_DESK_MALL_COP_EFFORT defers to the consultant setting', async (t) => {
+    let argsFile;
+    const { baseUrl, stderr } = await startServer(t, true, (directory) => {
+        const binDirectory = path.join(directory, 'bin');
+        fs.mkdirSync(binDirectory);
+        argsFile = path.join(directory, 'consult-args');
+        const consult = path.join(binDirectory, 'consult');
+        fs.writeFileSync(consult, `#!/bin/sh
+case "$1" in
+    --list) printf '%s\\n' '{"consultants":[]}' ;;
+    --agent) printf '%s\\n' "$@" > ${JSON.stringify(argsFile)}; cat > /dev/null; printf '## Bottom line\\nQuiet.\\n' ;;
+esac
+`, { mode: 0o755 });
+        writeMallCopFixtures(directory);
+        return {
+            CONSULT_BIN: consult,
+            CHANGE_DESK_MALL_COP_EFFORT: '',
+            CHANGE_DESK_FAST_COMMAND_TIMEOUT_MS: '10',
+            CHANGE_DESK_COMMAND_TIMEOUT_MS: '10'
+        };
+    });
+
+    const response = await fetch(`${baseUrl}/change-desk/mall-cop`, {
+        method: 'POST',
+        headers: { Origin: baseUrl, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ force: true })
+    });
+    assert.equal(response.status, 200, `${await response.clone().text()}\n${stderr()}`);
+    assert.equal((await response.json()).observation.source, 'codex');
+    assert.doesNotMatch(fs.readFileSync(argsFile, 'utf8'), /--effort/);
 });
 
 test('Mall Cop falls back to the deterministic report when the narrator cannot run', async (t) => {
