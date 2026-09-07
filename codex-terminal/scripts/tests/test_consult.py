@@ -468,6 +468,50 @@ class ConsultWorkspaceProjectionTests(unittest.TestCase):
             self.assertTrue((target / "www" / "local").is_dir())
             self.assertFalse((target / "www" / "community").exists())
 
+    def test_projection_leaves_out_renamed_copies_of_credential_files(self) -> None:
+        # A backup keeps every credential and only changes the name, so the
+        # exact-name set and the .bak suffix both missed
+        # secrets.yaml.codex-scrypted-rtsp-bak on the live system.
+        blocked = (
+            "secrets.yaml",
+            "secrets.yaml.codex-scrypted-rtsp-bak",
+            "secrets.yaml.bak",
+            "secrets-old.yaml",
+            "secrets.bak.yaml",
+            ".env.local",
+            "auth.json.old",
+            "configuration.yaml~",
+        )
+        for name in blocked:
+            self.assertFalse(
+                consult.workspace_entry_allowed(Path(name), directory=False),
+                f"{name} should never reach a consultant",
+            )
+        # Names that merely look similar are still configuration.
+        for name in ("configuration.yaml", "secretsanity.yaml", "my-secrets-notes.md"):
+            self.assertTrue(
+                consult.workspace_entry_allowed(Path(name), directory=False), name
+            )
+
+    def test_projection_excludes_a_renamed_secrets_copy_end_to_end(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "config"
+            target = root / "projection"
+            source.mkdir()
+            (source / "configuration.yaml").write_text("real: config\n", encoding="utf-8")
+            (source / "secrets.yaml").write_text("api_password: live\n", encoding="utf-8")
+            (source / "secrets.yaml.codex-scrypted-rtsp-bak").write_text(
+                "api_password: also-live\n", encoding="utf-8"
+            )
+
+            result = consult.build_filtered_workspace(source, target)
+
+            self.assertEqual(result["files"], 1)
+            self.assertTrue((target / "configuration.yaml").exists())
+            self.assertFalse((target / "secrets.yaml").exists())
+            self.assertFalse((target / "secrets.yaml.codex-scrypted-rtsp-bak").exists())
+
     def test_projection_reports_when_it_runs_out_of_budget(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

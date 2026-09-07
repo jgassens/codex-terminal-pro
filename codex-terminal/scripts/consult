@@ -138,6 +138,7 @@ WORKSPACE_BLOCKED_SUFFIXES = (
     # Build output and web fonts: bytes without configuration in them.
     ".map", ".min.js", ".min.css",
     ".woff", ".woff2", ".ttf", ".otf", ".eot",
+    "~", ".orig", ".rej",
 )
 SENSITIVE_ASSIGNMENT_RE = re.compile(
     r"(?im)^(?P<prefix>\s*[\"']?[A-Za-z0-9_.-]*(?:secret|token|password|passwd|api[_-]?key|client[_-]?secret|authorization|credential)[A-Za-z0-9_.-]*[\"']?\s*[:=]\s*)(?P<value>.*)$"
@@ -766,6 +767,32 @@ def redact_workspace_text(text: str) -> str:
     return redacted
 
 
+def blocked_file_name(name: str) -> bool:
+    """Whether a file name is a credential file, or a renamed copy of one.
+
+    Matching the exact names is not enough: a backup keeps every credential
+    and only changes the name, so `secrets.yaml.codex-scrypted-rtsp-bak` got
+    past both the name set and the `.bak` suffix (it ends in `-bak`). Both
+    shapes a backup takes are covered here - appended after the full name,
+    and inserted before the extension.
+    """
+    if name in WORKSPACE_BLOCKED_FILE_NAMES:
+        return True
+    for blocked in WORKSPACE_BLOCKED_FILE_NAMES:
+        # secrets.yaml.bak, secrets.yaml-bak, secrets.yaml~, .env.local
+        if name.startswith(blocked) and len(name) > len(blocked):
+            return True
+        # secrets-old.yaml, secrets.bak.yaml: same stem, same extension.
+        stem, dot, extension = blocked.rpartition(".")
+        if not (dot and stem):
+            continue
+        if name.startswith(stem) and name.endswith(f".{extension}"):
+            middle = name[len(stem):len(name) - len(extension) - 1]
+            if middle[:1] in ("-", "_", "."):
+                return True
+    return False
+
+
 def blocked_directory_name(name: str) -> bool:
     """Whether one path component names a directory kept out of the copy."""
     return (
@@ -784,7 +811,7 @@ def workspace_entry_allowed(relative: Path, *, directory: bool) -> bool:
     if directory:
         return not blocked_directory_name(name)
     return (
-        name not in WORKSPACE_BLOCKED_FILE_NAMES
+        not blocked_file_name(name)
         and not name.endswith(WORKSPACE_BLOCKED_SUFFIXES)
     )
 

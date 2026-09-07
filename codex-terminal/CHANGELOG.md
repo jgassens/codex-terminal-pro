@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.12.3
+
+- Keep renamed copies of credential files out of the consultant workspace. The
+  blocked-name list matched exact names only, and the `.bak` suffix match
+  missed an ending of `-bak`, so a file like
+  `secrets.yaml.codex-scrypted-rtsp-bak` was copied into the snapshot with
+  every credential in it. Only the inline redaction stood between that file
+  and a consultant, and redaction covers conventional `key: value` lines, not
+  every shape a secret takes. A file is now treated as a credential file when
+  its name is one of the known ones, appends anything to one
+  (`secrets.yaml.bak`, `.env.local`), or wraps one between the same stem and
+  extension (`secrets-old.yaml`). Editor and merge leftovers (`~`, `.orig`,
+  `.rej`) are excluded too. Files that merely read alike, such as
+  `my-secrets-notes.md`, are still configuration and still included.
+
 ## 2.12.2
 
 - Stop crowding the real configuration out of what consultants can see. The
