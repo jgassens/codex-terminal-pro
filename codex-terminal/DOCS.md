@@ -214,7 +214,7 @@ check_for_update_on_startup = false
 ```
 
 Use Home Assistant add-on updates to pick up new bundled Codex CLI versions.
-This release pins the bundled CLI package to `@openai/codex@0.153.4` during
+This release pins the bundled CLI package to `@openai/codex@0.160.0` during
 the Docker build.
 
 Managed Codex Terminal Pro TUI defaults use this footer:
@@ -225,7 +225,7 @@ status_line = ["run-state", "model-with-reasoning", "fast-mode", "context-remain
 ```
 
 When a status line is already present, the add-on preserves it. Startup only
-removes unsupported `[tui].status_line` item IDs that Codex CLI `0.153.4`
+removes unsupported `[tui].status_line` item IDs that Codex CLI `0.160.0`
 warns about. `auto-review`, `permissions`, and `approval-mode` are valid Codex
 permission concepts, but this pinned CLI does not accept those strings as
 footer item IDs.

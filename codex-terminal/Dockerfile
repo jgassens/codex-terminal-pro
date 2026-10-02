@@ -1,7 +1,7 @@
 FROM ghcr.io/home-assistant/base:3.22-2026.04.0@sha256:eed9b5eff1441d4db22d5036b7802610e7fc94af8c0448439ae6dda9942d5230
 
 LABEL \
-    io.hass.version="2.12.3" \
+    io.hass.version="2.13.0" \
     io.hass.type="addon" \
     io.hass.arch="aarch64|amd64" \
     org.opencontainers.image.title="Home Assistant Add-on: Codex Terminal Pro" \
@@ -47,7 +47,7 @@ RUN apk add --no-cache \
     ttyd
 
 # Install Codex CLI.
-ARG CODEX_CLI_VERSION=0.153.4
+ARG CODEX_CLI_VERSION=0.160.0
 RUN npm install -g "@openai/codex@${CODEX_CLI_VERSION}" \
     && codex --version \
     && rm -rf /root/.npm
@@ -56,12 +56,12 @@ RUN npm install -g "@openai/codex@${CODEX_CLI_VERSION}" \
 # Codex remains this add-on's agent, and these are only reachable through the
 # `consult` command, which runs each provider read-only as its own unprivileged
 # user.
-ARG CLAUDE_CODE_VERSION=2.1.251
+ARG CLAUDE_CODE_VERSION=2.1.287
 RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
     && DISABLE_AUTOUPDATER=1 claude --version \
     && rm -rf /root/.npm
 
-ARG KIMI_CODE_VERSION=0.39.1
+ARG KIMI_CODE_VERSION=2.1.1
 RUN npm install -g "@moonshot-ai/kimi-code@${KIMI_CODE_VERSION}" \
     && kimi --version \
     && rm -rf /root/.npm
@@ -84,9 +84,9 @@ ENV PYTHONPATH="/opt/modbus-python"
 # Download appropriate binary based on build architecture.
 ARG TARGETARCH
 ARG BUILD_ARCH
-ARG HA_CLI_VERSION=5.2.0
-ARG HA_CLI_SHA256_AMD64=701be67aee9f1e092254097a40d006b450d1578641a262258b182237987e7479
-ARG HA_CLI_SHA256_ARM64=af8c03ccddb65d223d7b7dab1570197b8a2ff8fc7139c1db054d08a91a4f8073
+ARG HA_CLI_VERSION=5.5.0
+ARG HA_CLI_SHA256_AMD64=fb2e2177bd7bc014f029b807cd1cc7d74484ecfed1e90d5f9b2a61d65ff5393d
+ARG HA_CLI_SHA256_ARM64=af390ab7f91a8135668ace7b1425d8e53800b6a1fc3b36fc588df701d2ab3db5
 RUN RESOLVED_ARCH="${TARGETARCH:-${BUILD_ARCH:-$(apk --print-arch)}}" && \
     case "${RESOLVED_ARCH}" in \
         amd64|x86_64) HA_ARCH="amd64"; HA_SHA256="${HA_CLI_SHA256_AMD64}" ;; \
@@ -103,9 +103,9 @@ RUN RESOLVED_ARCH="${TARGETARCH:-${BUILD_ARCH:-$(apk --print-arch)}}" && \
     echo "Home Assistant CLI ${HA_CLI_VERSION} installed successfully"
 
 # Install GitHub CLI (gh command).
-ARG GH_CLI_VERSION=2.96.0
-ARG GH_CLI_SHA256_AMD64=83d5c2ccad5498f58bf6368acb1ab32588cf43ab3a4b1c301bf36328b1c8bd60
-ARG GH_CLI_SHA256_ARM64=06f86ec7103d41993b76cd78072f43595c34aaa56506d971d9860e67140bf909
+ARG GH_CLI_VERSION=2.102.0
+ARG GH_CLI_SHA256_AMD64=bb766f710eef8ede859c18578c72c327597cd4c8a85b06001b1f3843c6019386
+ARG GH_CLI_SHA256_ARM64=7862c86c72f43df3a2d93ddde6f473285b4e2af61b494849846827e513ef6484
 RUN RESOLVED_ARCH="${TARGETARCH:-${BUILD_ARCH:-$(apk --print-arch)}}" && \
     case "${RESOLVED_ARCH}" in \
         amd64|x86_64) GH_ARCH="amd64"; GH_SHA256="${GH_CLI_SHA256_AMD64}" ;; \
