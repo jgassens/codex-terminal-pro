@@ -6,6 +6,9 @@
   release, which adds GPT-6.1 (`gpt-6.1-sol`). Every flag and `--disable`
   feature that `consult` passes to `codex exec`, and every managed status-line
   item, is still accepted by the new binary.
+- `consult` now asks Codex with `gpt-6.1-sol` at `max` when no Codex model is
+  chosen in Settings, instead of `gpt-5.6-sol`. A model picked in Settings is
+  still used as is.
 - Upgrade the other bundled command-line tools to their latest releases:
   Claude Code `2.1.251` → `2.1.287`, Kimi Code `0.39.1` → `2.1.1`, Home
   Assistant CLI `5.2.0` → `5.5.0`, and GitHub CLI `2.96.0` → `2.102.0`. The

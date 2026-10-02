@@ -150,7 +150,7 @@ class ConsultModelSettingsTests(unittest.TestCase):
         ):
             model, effort = self.resolved_preferences("codex", {})
         argv = consult.codex_args("question", model, effort)
-        self.assertEqual(argv[argv.index("--model") + 1], "gpt-5.6-sol")
+        self.assertEqual(argv[argv.index("--model") + 1], "gpt-6.1-sol")
         self.assertIn('model_reasoning_effort="max"', argv)
 
     def test_explicit_codex_preferences_override_addon_defaults(self) -> None:
@@ -196,7 +196,7 @@ class ConsultModelSettingsTests(unittest.TestCase):
             home = Path(directory)
             (home / "models_cache.json").write_text(json.dumps({
                 "models": [
-                    {"slug": "gpt-5.6-sol", "visibility": "hide", "priority": 1},
+                    {"slug": "gpt-6.1-sol", "visibility": "hide", "priority": 1},
                     {"slug": "gpt-other", "visibility": "list", "priority": 2},
                 ]
             }))
@@ -205,7 +205,7 @@ class ConsultModelSettingsTests(unittest.TestCase):
                     contextlib.redirect_stderr(stderr):
                 resolved = self.resolved_preferences("codex", {})
         self.assertEqual(resolved, ("", ""))
-        self.assertIn("does not list gpt-5.6-sol", stderr.getvalue())
+        self.assertIn("does not list gpt-6.1-sol", stderr.getvalue())
 
     def test_effort_default_belongs_to_the_default_model_only(self) -> None:
         # A model the user chose keeps the CLI's own effort: forcing max onto
@@ -215,15 +215,15 @@ class ConsultModelSettingsTests(unittest.TestCase):
             os.environ, {"CODEX_HOME": directory}
         ):
             self.assertEqual(self.resolved_preferences("codex", settings), ("gpt-5.5", ""))
-            sol = {"consultants": {"codex": {"model": "gpt-5.6-sol", "effort": ""}}}
-            self.assertEqual(self.resolved_preferences("codex", sol), ("gpt-5.6-sol", "max"))
+            sol = {"consultants": {"codex": {"model": "gpt-6.1-sol", "effort": ""}}}
+            self.assertEqual(self.resolved_preferences("codex", sol), ("gpt-6.1-sol", "max"))
 
     def test_effort_default_is_skipped_when_the_catalog_lacks_it(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
             (home / "models_cache.json").write_text(json.dumps({
                 "models": [{
-                    "slug": "gpt-5.6-sol",
+                    "slug": "gpt-6.1-sol",
                     "visibility": "list",
                     "priority": 1,
                     "supported_reasoning_levels": [{"effort": "low"}, {"effort": "high"}],
@@ -231,7 +231,7 @@ class ConsultModelSettingsTests(unittest.TestCase):
             }))
             with mock.patch.dict(os.environ, {"CODEX_HOME": directory}):
                 resolved = self.resolved_preferences("codex", {})
-        self.assertEqual(resolved, ("gpt-5.6-sol", ""))
+        self.assertEqual(resolved, ("gpt-6.1-sol", ""))
 
     def test_codex_fallback_levels_include_every_catalog_level(self) -> None:
         # Without a cache the fallback list must not reject a level the real
@@ -636,7 +636,7 @@ class ConsultCliTests(unittest.TestCase):
                     "supported_reasoning_levels": [{"effort": "medium"}],
                 },
                 {
-                    "slug": "gpt-5.6-sol",
+                    "slug": "gpt-6.1-sol",
                     "visibility": "list",
                     "priority": 1,
                     "supported_reasoning_levels": [
@@ -658,15 +658,15 @@ class ConsultCliTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         records = {item["id"]: item for item in json.loads(result.stdout)["consultants"]}
         codex_record = records["codex"]
-        self.assertEqual(codex_record["defaultModel"], "gpt-5.6-sol")
+        self.assertEqual(codex_record["defaultModel"], "gpt-6.1-sol")
         self.assertEqual(codex_record["defaultEffort"], "max")
         self.assertTrue(codex_record["effortDependsOnModel"])
-        self.assertEqual(codex_record["models"], ["gpt-5.6-sol", "gpt-other"])
+        self.assertEqual(codex_record["models"], ["gpt-6.1-sol", "gpt-other"])
         self.assertEqual(
             codex_record["effortLevelsByModel"],
             {
                 "": ["low", "max"],
-                "gpt-5.6-sol": ["low", "max"],
+                "gpt-6.1-sol": ["low", "max"],
                 "gpt-other": ["medium"],
             },
         )
@@ -794,7 +794,7 @@ class ConsultModelListingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
             (home / "models_cache.json").write_text(json.dumps({"models": [{
-                "slug": "gpt-5.6-sol",
+                "slug": "gpt-6.1-sol",
                 "visibility": "list",
                 "priority": 1,
                 "supported_reasoning_levels": [
@@ -805,7 +805,7 @@ class ConsultModelListingTests(unittest.TestCase):
             }]}))
             self.assertEqual(consult.codex_efforts(home), ["low", "max"])
             self.assertEqual(
-                consult.codex_efforts(home, "gpt-5.6-sol"), ["low", "max"]
+                consult.codex_efforts(home, "gpt-6.1-sol"), ["low", "max"]
             )
             self.assertEqual(
                 consult.codex_efforts(home, "gpt-custom"),
@@ -1108,7 +1108,7 @@ class CodexConsultantTests(unittest.TestCase):
     """Codex is consulted through the same isolation as the others."""
 
     def test_codex_args_turn_off_every_extra_capability(self) -> None:
-        args = consult.codex_args("what is this?", "gpt-5.6-sol", "max")
+        args = consult.codex_args("what is this?", "gpt-6.1-sol", "max")
         self.assertEqual(args[:2], ["codex", "exec"])
         self.assertEqual(args[-1], "what is this?")
         for flag in ("--ephemeral", "--ignore-user-config", "--ignore-rules", "--skip-git-repo-check"):
@@ -1118,7 +1118,7 @@ class CodexConsultantTests(unittest.TestCase):
         self.assertEqual(disabled, list(consult.CODEX_DISABLED_FEATURES))
         self.assertIn('web_search="disabled"', args)
         self.assertIn("mcp_servers={}", args)
-        self.assertEqual(args[args.index("--model") + 1], "gpt-5.6-sol")
+        self.assertEqual(args[args.index("--model") + 1], "gpt-6.1-sol")
         self.assertIn('model_reasoning_effort="max"', args)
 
     def test_codex_spec_asks_for_an_answer_file_and_never_writes_back(self) -> None:
