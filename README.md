@@ -66,7 +66,7 @@ a slower, deeper one still arrives. Each consultant runs read-only as its own
 unprivileged user in a filtered snapshot of `/config` - never the live tree,
 with secrets and credentials left out - hardened further with Linux Landlock
 where the kernel provides it. Each consultant's model and reasoning effort
-are chosen in Settings; leaving Codex's blank consults `gpt-5.6-sol` at `max`
+are chosen in Settings; leaving Codex's blank consults `gpt-6.1-sol` at `max`
 rather than the CLI's own (pricier) default.
 
 Change Desk's **Mall Cop** reviews your Home Assistant health on that same

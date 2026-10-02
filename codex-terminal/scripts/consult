@@ -204,7 +204,7 @@ CODEX_DISABLED_FEATURES = (
     "skill_mcp_dependency_install", "tool_call_mcp_elicitation", "tool_suggest",
     "unified_exec", "workspace_dependencies",
 )
-CODEX_DEFAULT_MODEL = "gpt-5.6-sol"
+CODEX_DEFAULT_MODEL = "gpt-6.1-sol"
 CODEX_DEFAULT_EFFORT = "max"
 CODEX_EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max", "ultra")
 # Codex writes this catalog itself, as root, but it is still data: keep the
@@ -496,7 +496,7 @@ CONSULTANTS = {
         "list_efforts": codex_efforts,
         "default_model": CODEX_DEFAULT_MODEL,
         "default_effort": CODEX_DEFAULT_EFFORT,
-        "model_hint": "a Codex model id; Default is gpt-5.6-sol at max",
+        "model_hint": "a Codex model id; Default is gpt-6.1-sol at max",
         "effort_via_config": None,
         "effort_depends_on_model": True,
         # Codex prints progress to stdout; the answer is asked for in a file.

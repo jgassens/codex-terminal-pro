@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.13.0
+
+- Upgrade the bundled Codex CLI from `0.153.4` to the stable `0.160.0`
+  release, which adds GPT-6.1 (`gpt-6.1-sol`). Every flag and `--disable`
+  feature that `consult` passes to `codex exec`, and every managed status-line
+  item, is still accepted by the new binary.
+- `consult` now asks Codex with `gpt-6.1-sol` at `max` when no Codex model is
+  chosen in Settings, instead of `gpt-5.6-sol`. A model picked in Settings is
+  still used as is.
+- Upgrade the other bundled command-line tools to their latest releases:
+  Claude Code `2.1.251` → `2.1.287`, Kimi Code `0.39.1` → `2.1.1`, Home
+  Assistant CLI `5.2.0` → `5.5.0`, and GitHub CLI `2.96.0` → `2.102.0`. The
+  Home Assistant and GitHub CLI downloads keep their pinned checksums, updated
+  to the new release files. Kimi's prompt and model options and its
+  `KIMI_CODE_HOME` layout are unchanged across the version jump.
+- Update the image service's `multer` from `2.2.0` to `2.4.0` and `express`
+  from `4.22.2` to `4.22.3`, which fixes newly published advisories for
+  upload-handling denial of service and `qs` parsing.
+
 ## 2.12.3
 
 - Keep renamed copies of credential files out of the consultant workspace. The
