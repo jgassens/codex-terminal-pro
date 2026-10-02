@@ -15,6 +15,9 @@
   Home Assistant and GitHub CLI downloads keep their pinned checksums, updated
   to the new release files. Kimi's prompt and model options and its
   `KIMI_CODE_HOME` layout are unchanged across the version jump.
+- Update the image service's `multer` from `2.2.0` to `2.4.0` and `express`
+  from `4.22.2` to `4.22.3`, which fixes newly published advisories for
+  upload-handling denial of service and `qs` parsing.
 
 ## 2.12.3
 

@@ -17,9 +17,9 @@
   "author": "Javier Santos",
   "license": "MIT",
   "dependencies": {
-    "express": "4.22.2",
+    "express": "4.22.3",
     "http-proxy-middleware": "2.0.10",
-    "multer": "2.2.0",
+    "multer": "2.4.0",
     "qrcode": "^1.5.4",
     "sharp": "0.35.4"
   },
