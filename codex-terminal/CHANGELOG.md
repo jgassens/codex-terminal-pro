@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.13.1
+
+- Fix Codex quitting straight back to the menu on 2.13.0. Codex CLI 0.160.0
+  starts a background app server and records its start time with
+  `ps -p PID -o stat=,lstart=`, which the image's BusyBox `ps` does not
+  support, so every launch failed with "failed to read start time for
+  pid-managed app server". The image now installs `procps-ng`, and the build
+  fails if `ps` cannot answer that query.
+- When Codex exits with an error from the menu, the menu now waits for Enter
+  before redrawing, so the error stays readable.
+
 ## 2.13.0
 
 - Upgrade the bundled Codex CLI from `0.153.4` to the stable `0.160.0`
