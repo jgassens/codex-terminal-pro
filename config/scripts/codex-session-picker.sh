@@ -74,7 +74,10 @@ start_codex() {
     fi
     echo "Starting Codex in /config..."
     sleep 1
-    CODEX_TERMINAL_AGENT_EXECUTION=1 codex
+    if ! CODEX_TERMINAL_AGENT_EXECUTION=1 codex; then
+        # Keep a startup error on screen instead of redrawing over it.
+        pause
+    fi
 }
 
 open_shell() {

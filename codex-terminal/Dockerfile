@@ -1,7 +1,7 @@
 FROM ghcr.io/home-assistant/base:3.22-2026.04.0@sha256:eed9b5eff1441d4db22d5036b7802610e7fc94af8c0448439ae6dda9942d5230
 
 LABEL \
-    io.hass.version="2.13.0" \
+    io.hass.version="2.13.1" \
     io.hass.type="addon" \
     io.hass.arch="aarch64|amd64" \
     org.opencontainers.image.title="Home Assistant Add-on: Codex Terminal Pro" \
@@ -44,12 +44,16 @@ RUN apk add --no-cache \
     tree \
     tmux \
     bubblewrap \
+    procps-ng \
     ttyd
 
 # Install Codex CLI.
 ARG CODEX_CLI_VERSION=0.160.0
+# Codex's background app server records its start time with
+# `ps -p PID -o stat=,lstart=`, which BusyBox ps rejects; procps-ng provides it.
 RUN npm install -g "@openai/codex@${CODEX_CLI_VERSION}" \
     && codex --version \
+    && ps -p 1 -o stat=,lstart= >/dev/null \
     && rm -rf /root/.npm
 
 # Install the optional consultant CLIs. They are inert without credentials:
