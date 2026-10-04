@@ -154,6 +154,29 @@ RUN cd /opt/image-service \
     && rm -rf /root/.npm \
     && chmod +x server.js
 
+# Run the real parser against the real procps-ng `ps`: the sign-in trust check
+# in server.js compares these user names, so a parser that stops matching
+# (or a truncated name such as `ctp-cla+`) must fail the build.
+RUN su -s /bin/sh ctp-claude -c 'exec sleep 30' & \
+    probe=$! \
+    && for _ in 1 2 3 4 5 6 7 8 9 10; do \
+        [ "$(ps -o user:32= -p "$probe" | tr -d ' ')" = ctp-claude ] && break; sleep 0.3; \
+    done \
+    && status=0 \
+    && node -e ' \
+        const { readProcessSnapshot } = require("/opt/image-service/process-snapshot.js"); \
+        const fail = (reason) => { console.error("process-snapshot build check failed: " + reason); process.exit(1); }; \
+        const probe = Number(process.argv[1]); \
+        readProcessSnapshot((err, snapshot) => { \
+            if (err) fail(err.message); \
+            const own = (pid) => JSON.stringify([snapshot.userByPid.get(pid), snapshot.argsByPid.get(pid)]); \
+            if (!(snapshot.children.get(process.ppid) || []).includes(process.pid)) fail("node " + process.pid + " is not listed under ppid " + process.ppid); \
+            if (snapshot.userByPid.get(process.pid) !== "root" || !/node/.test(snapshot.argsByPid.get(process.pid) || "")) fail("this node process parsed as " + own(process.pid)); \
+            if (snapshot.userByPid.get(probe) !== "ctp-claude" || !/sleep 30/.test(snapshot.argsByPid.get(probe) || "")) fail("ctp-claude process " + probe + " parsed as " + own(probe)); \
+        });' "$probe" || status=$? ; \
+    kill "$probe" 2>/dev/null; \
+    exit "$status"
+
 # Copy startup script and modular scripts.
 COPY run.sh /run.sh
 COPY scripts/ /opt/scripts/

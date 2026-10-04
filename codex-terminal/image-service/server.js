@@ -26,6 +26,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const httpProxy = require('http-proxy');
+const { readProcessSnapshot } = require('./process-snapshot');
 const {
     buildRequestSecurityPolicy,
     isAllowedRequestSource,
@@ -2983,34 +2984,6 @@ function rawShellPaneBusyProgram(callback) {
             }
             callback(null, descendants[0].args.split(/\s+/, 1)[0].split('/').pop() || 'another program');
         });
-    });
-}
-
-function readProcessSnapshot(callback) {
-    execFile('ps', ['-e', '-o', 'pid=,ppid=,user=,args='], { timeout: 3000 }, (err, stdout) => {
-        if (err) {
-            callback(err);
-            return;
-        }
-        const children = new Map();
-        const argsByPid = new Map();
-        const userByPid = new Map();
-        for (const line of String(stdout).split('\n')) {
-            const match = line.trim().match(/^(\d+)\s+(\d+)\s+(\S+)\s+(.+)$/);
-            if (!match) {
-                continue;
-            }
-            const [, pid, ppid, user, args] = match;
-            const numericPid = Number(pid);
-            const numericParent = Number(ppid);
-            argsByPid.set(numericPid, args.trim());
-            userByPid.set(numericPid, user);
-            if (!children.has(numericParent)) {
-                children.set(numericParent, []);
-            }
-            children.get(numericParent).push(numericPid);
-        }
-        callback(null, { children, argsByPid, userByPid });
     });
 }
 
