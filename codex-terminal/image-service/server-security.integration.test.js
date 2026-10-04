@@ -14,6 +14,7 @@ const VALID_PNG = Buffer.from(
     'base64'
 );
 const MINIMAL_PNG_HEADER = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const PROXY_WAIT_MS = 5000;
 
 async function reservePort() {
     return new Promise((resolve, reject) => {
@@ -185,16 +186,29 @@ async function startCallbackListener(t, port = 1455) {
     return { paths, connectionCount: () => connections };
 }
 
-async function rawWebSocketUpgrade(port) {
+// Failed upgrades may reset the socket or close it without a reply. Wait for
+// close in either case, and reject if the proxy leaves the socket open.
+async function rawWebSocketUpgrade(port, allowReset = false) {
     return new Promise((resolve, reject) => {
         const socket = net.connect(port, '127.0.0.1');
         let response = '';
+        const timer = setTimeout(() => {
+            socket.destroy();
+            reject(new Error(`WebSocket upgrade socket was still open after ${PROXY_WAIT_MS}ms; the proxy never closed it`));
+        }, PROXY_WAIT_MS);
         socket.setEncoding('utf8');
-        socket.once('error', reject);
+        socket.once('error', (err) => {
+            if (!allowReset) {
+                reject(err);
+            }
+        });
         socket.on('data', (chunk) => {
             response += chunk;
         });
-        socket.on('end', () => resolve(response));
+        socket.on('close', () => {
+            clearTimeout(timer);
+            resolve(response);
+        });
         socket.on('connect', () => {
             socket.write([
                 'GET /terminal/ws?client=test HTTP/1.1',
@@ -236,47 +250,6 @@ test('terminal HTTP and WebSocket traffic reaches a ttyd Unix socket', async (t)
     assert.match(upgrade, /unix-terminal-upgrade/);
 });
 
-const PROXY_WAIT_MS = 5000;
-
-// Opens a WebSocket upgrade and reports how the client socket ended. Unlike
-// rawWebSocketUpgrade, a reset counts as an ending, and a socket that is still
-// open after PROXY_WAIT_MS rejects with a clear message instead of hanging.
-async function upgradeOutcome(port) {
-    return new Promise((resolve, reject) => {
-        const socket = net.connect(port, '127.0.0.1');
-        let received = '';
-        let ending = null;
-        const timer = setTimeout(() => {
-            socket.destroy();
-            reject(new Error(`WebSocket upgrade socket was still open after ${PROXY_WAIT_MS}ms; the proxy never closed it`));
-        }, PROXY_WAIT_MS);
-        const finish = (how) => {
-            ending = ending || how;
-        };
-        socket.setEncoding('utf8');
-        socket.on('data', (chunk) => { received += chunk; });
-        socket.on('error', (err) => finish(`error:${err.code}`));
-        socket.on('end', () => finish('end'));
-        socket.on('close', () => {
-            clearTimeout(timer);
-            resolve({ ending: ending || 'close', received });
-        });
-        socket.on('connect', () => {
-            socket.write([
-                'GET /terminal/ws?client=test HTTP/1.1',
-                `Host: 127.0.0.1:${port}`,
-                `Origin: http://127.0.0.1:${port}`,
-                'Connection: Upgrade',
-                'Upgrade: websocket',
-                'Sec-WebSocket-Version: 13',
-                'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==',
-                '',
-                ''
-            ].join('\r\n'));
-        });
-    });
-}
-
 // Leaves a Unix socket file on disk with nothing accepting on it, the state a
 // crashed ttyd leaves behind: connecting gets ECONNREFUSED.
 async function createStaleUnixSocket(t) {
@@ -297,10 +270,17 @@ async function createStaleUnixSocket(t) {
     });
     const exited = new Promise((resolve) => listener.once('exit', resolve));
     listener.kill('SIGKILL');
-    await Promise.race([
-        exited,
-        new Promise((_, reject) => setTimeout(() => reject(new Error('stale-socket helper did not exit')), PROXY_WAIT_MS))
-    ]);
+    let exitTimer;
+    try {
+        await Promise.race([
+            exited,
+            new Promise((_, reject) => {
+                exitTimer = setTimeout(() => reject(new Error('stale-socket helper did not exit')), PROXY_WAIT_MS);
+            })
+        ]);
+    } finally {
+        clearTimeout(exitTimer);
+    }
     assert.equal(fs.lstatSync(socketPath).isSocket(), true);
     return socketPath;
 }
@@ -320,12 +300,13 @@ async function assertTerminalProxyFailsClosed(server, expectedHealthStatus = 200
     assert.equal(page.status, 502);
     assert.equal(await page.text(), 'Failed to connect to terminal');
 
-    const upgrade = await upgradeOutcome(port);
-    assert.doesNotMatch(upgrade.received, /^HTTP\/1\.1 101/);
-    // Authorized upgrades that fail at the proxy are destroyed without a reply;
-    // any bytes here would mean the request was answered (e.g. 401/403) rather
+    const upgrade = await rawWebSocketUpgrade(port, true);
+    // Authorized upgrades that fail at the proxy are closed with no reply;
+    // http-proxy also ends the socket after emitting its error, so this does
+    // not distinguish the handler's destroy() from the library's end().
+    // Any bytes here would mean the request was answered (e.g. 401/403) rather
     // than forwarded.
-    assert.equal(upgrade.received, '');
+    assert.equal(upgrade, '');
 
     const health = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(PROXY_WAIT_MS) });
     assert.equal(health.status, expectedHealthStatus);
