@@ -5,7 +5,9 @@
 # that tmux never takes the drag (the path that copied a blank line in
 # Safari), and that Ctrl+V on Windows pastes text and uploads an image once.
 # toggle.e2e.js then checks that one real click on the Codex/Shell toggle
-# switches modes after selecting, typing, scrolling or just focusing.
+# switches modes after selecting, typing, scrolling, just focusing, or a
+# copy staged for the toggle click itself, and that no status message moves
+# the toggle.
 #
 #   TTYD_BIN=/path/to/ttyd bash dev/terminal-copy-e2e/run.sh
 #

@@ -4,9 +4,10 @@
 // terminal: a drag selection, typing, a wheel scroll, plain focus, and a
 // drag held past Chrome's 5 s activation window. Each scenario gets exactly
 // ONE click on the toggle and must switch modes, in the page and in tmux,
-// then ONE click back. TOGGLE_E2E_STAGED=1 adds a scenario where the copy is
-// staged for the next gesture; TOGGLE_E2E_VERBOSE=1 prints where every press
-// and click landed.
+// then ONE click back, including a copy staged for the next gesture, which
+// the toggle click itself completes. First it checks that the toggle never
+// moves when the status text changes, on a wide and a phone-width header.
+// TOGGLE_E2E_VERBOSE=1 prints where every press and click landed.
 const { chromium } = require('playwright');
 const { execFileSync } = require('node:child_process');
 
@@ -24,8 +25,8 @@ const WINDOWS = {
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0 Safari/537.36'
 };
 
-async function openPage(browser) {
-    const context = await browser.newContext({ viewport: { width: 1300, height: 900 } });
+async function openPage(browser, viewport = { width: 1300, height: 900 }) {
+    const context = await browser.newContext({ viewport });
     await context.addInitScript(({ platform, userAgent }) => {
         Object.defineProperty(Navigator.prototype, 'platform', { get: () => platform });
         Object.defineProperty(Navigator.prototype, 'userAgent', { get: () => userAgent });
@@ -206,11 +207,11 @@ const SCENARIOS = {
     },
     // A drag whose copy cannot run at mouseup, so the page stages it
     // ("Selection ready ...") and finishes it on the next gesture: the
-    // mousedown of the toggle click itself. Opt-in (TOGGLE_E2E_STAGED=1): it
-    // fails today because finishing the copy rewrites #status, the header
-    // reflows, and the button moves out from under the pointer before
-    // mouseup. Chromium never stages on its own here, so it needs the
-    // injected clipboard failure above.
+    // mousedown of the toggle click itself. Finishing the copy rewrites
+    // #status between mousedown and mouseup; if that moved the button, the
+    // mouseup and click would land on the header and the click would be
+    // lost. Chromium never stages on its own here, so it needs the injected
+    // clipboard failure above.
     'staged-copy': async (page, frame) => {
         await page.evaluate(() => {
             window.__denyClipboard = true;
@@ -251,6 +252,82 @@ async function clickToggle(page, mode) {
     const result = await waitForMode(page, mode);
     const log = await page.evaluate(() => window.__toggleLog);
     return { ...result, log };
+}
+
+// Status messages from short to longer than any real one: the longest are a
+// copyable upload path or a server error, both unbounded.
+const STATUS_TEXTS = [
+    '',
+    'Copied terminal selection',
+    'Selection ready — click or press a key to finish copying',
+    `📋 /config/www/codex-uploads/${'an-unusually-long-uploaded-image-name-'.repeat(8)}.png (click to copy)`
+];
+
+// The toggle's position must not depend on the status text: identical
+// button boxes for every message, nothing pushed off-screen, and a long
+// message truncated rather than overlapping the toggle or the buttons.
+async function checkHeaderLayout(browser, viewport) {
+    const { context, page } = await openPage(browser, viewport);
+    const lines = [];
+    let ok = true;
+    try {
+        let reference = null;
+        for (const text of STATUS_TEXTS) {
+            const layout = await page.evaluate((message) => {
+                window.setStatus(message, message ? 'success' : '', true);
+                const box = (node) => {
+                    const rect = node.getBoundingClientRect();
+                    return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, width: rect.width };
+                };
+                const status = document.getElementById('status');
+                const controls = Array.from(document.querySelectorAll('#terminal-mode-switch, #header-actions .header-btn'))
+                    .filter((node) => node.getBoundingClientRect().width > 0)
+                    .map((node) => ({ id: node.id, ...box(node) }));
+                return {
+                    buttons: Array.from(document.querySelectorAll('button[data-terminal-mode]'))
+                        .map((button) => ({ mode: button.getAttribute('data-terminal-mode'), ...box(button) })),
+                    status: box(status),
+                    statusTruncated: status.scrollWidth > status.clientWidth,
+                    controls,
+                    pageWidth: document.documentElement.scrollWidth
+                };
+            }, text);
+            const label = `${viewport.width}px status ${text ? `${text.length} chars` : 'empty'}`;
+            const problems = [];
+            const buttons = JSON.stringify(layout.buttons);
+            if (reference === null) {
+                reference = buttons;
+            } else if (buttons !== reference) {
+                problems.push(`toggle moved: ${buttons} vs empty-status ${reference}`);
+            }
+            if (layout.pageWidth > viewport.width) {
+                problems.push(`page is ${layout.pageWidth}px wide`);
+            }
+            for (const control of layout.controls) {
+                if (control.left < 0 || control.right > viewport.width) {
+                    problems.push(`#${control.id} off-screen at ${control.left}-${control.right}`);
+                }
+                const overlaps = layout.status.width > 0
+                    && layout.status.left < control.right && control.left < layout.status.right
+                    && layout.status.top < control.bottom && control.top < layout.status.bottom;
+                if (overlaps) {
+                    problems.push(`#status overlaps #${control.id}`);
+                }
+            }
+            if (text.length > 200 && !layout.statusTruncated) {
+                problems.push('long status is not truncated');
+            }
+            ok = ok && problems.length === 0;
+            const where = layout.buttons.map((b) => `${b.mode}@${b.left}-${b.right},${b.top}`).join(' ');
+            lines.push(`${problems.length ? 'FAIL' : 'ok  '} layout ${label}: ${where}${problems.length ? `; ${problems.join('; ')}` : ''}`);
+        }
+    } catch (err) {
+        ok = false;
+        lines.push(`FAIL layout ${viewport.width}px: ${err.message}`);
+    } finally {
+        await context.close();
+    }
+    return { ok, lines };
 }
 
 async function runScenario(browser, name) {
@@ -299,9 +376,12 @@ async function runScenario(browser, name) {
     const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME || undefined });
     const failures = [];
     try {
-        const names = Object.keys(SCENARIOS)
-            .filter((name) => name !== 'staged-copy' || process.env.TOGGLE_E2E_STAGED === '1');
-        for (const name of names) {
+        for (const viewport of [{ width: 1300, height: 900 }, { width: 390, height: 844 }]) {
+            const { ok, lines } = await checkHeaderLayout(browser, viewport);
+            console.log(lines.join('\n'));
+            if (!ok) failures.push(`layout-${viewport.width}`);
+        }
+        for (const name of Object.keys(SCENARIOS)) {
             const { ok, lines } = await runScenario(browser, name);
             console.log(lines.join('\n'));
             if (!ok) failures.push(name);
