@@ -15,6 +15,7 @@ const ORIGIN = 'http://127.0.0.1:7680';
 const SESSION = process.env.TMUX_SESSION || 'codex-terminal';
 const TMUX_SOCKET = process.env.TMUX_E2E_SOCKET || 'ctp-e2e';
 const SWITCH_TIMEOUT_MS = 5000;
+const POLL_TIMEOUT_MS = 1000;
 // TOGGLE_E2E_VERBOSE=1 prints the press/release/click log for passing clicks too.
 const VERBOSE = process.env.TOGGLE_E2E_VERBOSE === '1';
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -94,21 +95,29 @@ async function openPage(browser, viewport = { width: 1300, height: 900 }) {
 }
 
 async function serverMode() {
-    const response = await fetch(`${ORIGIN}/terminal-mode`, { headers: { 'X-Codex-Terminal-Request': '1' } });
+    const response = await fetch(`${ORIGIN}/terminal-mode`, {
+        headers: { 'X-Codex-Terminal-Request': '1' },
+        signal: AbortSignal.timeout(POLL_TIMEOUT_MS)
+    });
     const body = await response.json();
     return body.mode;
 }
 
 async function setServerMode(mode) {
-    await fetch(`${ORIGIN}/terminal-mode`, {
+    const response = await fetch(`${ORIGIN}/terminal-mode`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Codex-Terminal-Request': '1' },
         body: JSON.stringify({ mode })
     });
+    if (!response.ok) {
+        throw new Error(`setting terminal mode failed: ${response.status} ${await response.text()}`);
+    }
 }
 
 function tmuxWindow() {
-    return tmux('display', '-p', '-t', SESSION, '#{window_name}');
+    return execFileSync('tmux', ['-L', TMUX_SOCKET, 'display', '-p', '-t', SESSION, '#{window_name}'], {
+        timeout: POLL_TIMEOUT_MS
+    }).toString().trim();
 }
 
 async function pageMode(page) {
@@ -231,7 +240,15 @@ async function waitForMode(page, expected) {
     const deadline = Date.now() + SWITCH_TIMEOUT_MS;
     let state = {};
     while (Date.now() < deadline) {
-        state = { page: await pageMode(page), server: await serverMode(), tmux: tmuxWindow() };
+        try {
+            state = { page: await pageMode(page), server: await serverMode(), tmux: tmuxWindow() };
+        } catch (err) {
+            if (err.name !== 'TimeoutError' && err.code !== 'ETIMEDOUT') {
+                throw err;
+            }
+            await sleep(100);
+            continue;
+        }
         const tmuxOk = expected === 'raw' ? state.tmux === 'raw-shell' : state.tmux !== 'raw-shell';
         if (state.page === expected && state.server === expected && tmuxOk) {
             return { ok: true, state };

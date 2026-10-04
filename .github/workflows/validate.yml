@@ -17,7 +17,7 @@ concurrency:
 jobs:
   source-and-tests:
     name: Source and tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
 
     steps:
@@ -73,7 +73,7 @@ jobs:
 
   terminal-copy:
     name: Terminal copy (browser)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
       TTYD_VERSION: "1.7.7"
@@ -126,7 +126,7 @@ jobs:
       matrix:
         include:
           - platform: linux/amd64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - platform: linux/arm64
             runner: ubuntu-24.04-arm
 
