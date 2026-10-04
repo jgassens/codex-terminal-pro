@@ -10,6 +10,16 @@ read-only Modbus and solar commissioning helpers, plus persistent `/data` state.
 
 This is an MVP fork. It is not an official OpenAI add-on.
 
+## Tested Platforms
+
+Development and testing happen on an Apple Silicon Mac in Safari and Chrome.
+This describes the computer and browser used to open the Home Assistant panel;
+the Home Assistant host can run amd64 or aarch64. Windows (and Linux) browsers
+get less testing, so some terminal behavior may be buggy, especially copy,
+paste, and keyboard shortcuts. Bug reports are welcome at
+https://github.com/jgassens/codex-terminal-pro/issues. Please include your
+operating system, browser and version, and add-on version.
+
 ## Features
 
 - Safer Home Assistant edits: Codex starts in `/config`, can inspect YAML and

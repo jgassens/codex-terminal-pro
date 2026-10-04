@@ -30,6 +30,16 @@ Codex. If needed, enter tmux copy mode with `Ctrl-b [` and leave it with `q`.
 Terminal output is also mirrored to `/data/logs/codex-terminal.log`; treat that
 file as sensitive.
 
+## Tested Platforms
+
+Development and testing happen on an Apple Silicon Mac in Safari and Chrome.
+This describes the computer and browser used to open the Home Assistant panel;
+the Home Assistant host can run amd64 or aarch64. Windows (and Linux) browsers
+get less testing, so some terminal behavior may be buggy, especially copy,
+paste, and keyboard shortcuts. Bug reports are welcome at
+https://github.com/jgassens/codex-terminal-pro/issues. Please include your
+operating system, browser and version, and add-on version.
+
 ## Browser And Mobile Terminal UX
 
 Highlighted terminal text is copied to the browser clipboard when the selection
