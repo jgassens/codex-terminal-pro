@@ -1,5 +1,23 @@
 # Changelog
 
+## 2.13.3
+
+- Keep the Codex/Shell switch in place when a status message appears or clears.
+  Before, its sideways movement could lose the first click after highlighting
+  terminal text; one click now changes modes after selecting, typing and
+  scrolling in the terminal.
+- Keep sign-in checks working for the full process user names. procps-ng cut
+  names longer than eight characters (for example, `ctp-claude` became
+  `ctp-cla+`), so the image now asks `ps` for a 32-character user column and
+  treats names that may be truncated as untrusted. The process snapshot code
+  is now in `image-service/process-snapshot.js`, with unit tests, and the image
+  build checks the parser against the real procps-ng `ps` output.
+- Build the arm64 container on GitHub's native arm64 runners instead of QEMU
+  emulation, which crashed with `Illegal instruction` during `npm install`.
+  The startup smoke test now runs on both architectures. The terminal proxy
+  error tests were tidied, and no longer keep the test process open for five
+  seconds after the three failure cases.
+
 ## 2.13.2
 
 - Fix highlight-to-copy on Mac, where Safari copied a blank line and Chrome
