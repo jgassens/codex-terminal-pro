@@ -2,65 +2,83 @@
 
 const { execFile } = require('child_process');
 
-// procps-ng (the Alpine `ps` in the add-on) renders `user` in an 8-character
-// column and cuts longer names to `ctp-cla+`, so the fixed consultant users
-// (ctp-claude, ctp-kimi, ctp-codex) would no longer match their names and
-// distinct accounts could collide. `user:32` asks for a column wide enough for
-// any local account name. BSD ps (the developer harness on macOS) rejects the
-// `:width` syntax, so a failed first call falls back to plain `user`, whose
-// column is 8 wide.
-const WIDE_USER_COLUMN = 32;
-const NARROW_USER_COLUMN = 8;
-const PS_FORMATS = [
-    { columns: `pid=,ppid=,user:${WIDE_USER_COLUMN}=,args=`, userColumnWidth: WIDE_USER_COLUMN },
-    { columns: 'pid=,ppid=,user=,args=', userColumnWidth: NARROW_USER_COLUMN }
-];
+// Processes are identified by numeric uid, not user name: procps-ng (the
+// Alpine `ps` in the add-on) cuts names to an 8-character column and BSD ps
+// (the developer harness on macOS) rejects procps's `user:32` width syntax,
+// while both print `uid` in full. `-ww` lifts the args width limit an
+// exported COLUMNS would otherwise impose, so a long wrapper command such as
+// `/bin/bash /usr/local/bin/claude-auth-helper` is never cut short. procps-ng
+// 4.0.4 and macOS ps both accept these exact arguments.
+const PS_ARGS = ['-ww', '-e', '-o', 'pid=,ppid=,uid=,args='];
 
-// A name that fills its column or ends in procps's '+' marker may have been
-// cut short and could stand for several accounts. Report it as an empty user,
-// which never equals a trusted user name, so the sign-in trust check fails
-// closed.
-function isAmbiguousUser(user, userColumnWidth) {
-    return user.endsWith('+') || user.length >= userColumnWidth;
-}
+// A row is `pid ppid uid args`, all three ids decimal. A row that does not
+// match exactly leaves no entry, so its process has no uid and can never equal
+// a trusted uid.
+const ROW = /^(\d+)\s+(\d+)\s+(\d+)\s+(.+)$/;
 
-function parseProcessSnapshot(stdout, { userColumnWidth = WIDE_USER_COLUMN } = {}) {
+function parseProcessSnapshot(stdout) {
     const children = new Map();
     const argsByPid = new Map();
-    const userByPid = new Map();
+    const uidByPid = new Map();
     for (const line of String(stdout).split('\n')) {
-        const match = line.trim().match(/^(\d+)\s+(\d+)\s+(\S+)\s+(.+)$/);
+        const match = line.trim().match(ROW);
         if (!match) {
             continue;
         }
-        const [, pid, ppid, user, args] = match;
+        const [, pid, ppid, uid, args] = match;
         const numericPid = Number(pid);
         const numericParent = Number(ppid);
+        const numericUid = Number(uid);
+        if (![numericPid, numericParent, numericUid].every(Number.isSafeInteger)) {
+            continue;
+        }
         argsByPid.set(numericPid, args.trim());
-        userByPid.set(numericPid, isAmbiguousUser(user, userColumnWidth) ? '' : user);
+        uidByPid.set(numericPid, numericUid);
         if (!children.has(numericParent)) {
             children.set(numericParent, []);
         }
         children.get(numericParent).push(numericPid);
     }
-    return { children, argsByPid, userByPid };
+    return { children, argsByPid, uidByPid };
 }
 
-function readProcessSnapshot(callback, formatIndex = 0) {
-    const { columns, userColumnWidth } = PS_FORMATS[formatIndex];
-    execFile('ps', ['-e', '-o', columns], { timeout: 3000 }, (err, stdout) => {
+function readProcessSnapshot(callback) {
+    execFile('ps', PS_ARGS, { timeout: 3000, maxBuffer: 16 * 1024 * 1024 }, (err, stdout) => {
         if (err) {
-            // Only a non-zero exit means ps disliked the format; a timeout or
-            // a missing binary would fail the same way again.
-            if (typeof err.code === 'number' && formatIndex + 1 < PS_FORMATS.length) {
-                readProcessSnapshot(callback, formatIndex + 1);
-                return;
-            }
             callback(err);
             return;
         }
-        callback(null, parseProcessSnapshot(stdout, { userColumnWidth }));
+        callback(null, parseProcessSnapshot(stdout));
     });
 }
 
-module.exports = { parseProcessSnapshot, readProcessSnapshot };
+// The uid whose processes the sign-in check trusts: SIGNIN_TRUSTED_PROCESS_UID
+// when set, otherwise this service's own uid (root, 0, in the add-on; the
+// developer's account in the host harness). A value that is not a plain
+// decimal uid resolves to null, which trusts nothing. The retired
+// SIGNIN_TRUSTED_PROCESS_USER named an account; set on its own it is no longer
+// honoured, and it also trusts nothing rather than silently widening trust to
+// the service's uid.
+function resolveTrustedProcessUid(env = process.env, getuid = process.getuid) {
+    const configured = env.SIGNIN_TRUSTED_PROCESS_UID;
+    if (configured !== undefined && configured !== '') {
+        return /^\d+$/.test(configured) && Number.isSafeInteger(Number(configured)) ? Number(configured) : null;
+    }
+    if (env.SIGNIN_TRUSTED_PROCESS_USER) {
+        return null;
+    }
+    const uid = typeof getuid === 'function' ? getuid() : undefined;
+    return Number.isSafeInteger(uid) && uid >= 0 ? uid : null;
+}
+
+function isTrustedProcessUid(uid, trustedUid) {
+    return Number.isSafeInteger(trustedUid) && Number.isSafeInteger(uid) && uid === trustedUid;
+}
+
+module.exports = {
+    PS_ARGS,
+    isTrustedProcessUid,
+    parseProcessSnapshot,
+    readProcessSnapshot,
+    resolveTrustedProcessUid
+};
