@@ -14,10 +14,11 @@
   tmux or full-screen programs that read the mouse.
 - Fix Ctrl+V on Windows and Linux. The terminal sent it to Codex as a raw
   key, so nothing pasted and Codex reported "clipboard unavailable" while
-  trying to read an X11 clipboard inside the container. Ctrl+V,
-  Ctrl+Shift+V and Shift+Insert now paste from the browser there, text and
-  images alike. Apple platforms keep Cmd+V to paste and Ctrl+V for the
-  program.
+  trying to read an X11 clipboard inside the container. Ctrl+V now pastes
+  from the browser there, text and images alike, like Ctrl+Shift+V and
+  Shift+Insert already did. Programs in the terminal no longer receive
+  Ctrl+V on those platforms (in vim, use Ctrl+Q for visual-block mode).
+  Apple platforms keep Cmd+V to paste and Ctrl+V for the program.
 - Fix a pasted image uploading twice: a clipboard image is listed in both
   the paste's files and items, each read got a fresh timestamp, and the
   duplicate check never matched them.
