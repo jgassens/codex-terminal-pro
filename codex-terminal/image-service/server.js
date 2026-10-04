@@ -25,7 +25,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const { createProxyMiddleware } = require('http-proxy-middleware');
+const httpProxy = require('http-proxy');
 const {
     buildRequestSecurityPolicy,
     isAllowedRequestSource,
@@ -3963,7 +3963,10 @@ app.use('/terminal', (req, res, next) => {
     res.redirect(302, req.originalUrl.endsWith('/') ? '../' : './');
 });
 
-const terminalProxy = createProxyMiddleware({
+// http-proxy directly rather than http-proxy-middleware: the middleware only
+// added path matching (micromatch, and through it braces), which this single
+// fixed mount never needs.
+const terminalProxy = httpProxy.createProxyServer({
     target: TTYD_SOCKET_PATH
         ? {
             protocol: 'http:',
@@ -3974,23 +3977,27 @@ const terminalProxy = createProxyMiddleware({
         }
         : `http://localhost:${TTYD_PORT}`,
     changeOrigin: true,
-    ws: true, // Enable WebSocket proxying
-    pathRewrite: {
-        '^/terminal': '' // Remove /terminal prefix when forwarding
-    },
-    onError: (err, req, res) => {
-        console.error('Proxy error:', err.message);
-        // res may be a raw socket (WebSocket) instead of an Express response
-        if (typeof res.status === 'function') {
-            res.status(502).send('Failed to connect to terminal');
-        } else if (typeof res.end === 'function') {
-            res.end();
-        }
-    },
-    logLevel: 'warn'
+    ws: true
 });
 
-app.use('/terminal', terminalProxy);
+terminalProxy.on('error', (err, req, res) => {
+    console.error('Proxy error:', err.message);
+    // res is an HTTP response for page requests and the raw client socket for
+    // WebSocket upgrades.
+    if (res && typeof res.writeHead === 'function') {
+        if (!res.headersSent) {
+            res.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8' });
+        }
+        res.end('Failed to connect to terminal');
+    } else if (res && typeof res.destroy === 'function') {
+        res.destroy();
+    }
+});
+
+// Mounted at /terminal, Express has already removed that prefix from req.url.
+app.use('/terminal', (req, res) => {
+    terminalProxy.web(req, res);
+});
 
 // Serve static files (HTML interface) - MUST be after API routes.
 // Do not expose /data/images through express.static; uploaded files are paths
@@ -4103,7 +4110,9 @@ server.on('upgrade', (req, socket, head) => {
     const upgradePath = String(req.url || '').split('?', 1)[0];
     const terminalUpgrade = upgradePath === '/terminal' || upgradePath.startsWith('/terminal/');
     if (terminalUpgrade && isAuthorizedWebSocketRequest(req, requestSecurityPolicy)) {
-        terminalProxy.upgrade(req, socket, head);
+        // Remove the /terminal prefix when forwarding, as the page mount does.
+        req.url = req.url.replace(/^\/terminal/, '') || '/';
+        terminalProxy.ws(req, socket, head);
         return;
     }
 

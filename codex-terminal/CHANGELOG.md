@@ -22,6 +22,12 @@
 - Fix a pasted image uploading twice: a clipboard image is listed in both
   the paste's files and items, each read got a fresh timestamp, and the
   duplicate check never matched them.
+- Forward the terminal through `http-proxy` directly instead of
+  `http-proxy-middleware`. The middleware's only extra was path matching
+  through `micromatch`, which pulls in `braces`, and `braces` has a
+  high-severity advisory (GHSA-vfj7-8cjw-p6xm) with no fixed release. The
+  terminal page and its WebSocket are forwarded as before, and
+  `npm audit` is clean again.
 - Add a real-browser regression check to CI (`dev/terminal-copy-e2e`): it
   runs the add-on's tmux config, ttyd, and the image service, drags across
   known text in Chromium as Mac and Windows, and checks that the copy equals
