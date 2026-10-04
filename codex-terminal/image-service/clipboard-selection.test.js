@@ -680,7 +680,7 @@ function fakeSelectionTerminal() {
 }
 
 test('a plain left press in the terminal forces xterm selection with Option on Apple platforms', () => {
-    const { forceNativeTerminalSelection } = loadFunctions(['forceNativeTerminalSelection']);
+    const { forceNativeTerminalSelection } = loadFunctions(['isApplePlatform', 'forceNativeTerminalSelection']);
     const { term, inside } = fakeSelectionTerminal();
     const event = fakeMouseEvent({ button: 0, altKey: false, shiftKey: false, ctrlKey: false, metaKey: false, target: inside });
 
@@ -692,7 +692,7 @@ test('a plain left press in the terminal forces xterm selection with Option on A
 });
 
 test('a plain left press forces xterm selection with Shift elsewhere, starting a fresh selection', () => {
-    const { forceNativeTerminalSelection } = loadFunctions(['forceNativeTerminalSelection']);
+    const { forceNativeTerminalSelection } = loadFunctions(['isApplePlatform', 'forceNativeTerminalSelection']);
     const { term, inside } = fakeSelectionTerminal();
     const event = fakeMouseEvent({ button: 0, altKey: false, shiftKey: false, ctrlKey: false, metaKey: false, target: inside });
 
@@ -704,7 +704,7 @@ test('a plain left press forces xterm selection with Shift elsewhere, starting a
 });
 
 test('modified, non-left, or outside-terminal presses are left for tmux and xterm as they are', () => {
-    const { forceNativeTerminalSelection } = loadFunctions(['forceNativeTerminalSelection']);
+    const { forceNativeTerminalSelection } = loadFunctions(['isApplePlatform', 'forceNativeTerminalSelection']);
     const { term, inside } = fakeSelectionTerminal();
     const win = { term, navigator: { platform: 'MacIntel' } };
     const base = { button: 0, altKey: false, shiftKey: false, ctrlKey: false, metaKey: false, target: inside };
@@ -715,4 +715,38 @@ test('modified, non-left, or outside-terminal presses are left for tmux and xter
         assert.equal(event.altKey, base.altKey || Boolean(change.altKey));
     }
     assert.equal(forceNativeTerminalSelection({ navigator: { platform: 'MacIntel' } }, fakeMouseEvent(base)), false);
+});
+
+test('Ctrl+V, Ctrl+Shift+V and Shift+Insert are left to the browser off Apple platforms', () => {
+    const { isBrowserPasteShortcut } = loadFunctions(['isApplePlatform', 'isBrowserPasteShortcut']);
+    const windows = { navigator: { platform: 'Win32' } };
+    const mac = { navigator: { platform: 'MacIntel' } };
+    const key = (fields) => ({ ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, ...fields });
+
+    assert.equal(isBrowserPasteShortcut(windows, key({ ctrlKey: true, key: 'v' })), true);
+    assert.equal(isBrowserPasteShortcut(windows, key({ ctrlKey: true, shiftKey: true, key: 'V' })), true);
+    assert.equal(isBrowserPasteShortcut(windows, key({ shiftKey: true, key: 'Insert' })), true);
+    // Apple platforms paste with Cmd+V; Ctrl+V stays a key for the program.
+    assert.equal(isBrowserPasteShortcut(mac, key({ ctrlKey: true, key: 'v' })), false);
+    assert.equal(isBrowserPasteShortcut(windows, key({ ctrlKey: true, altKey: true, key: 'v' })), false);
+    assert.equal(isBrowserPasteShortcut(windows, key({ ctrlKey: true, key: 'c' })), false);
+    assert.equal(isBrowserPasteShortcut(windows, key({ key: 'v' })), false);
+});
+
+test('a clipboard image listed in both files and items is taken once', () => {
+    const { imageFilesFromTransfer } = loadFunctions(['isImageFile', 'imageFilesFromFileList', 'imageFilesFromItems', 'imageFilesFromTransfer']);
+    const listed = { name: 'image.png', type: 'image/png', size: 105, lastModified: 1000 };
+    // Each read of a clipboard item yields a new File with a new timestamp.
+    const fromItem = { name: 'image.png', type: 'image/png', size: 105, lastModified: 1007 };
+    const transfer = {
+        files: [listed],
+        items: [{ kind: 'file', getAsFile: () => fromItem }]
+    };
+
+    const both = imageFilesFromTransfer(transfer);
+    assert.equal(both.length, 1);
+    assert.equal(both[0], listed);
+    const itemsOnly = imageFilesFromTransfer({ files: [], items: transfer.items });
+    assert.equal(itemsOnly.length, 1);
+    assert.equal(itemsOnly[0], fromItem);
 });

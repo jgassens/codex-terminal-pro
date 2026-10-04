@@ -2,18 +2,30 @@
 
 ## 2.13.2
 
-- Fix highlight-to-copy in Safari, which copied a blank line. A plain drag
-  went to tmux, which highlighted in copy mode, and the page then had to
-  rebuild the text from pointer positions and tmux's OSC 52 echo. That path
-  broke repeatedly and also picked up tmux's `[0/0]` copy-mode marker on
-  multi-line selections. A plain left drag in the terminal now uses the
-  terminal's own selection, the same one Option-drag already used, so the
-  highlighted text is exactly what gets copied. Mouse-wheel scrolling still
-  scrolls tmux history. Left clicks no longer reach full-screen programs that
-  read the mouse.
-- Add a real-browser regression check to CI: it runs the add-on's tmux
-  config, ttyd, and the image service, drags across known text in Chromium,
-  and checks the clipboard (`dev/terminal-copy-e2e`).
+- Fix highlight-to-copy on Mac, where Safari copied a blank line and Chrome
+  needed Option held. A plain drag went to tmux, which highlighted in copy
+  mode, and the page then rebuilt the text from pointer positions and tmux's
+  OSC 52 echo. That path broke repeatedly and also picked up tmux's `[0/0]`
+  copy-mode marker on multi-line selections. A plain left drag in the
+  terminal now uses the terminal's own selection, the same one Option-drag
+  already used, and copies exactly that highlight (the old rebuild could take
+  one character more and made the highlight jump on release). Mouse-wheel
+  scrolling still scrolls tmux history. Left clicks and taps no longer reach
+  tmux or full-screen programs that read the mouse.
+- Fix Ctrl+V on Windows and Linux. The terminal sent it to Codex as a raw
+  key, so nothing pasted and Codex reported "clipboard unavailable" while
+  trying to read an X11 clipboard inside the container. Ctrl+V,
+  Ctrl+Shift+V and Shift+Insert now paste from the browser there, text and
+  images alike. Apple platforms keep Cmd+V to paste and Ctrl+V for the
+  program.
+- Fix a pasted image uploading twice: a clipboard image is listed in both
+  the paste's files and items, each read got a fresh timestamp, and the
+  duplicate check never matched them.
+- Add a real-browser regression check to CI (`dev/terminal-copy-e2e`): it
+  runs the add-on's tmux config, ttyd, and the image service, drags across
+  known text in Chromium as Mac and Windows, and checks that the copy equals
+  the highlight, that tmux never takes the drag, that Windows Ctrl+V pastes
+  text and uploads an image once, and that the wheel still scrolls.
 
 ## 2.13.1
 

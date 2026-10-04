@@ -3,7 +3,7 @@
 # own tmux config, a real ttyd, the real image service, and Chromium driven
 # by Playwright. It drags across known text and checks the clipboard, and
 # that tmux never takes the drag (the path that copied a blank line in
-# Safari).
+# Safari), and that Ctrl+V on Windows pastes text and uploads an image once.
 #
 #   TTYD_BIN=/path/to/ttyd bash dev/terminal-copy-e2e/run.sh
 #
@@ -20,13 +20,15 @@ WORK="$(mktemp -d)"
 SOCKET_DIR="$(mktemp -d /tmp/ctp-e2e.XXXXXX)"
 chmod 700 "$SOCKET_DIR"
 SESSION=codex-terminal
+# A private tmux server, so a local run never touches a real session.
+export TMUX_E2E_SOCKET=ctp-e2e
 SERVICE_PID=""
 TTYD_PID=""
 
 cleanup() {
     [ -n "$SERVICE_PID" ] && kill "$SERVICE_PID" 2>/dev/null || true
     [ -n "$TTYD_PID" ] && kill "$TTYD_PID" 2>/dev/null || true
-    tmux kill-session -t "$SESSION" 2>/dev/null || true
+    tmux -L "$TMUX_E2E_SOCKET" kill-server 2>/dev/null || true
     rm -rf "$WORK" "$SOCKET_DIR"
 }
 trap cleanup EXIT
@@ -36,11 +38,11 @@ awk '/cat > "\$\{tmux_config\}" << TMUX_EOF/{on=1; next} /^TMUX_EOF/{on=0} on' \
     "$REPO/codex-terminal/run.sh" | sed 's/\${history_limit}/10000/' > "$WORK/tmux.conf"
 grep -q 'set -g mouse on' "$WORK/tmux.conf"
 
-tmux -f "$WORK/tmux.conf" new-session -d -s "$SESSION" -x 120 -y 30 bash
+tmux -L "$TMUX_E2E_SOCKET" -f "$WORK/tmux.conf" new-session -d -s "$SESSION" -x 120 -y 30 bash
 "$TTYD_BIN" --port 7681 --interface 127.0.0.1 --writable \
     --client-option macOptionClickForcesSelection=true \
     --client-option rightClickSelectsWord=true \
-    tmux -f "$WORK/tmux.conf" attach-session -t "$SESSION" > "$WORK/ttyd.log" 2>&1 &
+    tmux -L "$TMUX_E2E_SOCKET" -f "$WORK/tmux.conf" attach-session -t "$SESSION" > "$WORK/ttyd.log" 2>&1 &
 TTYD_PID=$!
 
 mkdir -p "$WORK"/{uploads,config,monitor,reports}
@@ -60,10 +62,18 @@ SHELL_DISPATCH_SOCKET_PATH="$SOCKET_DIR/shell-dispatch.sock" \
     node "$SERVICE/server.js" > "$WORK/service.log" 2>&1 &
 SERVICE_PID=$!
 
+ready=false
 for _ in $(seq 1 50); do
-    curl -fsS -o /dev/null http://127.0.0.1:7680/ 2>/dev/null && break
+    if curl -fsS -o /dev/null http://127.0.0.1:7680/ 2>/dev/null; then
+        ready=true
+        break
+    fi
     sleep 0.2
 done
+if [ "$ready" != true ]; then
+    echo "image service did not start"; tail -n 40 "$WORK/service.log" || true
+    exit 1
+fi
 
 if ! TMUX_SESSION="$SESSION" node "$HERE/copy.e2e.js"; then
     echo "--- service.log"; tail -n 40 "$WORK/service.log" || true
