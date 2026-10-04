@@ -3151,6 +3151,7 @@
                     return;
                 }
 
+                forceNativeTerminalSelection(iframeWindow, event);
                 dragStartCell = getTerminalCellFromMouseEvent(iframeWindow, event);
                 dragInitialSelection = getTerminalSelection(iframeWindow);
                 dragInteractionId = dragStartCell
@@ -3712,6 +3713,51 @@
                 iframeWindow.term?.clearSelection?.();
             } catch (err) {
                 console.log('Cannot clear xterm selection:', err);
+            }
+        }
+
+        // A plain left drag used to reach tmux, which selected in copy mode and
+        // left this page to rebuild the text from pointer coordinates and an
+        // OSC 52 echo. That path kept breaking (Safari copied a blank line),
+        // while xterm's own selection, the one Option-drag forces, copied
+        // correctly everywhere. Make every plain left press look like that
+        // forced-selection press to xterm, so the highlighted text is exactly
+        // what gets copied. Wheel scrolling still reaches tmux.
+        function forceNativeTerminalSelection(iframeWindow, event) {
+            const term = iframeWindow.term;
+            if (
+                !term ||
+                event.button !== 0 ||
+                event.altKey ||
+                event.shiftKey ||
+                event.ctrlKey ||
+                event.metaKey ||
+                !term.element ||
+                !term.element.contains(event.target)
+            ) {
+                return false;
+            }
+
+            // Mirrors xterm's SelectionService.shouldForceSelection: Option
+            // (with macOptionClickForcesSelection) on Apple platforms, Shift
+            // elsewhere. Alt off-Mac would start a column selection instead.
+            const platform = iframeWindow.navigator?.platform || '';
+            const isMac = /Mac|iPad|iPhone|iPod/.test(platform);
+            try {
+                if (isMac) {
+                    if (term.options && term.options.macOptionClickForcesSelection !== true) {
+                        term.options.macOptionClickForcesSelection = true;
+                    }
+                    Object.defineProperty(event, 'altKey', { value: true });
+                } else {
+                    // Shift-click extends an existing selection; start fresh.
+                    term.clearSelection?.();
+                    Object.defineProperty(event, 'shiftKey', { value: true });
+                }
+                return true;
+            } catch (err) {
+                console.log('Cannot force native terminal selection:', err);
+                return false;
             }
         }
 

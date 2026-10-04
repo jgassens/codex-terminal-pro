@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.13.2
+
+- Fix highlight-to-copy in Safari, which copied a blank line. A plain drag
+  went to tmux, which highlighted in copy mode, and the page then had to
+  rebuild the text from pointer positions and tmux's OSC 52 echo. That path
+  broke repeatedly and also picked up tmux's `[0/0]` copy-mode marker on
+  multi-line selections. A plain left drag in the terminal now uses the
+  terminal's own selection, the same one Option-drag already used, so the
+  highlighted text is exactly what gets copied. Mouse-wheel scrolling still
+  scrolls tmux history. Left clicks no longer reach full-screen programs that
+  read the mouse.
+- Add a real-browser regression check to CI: it runs the add-on's tmux
+  config, ttyd, and the image service, drags across known text in Chromium,
+  and checks the clipboard (`dev/terminal-copy-e2e`).
+
 ## 2.13.1
 
 - Fix Codex quitting straight back to the menu on 2.13.0. Codex CLI 0.160.0
