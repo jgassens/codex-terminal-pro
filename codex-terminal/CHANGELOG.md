@@ -6,17 +6,19 @@
   Before, its sideways movement could lose the first click after highlighting
   terminal text; one click now changes modes after selecting, typing and
   scrolling in the terminal.
-- Keep sign-in checks working for the full process user names. procps-ng cut
-  names longer than eight characters (for example, `ctp-claude` became
-  `ctp-cla+`), so the image now asks `ps` for a 32-character user column and
-  treats names that may be truncated as untrusted. The process snapshot code
-  is now in `image-service/process-snapshot.js`, with unit tests, and the image
-  build checks the parser against the real procps-ng `ps` output.
+- Harden the sign-in process check by matching processes on numeric user ID.
+  procps-ng shortened names longer than eight characters (for example,
+  `ctp-claude` became `ctp-cla+`), while `-ww` keeps full command lines even
+  with a narrow `COLUMNS` setting. Sign-in itself was not affected: the trusted
+  user is root. The process snapshot code is now in
+  `image-service/process-snapshot.js`, with unit tests, and the image build
+  checks the parser against the real procps-ng `ps` output.
 - Build the arm64 container on GitHub's native arm64 runners instead of QEMU
   emulation, which crashed with `Illegal instruction` during `npm install`.
   The startup smoke test now runs on both architectures. The terminal proxy
   error tests were tidied, and no longer keep the test process open for five
-  seconds after the three failure cases.
+  seconds after the three failure cases. All CI jobs are pinned to Ubuntu
+  24.04 (`ubuntu-24.04` and `ubuntu-24.04-arm`) instead of `ubuntu-latest`.
 
 ## 2.13.2
 
