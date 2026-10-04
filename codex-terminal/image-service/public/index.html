@@ -3137,6 +3137,7 @@
             let dragStartCell = null;
             let dragInteractionId = null;
             let dragInitialSelection = '';
+            let dragUsesNativeSelection = false;
             let touchSelectStartCell = null;
             let touchSelectCurrentCell = null;
             let touchInteractionId = null;
@@ -3151,6 +3152,7 @@
                     return;
                 }
 
+                dragUsesNativeSelection = forceNativeTerminalSelection(iframeWindow, event);
                 dragStartCell = getTerminalCellFromMouseEvent(iframeWindow, event);
                 dragInitialSelection = getTerminalSelection(iframeWindow);
                 dragInteractionId = dragStartCell
@@ -3170,6 +3172,7 @@
                 dragStartCell = null;
                 dragInteractionId = null;
                 dragInitialSelection = '';
+                dragUsesNativeSelection = false;
             };
 
             const finishDraggedTerminalText = (event) => {
@@ -3181,9 +3184,11 @@
                 const interactionId = dragInteractionId;
                 const endCell = getTerminalCellFromMouseEvent(iframeWindow, event);
                 const initialSelection = dragInitialSelection;
+                const usesNativeSelection = dragUsesNativeSelection;
                 dragStartCell = null;
                 dragInteractionId = null;
                 dragInitialSelection = '';
+                dragUsesNativeSelection = false;
 
                 if (!interactionId) {
                     disarmTerminalClipboardInteraction(clipboardState, interactionId);
@@ -3194,8 +3199,14 @@
                 // even though the pointer begins and ends in the same cell.
                 // Only accept a same-cell selection when it changed during this
                 // gesture, so an old selection cannot be copied accidentally.
+                // When xterm drew the highlight itself, copy exactly that;
+                // rebuilding it from pointer cells rounds differently and can
+                // grab one character more than is highlighted.
+                const nativeSelection = usesNativeSelection
+                    ? getTerminalSelection(iframeWindow)
+                    : '';
                 const selectedText = terminalCellsDiffer(startCell, endCell)
-                    ? getTerminalTextFromDrag(iframeWindow, startCell, endCell)
+                    ? (nativeSelection || getTerminalTextFromDrag(iframeWindow, startCell, endCell))
                     : newSameCellTerminalSelection(
                         initialSelection,
                         getTerminalSelection(iframeWindow)
@@ -3352,6 +3363,11 @@
                     ) {
                         iframeWindow.__codexShellDispatchKeyHandlerInstalled = true;
                         iframeWindow.term.attachCustomKeyEventHandler((event) => {
+                            if (isBrowserPasteShortcut(iframeWindow, event)) {
+                                // Leave it to the browser: its paste event
+                                // carries the local clipboard (text or image).
+                                return false;
+                            }
                             if (!claimTerminalEvent(event)) {
                                 return true;
                             }
@@ -3713,6 +3729,72 @@
             } catch (err) {
                 console.log('Cannot clear xterm selection:', err);
             }
+        }
+
+        // A plain left drag used to reach tmux, which selected in copy mode and
+        // left this page to rebuild the text from pointer coordinates and an
+        // OSC 52 echo. That path kept breaking (Safari copied a blank line),
+        // while xterm's own selection, the one Option-drag forces, copied
+        // correctly everywhere. Make every plain left press look like that
+        // forced-selection press to xterm, so the highlighted text is exactly
+        // what gets copied. Wheel scrolling still reaches tmux.
+        function forceNativeTerminalSelection(iframeWindow, event) {
+            const term = iframeWindow.term;
+            if (
+                !term ||
+                event.button !== 0 ||
+                event.altKey ||
+                event.shiftKey ||
+                event.ctrlKey ||
+                event.metaKey ||
+                !term.element ||
+                !term.element.contains(event.target)
+            ) {
+                return false;
+            }
+
+            // Mirrors xterm's SelectionService.shouldForceSelection: Option
+            // (with macOptionClickForcesSelection) on Apple platforms, Shift
+            // elsewhere. Alt off-Mac would start a column selection instead.
+            const isMac = isApplePlatform(iframeWindow);
+            try {
+                if (isMac) {
+                    if (term.options && term.options.macOptionClickForcesSelection !== true) {
+                        term.options.macOptionClickForcesSelection = true;
+                    }
+                    Object.defineProperty(event, 'altKey', { value: true });
+                } else {
+                    // Shift-click extends an existing selection; start fresh.
+                    term.clearSelection?.();
+                    Object.defineProperty(event, 'shiftKey', { value: true });
+                }
+                return true;
+            } catch (err) {
+                console.log('Cannot force native terminal selection:', err);
+                return false;
+            }
+        }
+
+        function isApplePlatform(iframeWindow) {
+            // Same test as xterm's isMac (Macintosh, MacIntel, ...; iPadOS
+            // Safari reports MacIntel), so the forced modifier is the one
+            // xterm checks.
+            return /^Mac/.test(iframeWindow?.navigator?.platform || '');
+        }
+
+        // On Windows and Linux, xterm turns Ctrl+V into a raw ^V for the
+        // program in the terminal, and the browser never pastes. Codex then
+        // tries to read an X11 clipboard inside the container and fails with
+        // "clipboard unavailable". Ctrl+V, Ctrl+Shift+V and Shift+Insert are
+        // the platform paste keys there; Apple platforms paste with Cmd+V and
+        // keep Ctrl+V for the program.
+        function isBrowserPasteShortcut(iframeWindow, event) {
+            if (!event || isApplePlatform(iframeWindow) || event.metaKey || event.altKey) {
+                return false;
+            }
+            const key = typeof event.key === 'string' ? event.key.toLowerCase() : '';
+            return (event.ctrlKey && key === 'v') ||
+                (event.shiftKey && !event.ctrlKey && key === 'insert');
         }
 
         function getTerminalCellFromMouseEvent(iframeWindow, event) {
@@ -4094,10 +4176,14 @@
                 return [];
             }
 
-            const files = [
-                ...imageFilesFromFileList(transfer.files),
-                ...imageFilesFromItems(transfer.items)
-            ];
+            // A clipboard image appears in both transfer.files and
+            // transfer.items, and each read gets a fresh lastModified, so the
+            // key below never matched them and one paste uploaded twice. Use
+            // items only when the browser lists no files.
+            const listedFiles = imageFilesFromFileList(transfer.files);
+            const files = listedFiles.length > 0
+                ? listedFiles
+                : imageFilesFromItems(transfer.items);
             const seen = new Set();
 
             return files.filter((file) => {

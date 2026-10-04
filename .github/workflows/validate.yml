@@ -71,6 +71,52 @@ jobs:
         working-directory: codex-terminal/image-service
         run: npm audit --omit=dev --audit-level=high
 
+  terminal-copy:
+    name: Terminal copy (browser)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TTYD_VERSION: "1.7.7"
+      TTYD_SHA256: 8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55
+      PLAYWRIGHT_VERSION: "1.63.0"
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: codex-terminal/image-service/package-lock.json
+          package-manager-cache: false
+
+      - name: Install tmux and ttyd
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq tmux
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+            --output "$RUNNER_TEMP/ttyd" \
+            "https://github.com/tsl0922/ttyd/releases/download/${TTYD_VERSION}/ttyd.x86_64"
+          printf '%s  %s\n' "$TTYD_SHA256" "$RUNNER_TEMP/ttyd" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/ttyd"
+
+      - name: Install image-service dependencies
+        working-directory: codex-terminal/image-service
+        run: npm ci --no-audit --no-fund
+
+      - name: Install Playwright and Chromium
+        working-directory: dev/terminal-copy-e2e
+        run: |
+          npm install --no-save --no-audit --no-fund "playwright@${PLAYWRIGHT_VERSION}"
+          npx playwright install --with-deps chromium
+
+      - name: Drag-to-copy in a real browser
+        run: TTYD_BIN="$RUNNER_TEMP/ttyd" bash dev/terminal-copy-e2e/run.sh
+
   container-build:
     name: Container (${{ matrix.platform }})
     runs-on: ubuntu-latest
