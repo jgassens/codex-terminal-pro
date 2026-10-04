@@ -2987,7 +2987,7 @@ function rawShellPaneBusyProgram(callback) {
 }
 
 function readProcessSnapshot(callback) {
-    execFile('ps', ['-o', 'pid=,ppid=,user=,args='], { timeout: 3000 }, (err, stdout) => {
+    execFile('ps', ['-e', '-o', 'pid=,ppid=,user=,args='], { timeout: 3000 }, (err, stdout) => {
         if (err) {
             callback(err);
             return;
