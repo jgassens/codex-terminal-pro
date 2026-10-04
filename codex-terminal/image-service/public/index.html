@@ -105,6 +105,7 @@
 
         #header-title {
             display: flex;
+            flex: 0 0 auto;
             align-items: center;
             gap: 10px;
             min-width: 0;
@@ -152,9 +153,16 @@
             border-color: rgba(15, 75, 164, 0.24);
         }
 
+        /* #status sits in front of the mode switch and is the only item here
+           that shrinks, so the switch's position depends only on the
+           fixed-size buttons to its right. A status change must never move it:
+           a click that completes a staged copy rewrites #status between
+           mousedown and mouseup. */
         #header-actions {
             display: flex;
+            flex: 1 1 auto;
             align-items: center;
+            justify-content: flex-end;
             gap: 10px;
             min-width: 0;
         }
@@ -213,6 +221,7 @@
             font-size: 12px;
             font-weight: 600;
             display: flex;
+            flex: 0 0 auto;
             align-items: center;
             gap: 6px;
             min-height: 32px;
@@ -270,6 +279,8 @@
         }
 
         #status {
+            flex: 0 1 auto;
+            min-width: 0;
             font-size: 12px;
             color: var(--muted);
             padding: 0 12px;
@@ -920,6 +931,7 @@
             }
 
             #header-actions {
+                flex: none;
                 width: 100%;
                 justify-content: flex-start;
                 flex-wrap: wrap;
@@ -997,6 +1009,7 @@
         }
 
         html.touch-ui #header-actions {
+            flex: none;
             width: 100%;
             justify-content: flex-start;
             flex-wrap: wrap;
@@ -1051,11 +1064,11 @@
                 <span class="status-pill">/config</span>
             </div>
             <div id="header-actions">
+                <span id="status"></span>
                 <div id="terminal-mode-switch" role="group" aria-label="Terminal mode">
                     <button type="button" class="terminal-mode-btn active" data-terminal-mode="codex" aria-pressed="true">Codex</button>
                     <button type="button" class="terminal-mode-btn" data-terminal-mode="raw" aria-pressed="false">Shell</button>
                 </div>
-                <span id="status"></span>
                 <button id="change-desk-btn" class="header-btn" title="Review Home Assistant changes and validation status">
                     <span>▤</span>
                     <span>Change Desk</span>

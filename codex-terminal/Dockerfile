@@ -1,7 +1,7 @@
 FROM ghcr.io/home-assistant/base:3.22-2026.04.0@sha256:eed9b5eff1441d4db22d5036b7802610e7fc94af8c0448439ae6dda9942d5230
 
 LABEL \
-    io.hass.version="2.13.2" \
+    io.hass.version="2.13.3" \
     io.hass.type="addon" \
     io.hass.arch="aarch64|amd64" \
     org.opencontainers.image.title="Home Assistant Add-on: Codex Terminal Pro" \
@@ -153,6 +153,29 @@ RUN cd /opt/image-service \
     && npm ci --omit=dev --no-audit --no-fund \
     && rm -rf /root/.npm \
     && chmod +x server.js
+
+# Run the real parser against the real procps-ng `ps`: the sign-in trust check
+# in server.js compares these numeric uids, so a parser that stops reading
+# them (root is 0, ctp-claude is 61001) must fail the build.
+RUN su -s /bin/sh ctp-claude -c 'exec sleep 30' & \
+    probe=$! \
+    && for _ in 1 2 3 4 5 6 7 8 9 10; do \
+        [ "$(ps -o uid= -p "$probe" | tr -d ' ')" = 61001 ] && break; sleep 0.3; \
+    done \
+    && status=0 \
+    && node -e ' \
+        const { readProcessSnapshot } = require("/opt/image-service/process-snapshot.js"); \
+        const fail = (reason) => { console.error("process-snapshot build check failed: " + reason); process.exit(1); }; \
+        const probe = Number(process.argv[1]); \
+        readProcessSnapshot((err, snapshot) => { \
+            if (err) fail(err.message); \
+            const own = (pid) => JSON.stringify([snapshot.uidByPid.get(pid), snapshot.argsByPid.get(pid)]); \
+            if (!(snapshot.children.get(process.ppid) || []).includes(process.pid)) fail("node " + process.pid + " is not listed under ppid " + process.ppid); \
+            if (snapshot.uidByPid.get(process.pid) !== 0 || !/node/.test(snapshot.argsByPid.get(process.pid) || "")) fail("this node process parsed as " + own(process.pid)); \
+            if (snapshot.uidByPid.get(probe) !== 61001 || !/sleep 30/.test(snapshot.argsByPid.get(probe) || "")) fail("ctp-claude process " + probe + " parsed as " + own(probe)); \
+        });' "$probe" || status=$? ; \
+    kill "$probe" 2>/dev/null; \
+    exit "$status"
 
 # Copy startup script and modular scripts.
 COPY run.sh /run.sh
