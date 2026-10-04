@@ -4,6 +4,8 @@
 # by Playwright. It drags across known text and checks the clipboard, and
 # that tmux never takes the drag (the path that copied a blank line in
 # Safari), and that Ctrl+V on Windows pastes text and uploads an image once.
+# toggle.e2e.js then checks that one real click on the Codex/Shell toggle
+# switches modes after selecting, typing, scrolling or just focusing.
 #
 #   TTYD_BIN=/path/to/ttyd bash dev/terminal-copy-e2e/run.sh
 #
@@ -39,6 +41,9 @@ awk '/cat > "\$\{tmux_config\}" << TMUX_EOF/{on=1; next} /^TMUX_EOF/{on=0} on' \
 grep -q 'set -g mouse on' "$WORK/tmux.conf"
 
 tmux -L "$TMUX_E2E_SOCKET" -f "$WORK/tmux.conf" new-session -d -s "$SESSION" -x 120 -y 30 bash
+# The service runs plain `tmux`; $TMUX points it at the private server, so a
+# mode switch selects windows in the session ttyd shows.
+TMUX_E2E_SOCKET_PATH="$(tmux -L "$TMUX_E2E_SOCKET" display -p '#{socket_path}')"
 "$TTYD_BIN" --port 7681 --interface 127.0.0.1 --writable \
     --client-option macOptionClickForcesSelection=true \
     --client-option rightClickSelectsWord=true \
@@ -59,6 +64,7 @@ CHANGE_DESK_REPORT_DIR="$WORK/reports" \
 CHANGE_DESK_MALL_COP_MEMORY_FILE="$WORK/monitor/mall-cop.json" \
 SETTINGS_FILE="$WORK/settings.json" \
 SHELL_DISPATCH_SOCKET_PATH="$SOCKET_DIR/shell-dispatch.sock" \
+TMUX="$TMUX_E2E_SOCKET_PATH,0,0" \
     node "$SERVICE/server.js" > "$WORK/service.log" 2>&1 &
 SERVICE_PID=$!
 
@@ -75,7 +81,14 @@ if [ "$ready" != true ]; then
     exit 1
 fi
 
-if ! TMUX_SESSION="$SESSION" node "$HERE/copy.e2e.js"; then
+failed=false
+for test in copy.e2e.js toggle.e2e.js; do
+    echo "--- $test"
+    if ! TMUX_SESSION="$SESSION" node "$HERE/$test"; then
+        failed=true
+    fi
+done
+if [ "$failed" = true ]; then
     echo "--- service.log"; tail -n 40 "$WORK/service.log" || true
     echo "--- ttyd.log"; tail -n 20 "$WORK/ttyd.log" || true
     exit 1
