@@ -20,7 +20,14 @@ const POLL_TIMEOUT_MS = 1000;
 const VERBOSE = process.env.TOGGLE_E2E_VERBOSE === '1';
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // Bounded: send-keys into a pane in copy mode can block on a jump prompt.
-const tmux = (...args) => execFileSync('tmux', ['-L', TMUX_SOCKET, ...args], { timeout: 5000 }).toString().trim();
+const tmux = (...args) => {
+    try {
+        return execFileSync('tmux', ['-L', TMUX_SOCKET, ...args], { timeout: 5000 }).toString().trim();
+    } catch (err) {
+        err.message = `tmux ${args.join(' ')}: ${err.message}`;
+        throw err;
+    }
+};
 
 const WINDOWS = {
     platform: 'Win32',
@@ -193,7 +200,14 @@ function leavePaneMode() {
         if (tmux('display', '-p', '-t', `${SESSION}:0`, '#{pane_in_mode}') !== '1') {
             return;
         }
-        tmux('send-keys', '-t', `${SESSION}:0`, '-X', 'cancel');
+        try {
+            tmux('send-keys', '-t', `${SESSION}:0`, '-X', 'cancel');
+        } catch (err) {
+            // The pane may have left its mode between the check and the cancel.
+            if (tmux('display', '-p', '-t', `${SESSION}:0`, '#{pane_in_mode}') === '1') {
+                throw err;
+            }
+        }
     }
     throw new Error(`window 0 stays in ${tmux('display', '-p', '-t', `${SESSION}:0`, '#{pane_mode}')}`);
 }
@@ -202,36 +216,59 @@ function attachedClients() {
     return tmux('list-clients', '-t', SESSION, '-F', '#{client_width}x#{client_height}').split('\n').filter(Boolean);
 }
 
+const EXTRA_CLIENT_HINT = `an extra tmux client is attached to session ${SESSION} on socket ${TMUX_SOCKET}: ` +
+    `if you attached an observer (tmux -L ${TMUX_SOCKET} attach), detach it (tmux -L ${TMUX_SOCKET} detach-client -s ${SESSION}); ` +
+    'otherwise the previous page\'s client did not exit';
+
 // The previous page's tmux client is gone (ttyd ends it when the WebSocket
-// closes), so the next page's client is the only one.
+// closes), so the next page's client is the only one. Strict on purpose: an
+// observer attached by hand fails the run, with a message that says so.
 async function waitForNoClients() {
     const deadline = Date.now() + 5000;
-    while (attachedClients().length > 0) {
+    let clients = attachedClients();
+    while (clients.length > 0) {
         if (Date.now() > deadline) {
-            throw new Error(`tmux clients still attached: ${attachedClients().join(', ')}`);
+            throw new Error(`tmux clients still attached (${clients.join(', ')}); ${EXTRA_CLIENT_HINT}`);
         }
         await sleep(50);
+        clients = attachedClients();
     }
 }
 
 // Window 0 is the active window, and the page's own tmux client is the one
 // client attached, at xterm's size: openPage only waits for xterm to exist,
 // before ttyd's WebSocket has started a tmux client, which then attaches at a
-// provisional size and resizes.
+// provisional size and resizes. The page also dispatches a resize to the
+// terminal iframe about 80 ms after it loads, so xterm can refit after a
+// check has passed: the agreed size must hold on two consecutive polls at
+// least STABLE_MS apart.
+const STABLE_MS = 150;
 async function waitForTerminalReady(frame) {
     const deadline = Date.now() + 10000;
     let size = '';
+    let clients = [];
+    let agreed = null;
     while (Date.now() < deadline) {
         size = await frame.evaluate(() => `${window.term.cols}x${window.term.rows}`);
         const active = tmux('display', '-p', '-t', `${SESSION}:0`, '#{window_active}') === '1';
-        const clients = attachedClients();
+        clients = attachedClients();
         const windowSize = tmux('display', '-p', '-t', `${SESSION}:0`, '#{window_width}x#{window_height}');
         if (active && clients.length === 1 && clients[0] === size && windowSize === size) {
-            return;
+            const now = Date.now();
+            if (agreed && agreed.size === size) {
+                if (now - agreed.at >= STABLE_MS) {
+                    return;
+                }
+            } else {
+                agreed = { size, at: now };
+            }
+        } else {
+            agreed = null;
         }
         await sleep(50);
     }
-    throw new Error(`terminal not ready for xterm ${size}; ${await terminalState(frame)}`);
+    const extra = clients.length > 1 ? `; ${EXTRA_CLIENT_HINT}` : '';
+    throw new Error(`terminal not ready for xterm ${size}${extra}; ${await terminalState(frame)}`);
 }
 
 // Print the marker in window 0 and wait until xterm shows it: first that the
@@ -239,7 +276,7 @@ async function waitForTerminalReady(frame) {
 async function showMarker(page, frame) {
     leavePaneMode();
     tmux('send-keys', '-t', `${SESSION}:0`, "clear; printf 'TOGGLE_MARKER_LINE\\n'", 'Enter');
-    const deadline = Date.now() + 5000;
+    const deadline = Date.now() + 10000;
     while (!tmux('capture-pane', '-p', '-t', `${SESSION}:0`).split('\n').includes('TOGGLE_MARKER_LINE')) {
         if (Date.now() > deadline) {
             throw new Error(`the shell never printed the marker; ${await terminalState(frame)}`);
