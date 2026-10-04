@@ -24,9 +24,8 @@ const crypto = require('crypto');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const os = require('os');
 const httpProxy = require('http-proxy');
-const { readProcessSnapshot } = require('./process-snapshot');
+const { isTrustedProcessUid, readProcessSnapshot, resolveTrustedProcessUid } = require('./process-snapshot');
 const {
     buildRequestSecurityPolicy,
     isAllowedRequestSource,
@@ -59,7 +58,10 @@ const BIND_ADDRESS = process.env.IMAGE_SERVICE_BIND_ADDRESS || '0.0.0.0';
 const TTYD_SOCKET_PATH = process.env.TTYD_SOCKET_PATH || '';
 const SHELL_DISPATCH_SOCKET_PATH = process.env.SHELL_DISPATCH_SOCKET_PATH || '';
 const SIGNIN_PORT_OWNER_BIN = process.env.SIGNIN_PORT_OWNER_BIN || '/opt/scripts/codex-terminal-port-owner.py';
-const SIGNIN_TRUSTED_PROCESS_USER = process.env.SIGNIN_TRUSTED_PROCESS_USER || os.userInfo().username;
+const SIGNIN_TRUSTED_PROCESS_UID = resolveTrustedProcessUid();
+if (SIGNIN_TRUSTED_PROCESS_UID === null) {
+    console.warn('No trusted sign-in uid: set SIGNIN_TRUSTED_PROCESS_UID to a numeric uid; sign-in links will not be detected');
+}
 const UPLOAD_DIR = process.env.UPLOAD_DIR || '/data/images';
 const CONFIG_ROOT = process.env.HA_CONFIG_DIR || '/config';
 const HA_MONITOR_STATE_FILE = process.env.HA_MONITOR_STATE_FILE || '/data/monitor/ha-monitor.json';
@@ -3351,7 +3353,7 @@ function findCancelTarget(panePid, callback) {
         while (queue.length > 0) {
             const { pid, wrapperArgs } = queue.shift();
             const args = snapshot.argsByPid.get(pid) || '';
-            const user = snapshot.userByPid.get(pid) || '';
+            const uid = snapshot.uidByPid.get(pid);
             const isWrapper = isSignInWrapperProcess(args);
             const nextWrapperArgs = isWrapper ? [...wrapperArgs, args] : wrapperArgs;
             const label = isWrapper ? null : signInProcessLabel(args);
@@ -3363,12 +3365,13 @@ function findCancelTarget(panePid, callback) {
             const trustedClaudeLaunch = label !== 'Claude Code' || wrapperArgs.some(
                 (ancestorArgs) => /(?:^|\/)claude-auth-helper(?:\.sh)?(?:\s|$)/.test(ancestorArgs)
             );
-            // Sign-in helpers run as the same account as this service (root in
-            // the add-on, the developer's account in the host harness). A
+            // Sign-in helpers run as the same uid as this service (0 in the
+            // add-on, the developer's account in the host harness). A
             // UID-dropped consultant may execute the bundled CLIs, but must
-            // never be allowed to impersonate a trusted sign-in process.
-            const trustedProcessUser = user === SIGNIN_TRUSTED_PROCESS_USER;
-            if (label && trustedClaudeLaunch && trustedProcessUser) {
+            // never be allowed to impersonate a trusted sign-in process. A
+            // missing uid, or no resolvable trusted uid, trusts nothing.
+            const trustedProcessUid = isTrustedProcessUid(uid, SIGNIN_TRUSTED_PROCESS_UID);
+            if (label && trustedClaudeLaunch && trustedProcessUid) {
                 return callback(null, {
                     pid,
                     args,

@@ -89,7 +89,7 @@ async function startServer(t, allowLoopbackDevelopment, buildExtraEnvironment = 
             IMAGE_SERVICE_TEST_MODE: 'true',
             IMAGE_SERVICE_ALLOW_LOOPBACK_DEVELOPMENT: allowLoopbackDevelopment ? 'true' : 'false',
             SHELL_DISPATCH_SOCKET_PATH: shellDispatchSocket,
-            SIGNIN_TRUSTED_PROCESS_USER: 'root',
+            SIGNIN_TRUSTED_PROCESS_UID: '0',
             ...extraEnvironment
         },
         stdio: ['ignore', 'ignore', 'pipe']
@@ -357,8 +357,8 @@ case "$1" in
 esac
 `, { mode: 0o755 });
         fs.writeFileSync(path.join(binDirectory, 'ps'), `#!/bin/sh
-[ "$1" = -e ] || { echo 'ps: expected -e so every process is listed' >&2; exit 64; }
-printf '%s\n' '4242 1 root /bin/bash -l' '4243 4242 root /bin/bash /usr/local/bin/claude-auth-helper'
+[ "$*" = '-ww -e -o pid=,ppid=,uid=,args=' ] || { echo "ps: unexpected arguments: $*" >&2; exit 64; }
+printf '%s\n' '4242 1 0 /bin/bash -l' '4243 4242 0 /bin/bash /usr/local/bin/claude-auth-helper'
 `, { mode: 0o755 });
         return {
             PATH: `${binDirectory}:${process.env.PATH}`,
@@ -466,10 +466,10 @@ test('an allowlisted URL is hidden unless the live process is the matching login
         const binDirectory = path.join(root, 'bin');
         fs.mkdirSync(binDirectory);
         const url = options.url || 'https://auth.openai.com/oauth/authorize?client_id=planted';
-        const processUser = options.user || 'root';
+        const processUid = options.uid ?? 0;
         const processLines = options.wrapper
-            ? `'4242 1 root /bin/bash -l' '4243 4242 root /bin/bash /opt/scripts/${options.wrapper}' '4244 4243 ${processUser} ${args}'`
-            : `'4242 1 root /bin/bash -l' '4243 4242 ${processUser} ${args}'`;
+            ? `'4242 1 0 /bin/bash -l' '4243 4242 0 /bin/bash /opt/scripts/${options.wrapper}' '4244 4243 ${processUid} ${args}'`
+            : `'4242 1 0 /bin/bash -l' '4243 4242 ${processUid} ${args}'`;
         fs.writeFileSync(path.join(binDirectory, 'tmux'), `#!/bin/sh
 case "$1" in
     display-message)
@@ -482,7 +482,7 @@ case "$1" in
 esac
 `, { mode: 0o755 });
         fs.writeFileSync(path.join(binDirectory, 'ps'), `#!/bin/sh
-[ "$1" = -e ] || { echo 'ps: expected -e so every process is listed' >&2; exit 64; }
+[ "$*" = '-ww -e -o pid=,ppid=,uid=,args=' ] || { echo "ps: unexpected arguments: $*" >&2; exit 64; }
 printf '%s\n' ${processLines}
 `, { mode: 0o755 });
         return { PATH: `${binDirectory}:${process.env.PATH}` };
@@ -511,7 +511,7 @@ printf '%s\n' ${processLines}
     });
     assert.equal((await argvSpoofResponse.json()).found, false);
 
-    const droppedUser = await startWithProcess('codex login --device-auth', { user: 'ctp-kimi' });
+    const droppedUser = await startWithProcess('codex login --device-auth', { uid: 61004 });
     const droppedUserResponse = await fetch(`${droppedUser.baseUrl}/agent-login-url`, {
         headers: { Origin: droppedUser.baseUrl }
     });
@@ -555,8 +555,8 @@ case "$1" in
 esac
 `, { mode: 0o755 });
         fs.writeFileSync(path.join(binDirectory, 'ps'), `#!/bin/sh
-[ "$1" = -e ] || { echo 'ps: expected -e so every process is listed' >&2; exit 64; }
-printf '%s\n' '4242 1 root /bin/bash -l' '4243 4242 root codex login --device-auth'
+[ "$*" = '-ww -e -o pid=,ppid=,uid=,args=' ] || { echo "ps: unexpected arguments: $*" >&2; exit 64; }
+printf '%s\n' '4242 1 0 /bin/bash -l' '4243 4242 0 codex login --device-auth'
 `, { mode: 0o755 });
         return {
             PATH: `${binDirectory}:${process.env.PATH}`,
@@ -610,10 +610,10 @@ case "$1" in
 esac
 `, { mode: 0o755 });
         fs.writeFileSync(path.join(binDirectory, 'ps'), `#!/bin/sh
-[ "$1" = -e ] || { echo 'ps: expected -e so every process is listed' >&2; exit 64; }
-printf '%s\n' '4242 1 root /bin/bash -l'
+[ "$*" = '-ww -e -o pid=,ppid=,uid=,args=' ] || { echo "ps: unexpected arguments: $*" >&2; exit 64; }
+printf '%s\n' '4242 1 0 /bin/bash -l'
 if [ -f "$LOGIN_STATE" ]; then
-    printf '%s\n' '4243 4242 root codex login'
+    printf '%s\n' '4243 4242 0 codex login'
 fi
 `, { mode: 0o755 });
         const ownerCheck = path.join(binDirectory, 'port-owner');

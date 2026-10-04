@@ -155,12 +155,12 @@ RUN cd /opt/image-service \
     && chmod +x server.js
 
 # Run the real parser against the real procps-ng `ps`: the sign-in trust check
-# in server.js compares these user names, so a parser that stops matching
-# (or a truncated name such as `ctp-cla+`) must fail the build.
+# in server.js compares these numeric uids, so a parser that stops reading
+# them (root is 0, ctp-claude is 61001) must fail the build.
 RUN su -s /bin/sh ctp-claude -c 'exec sleep 30' & \
     probe=$! \
     && for _ in 1 2 3 4 5 6 7 8 9 10; do \
-        [ "$(ps -o user:32= -p "$probe" | tr -d ' ')" = ctp-claude ] && break; sleep 0.3; \
+        [ "$(ps -o uid= -p "$probe" | tr -d ' ')" = 61001 ] && break; sleep 0.3; \
     done \
     && status=0 \
     && node -e ' \
@@ -169,10 +169,10 @@ RUN su -s /bin/sh ctp-claude -c 'exec sleep 30' & \
         const probe = Number(process.argv[1]); \
         readProcessSnapshot((err, snapshot) => { \
             if (err) fail(err.message); \
-            const own = (pid) => JSON.stringify([snapshot.userByPid.get(pid), snapshot.argsByPid.get(pid)]); \
+            const own = (pid) => JSON.stringify([snapshot.uidByPid.get(pid), snapshot.argsByPid.get(pid)]); \
             if (!(snapshot.children.get(process.ppid) || []).includes(process.pid)) fail("node " + process.pid + " is not listed under ppid " + process.ppid); \
-            if (snapshot.userByPid.get(process.pid) !== "root" || !/node/.test(snapshot.argsByPid.get(process.pid) || "")) fail("this node process parsed as " + own(process.pid)); \
-            if (snapshot.userByPid.get(probe) !== "ctp-claude" || !/sleep 30/.test(snapshot.argsByPid.get(probe) || "")) fail("ctp-claude process " + probe + " parsed as " + own(probe)); \
+            if (snapshot.uidByPid.get(process.pid) !== 0 || !/node/.test(snapshot.argsByPid.get(process.pid) || "")) fail("this node process parsed as " + own(process.pid)); \
+            if (snapshot.uidByPid.get(probe) !== 61001 || !/sleep 30/.test(snapshot.argsByPid.get(probe) || "")) fail("ctp-claude process " + probe + " parsed as " + own(probe)); \
         });' "$probe" || status=$? ; \
     kill "$probe" 2>/dev/null; \
     exit "$status"
