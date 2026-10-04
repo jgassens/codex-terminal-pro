@@ -19,7 +19,8 @@ const POLL_TIMEOUT_MS = 1000;
 // TOGGLE_E2E_VERBOSE=1 prints the press/release/click log for passing clicks too.
 const VERBOSE = process.env.TOGGLE_E2E_VERBOSE === '1';
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const tmux = (...args) => execFileSync('tmux', ['-L', TMUX_SOCKET, ...args]).toString().trim();
+// Bounded: send-keys into a pane in copy mode can block on a jump prompt.
+const tmux = (...args) => execFileSync('tmux', ['-L', TMUX_SOCKET, ...args], { timeout: 5000 }).toString().trim();
 
 const WINDOWS = {
     platform: 'Win32',
@@ -150,17 +151,115 @@ async function terminalGeometry(page, frame, marker) {
     };
 }
 
-async function showMarker(page, frame) {
-    tmux('send-keys', '-t', `${SESSION}:0`, "clear; printf 'TOGGLE_MARKER_LINE\\n'", 'Enter');
-    await frame.waitForFunction(() => {
-        const buffer = window.term.buffer.active;
-        for (let y = 0; y < window.term.rows; y += 1) {
-            if ((buffer.getLine(buffer.viewportY + y)?.translateToString(true) || '').startsWith('TOGGLE_MARKER_LINE')) {
-                return true;
-            }
+// What tmux and xterm show right now, so a marker that never appears
+// explains itself.
+async function terminalState(frame) {
+    const query = (...args) => {
+        try {
+            return tmux(...args);
+        } catch (err) {
+            return `ERROR ${err.message.split('\n')[0]}`;
         }
-        return false;
-    }, null, { timeout: 10000 });
+    };
+    const pane = query('display', '-p', '-t', `${SESSION}:0`,
+        'mode=#{pane_in_mode}:#{pane_mode} scroll=#{scroll_position} size=#{pane_width}x#{pane_height} cmd=#{pane_current_command}');
+    const windows = query('list-windows', '-t', SESSION, '-F', '#{window_index}:#{window_name}#{?window_active,*,}');
+    const clients = query('list-clients', '-F', '#{client_name} #{client_width}x#{client_height} #{client_session}');
+    const screen = query('capture-pane', '-p', '-t', `${SESSION}:0`).split('\n').filter(Boolean).slice(-4);
+    let xterm;
+    try {
+        xterm = await frame.evaluate(() => {
+            const term = window.term;
+            const buffer = term.buffer.active;
+            const lines = [];
+            for (let y = 0; y < term.rows; y += 1) {
+                const line = buffer.getLine(buffer.viewportY + y)?.translateToString(true) || '';
+                if (line.trim()) lines.push(line);
+            }
+            return `${term.cols}x${term.rows} ${buffer.type} viewportY=${buffer.viewportY} baseY=${buffer.baseY} lines=${JSON.stringify(lines.slice(0, 4))}`;
+        });
+    } catch (err) {
+        xterm = `ERROR ${err.message.split('\n')[0]}`;
+    }
+    return `pane ${pane}; windows ${windows.replace(/\n/g, ' ')}; clients ${clients.replace(/\n/g, ' | ')}; tmux screen ${JSON.stringify(screen)}; xterm ${xterm}`;
+}
+
+// Leave copy mode (or any other mode) in window 0. In copy mode send-keys
+// input is read as copy-mode commands, never reaching the shell: `t` and `f`
+// open a jump prompt that blocks send-keys while a client is attached, and
+// without one the keys fail.
+function leavePaneMode() {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+        if (tmux('display', '-p', '-t', `${SESSION}:0`, '#{pane_in_mode}') !== '1') {
+            return;
+        }
+        tmux('send-keys', '-t', `${SESSION}:0`, '-X', 'cancel');
+    }
+    throw new Error(`window 0 stays in ${tmux('display', '-p', '-t', `${SESSION}:0`, '#{pane_mode}')}`);
+}
+
+function attachedClients() {
+    return tmux('list-clients', '-t', SESSION, '-F', '#{client_width}x#{client_height}').split('\n').filter(Boolean);
+}
+
+// The previous page's tmux client is gone (ttyd ends it when the WebSocket
+// closes), so the next page's client is the only one.
+async function waitForNoClients() {
+    const deadline = Date.now() + 5000;
+    while (attachedClients().length > 0) {
+        if (Date.now() > deadline) {
+            throw new Error(`tmux clients still attached: ${attachedClients().join(', ')}`);
+        }
+        await sleep(50);
+    }
+}
+
+// Window 0 is the active window, and the page's own tmux client is the one
+// client attached, at xterm's size: openPage only waits for xterm to exist,
+// before ttyd's WebSocket has started a tmux client, which then attaches at a
+// provisional size and resizes.
+async function waitForTerminalReady(frame) {
+    const deadline = Date.now() + 10000;
+    let size = '';
+    while (Date.now() < deadline) {
+        size = await frame.evaluate(() => `${window.term.cols}x${window.term.rows}`);
+        const active = tmux('display', '-p', '-t', `${SESSION}:0`, '#{window_active}') === '1';
+        const clients = attachedClients();
+        const windowSize = tmux('display', '-p', '-t', `${SESSION}:0`, '#{window_width}x#{window_height}');
+        if (active && clients.length === 1 && clients[0] === size && windowSize === size) {
+            return;
+        }
+        await sleep(50);
+    }
+    throw new Error(`terminal not ready for xterm ${size}; ${await terminalState(frame)}`);
+}
+
+// Print the marker in window 0 and wait until xterm shows it: first that the
+// shell printed it, then that it is in xterm's viewport, scrolled to the end.
+async function showMarker(page, frame) {
+    leavePaneMode();
+    tmux('send-keys', '-t', `${SESSION}:0`, "clear; printf 'TOGGLE_MARKER_LINE\\n'", 'Enter');
+    const deadline = Date.now() + 5000;
+    while (!tmux('capture-pane', '-p', '-t', `${SESSION}:0`).split('\n').includes('TOGGLE_MARKER_LINE')) {
+        if (Date.now() > deadline) {
+            throw new Error(`the shell never printed the marker; ${await terminalState(frame)}`);
+        }
+        await sleep(50);
+    }
+    await frame.evaluate(() => window.term.scrollToBottom());
+    try {
+        await frame.waitForFunction(() => {
+            const buffer = window.term.buffer.active;
+            for (let y = 0; y < window.term.rows; y += 1) {
+                if ((buffer.getLine(buffer.viewportY + y)?.translateToString(true) || '').startsWith('TOGGLE_MARKER_LINE')) {
+                    return true;
+                }
+            }
+            return false;
+        }, null, { timeout: 10000 });
+    } catch (err) {
+        throw new Error(`${err.message.split('\n')[0]} waiting for the marker; ${await terminalState(frame)}`);
+    }
     return terminalGeometry(page, frame, 'TOGGLE_MARKER_LINE');
 }
 
@@ -351,19 +450,24 @@ async function runScenario(browser, name) {
     // Start from Codex mode at a bash prompt in window 0, whatever the
     // previous test left behind: copy mode, or a foreground program. Two
     // C-c because a stray ^V (LNEXT) makes the tty take the first literally.
-    await setServerMode('codex');
     try {
-        execFileSync('tmux', ['-L', TMUX_SOCKET, 'send-keys', '-t', `${SESSION}:0`, '-X', 'cancel'], { stdio: 'ignore' });
-    } catch {
-        // Not in copy mode.
+        await setServerMode('codex');
+        leavePaneMode();
+        tmux('send-keys', '-t', `${SESSION}:0`, 'C-c');
+        tmux('send-keys', '-t', `${SESSION}:0`, 'C-c');
+        await sleep(200);
+        await waitForNoClients();
+    } catch (err) {
+        return { ok: false, lines: [`FAIL ${name}: reset: ${err.message}`] };
     }
-    tmux('send-keys', '-t', `${SESSION}:0`, 'C-c');
-    tmux('send-keys', '-t', `${SESSION}:0`, 'C-c');
-    await sleep(200);
     const { context, page, frame } = await openPage(browser);
     const lines = [];
     let ok = true;
     try {
+        // This page's terminal shows window 0, out of any mode, at the bottom.
+        await waitForTerminalReady(frame);
+        leavePaneMode();
+        await frame.evaluate(() => window.term.scrollToBottom());
         const start = await pageMode(page);
         const other = start === 'raw' ? 'codex' : 'raw';
         await SCENARIOS[name](page, frame);

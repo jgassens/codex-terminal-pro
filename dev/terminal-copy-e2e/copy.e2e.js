@@ -5,6 +5,7 @@
 // two lines; the copy must equal xterm's highlight. tmux must never enter
 // copy mode from the drag, Ctrl+V on Windows must paste text and upload a
 // pasted image once, and the mouse wheel must still scroll tmux history.
+// Each test leaves tmux out of copy mode, so the next one starts at the shell.
 const { chromium } = require('playwright');
 const { execFileSync } = require('node:child_process');
 
@@ -12,7 +13,20 @@ const ORIGIN = 'http://127.0.0.1:7680';
 const SESSION = process.env.TMUX_SESSION || 'codex-terminal';
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const TMUX_SOCKET = process.env.TMUX_E2E_SOCKET || 'ctp-e2e';
-const tmux = (...args) => execFileSync('tmux', ['-L', TMUX_SOCKET, ...args]).toString().trim();
+// Bounded: send-keys into a pane in copy mode can block on a jump prompt.
+const tmux = (...args) => execFileSync('tmux', ['-L', TMUX_SOCKET, ...args], { timeout: 5000 }).toString().trim();
+
+// Take the pane out of copy mode, so the next test starts at the shell; a
+// wheel scroll leaves it there. Returns whether the pane is out of any mode.
+function leaveCopyMode() {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+        if (tmux('display', '-p', '-t', SESSION, '#{pane_in_mode}') !== '1') {
+            return true;
+        }
+        tmux('send-keys', '-t', SESSION, '-X', 'cancel');
+    }
+    return tmux('display', '-p', '-t', SESSION, '#{pane_in_mode}') !== '1';
+}
 
 const PLATFORMS = {
     mac: { platform: 'MacIntel', userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36' },
@@ -86,11 +100,7 @@ async function dragCopy(browser, platform, lines) {
         const highlighted = await frame.evaluate(() => window.term.getSelection());
         return { clipboard, highlighted, tmuxTookDrag };
     } finally {
-        try {
-            execFileSync('tmux', ['-L', TMUX_SOCKET, 'send-keys', '-t', SESSION, '-X', 'cancel'], { stdio: 'ignore' });
-        } catch {
-            // Not in copy mode, which is the expected state.
-        }
+        leaveCopyMode();
         await context.close();
     }
 }
@@ -142,7 +152,8 @@ async function wheelScrolls(browser) {
             await sleep(100);
         }
         await sleep(400);
-        return tmux('display', '-p', '-t', SESSION, '#{pane_in_mode}') === '1';
+        const scrolled = tmux('display', '-p', '-t', SESSION, '#{pane_in_mode}') === '1';
+        return { scrolled, left: leaveCopyMode() };
     } finally {
         await context.close();
     }
@@ -177,9 +188,11 @@ async function wheelScrolls(browser) {
         console.log(`${pasteOk ? 'ok  ' : 'FAIL'} Windows Ctrl+V: text pasted=${paste.textPasted}, image uploads=${paste.imageUploads}`);
         if (!pasteOk) failures.push('windows-paste');
 
-        const scrolled = await wheelScrolls(browser);
+        const { scrolled, left } = await wheelScrolls(browser);
         console.log(`${scrolled ? 'ok  ' : 'FAIL'} mouse wheel scrolls tmux history`);
         if (!scrolled) failures.push('wheel');
+        console.log(`${left ? 'ok  ' : 'FAIL'} tmux leaves copy mode after the wheel test`);
+        if (!left) failures.push('wheel-leave');
     } finally {
         await browser.close();
     }
