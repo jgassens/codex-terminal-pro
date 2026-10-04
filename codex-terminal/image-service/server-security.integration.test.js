@@ -236,6 +236,130 @@ test('terminal HTTP and WebSocket traffic reaches a ttyd Unix socket', async (t)
     assert.match(upgrade, /unix-terminal-upgrade/);
 });
 
+const PROXY_WAIT_MS = 5000;
+
+// Opens a WebSocket upgrade and reports how the client socket ended. Unlike
+// rawWebSocketUpgrade, a reset counts as an ending, and a socket that is still
+// open after PROXY_WAIT_MS rejects with a clear message instead of hanging.
+async function upgradeOutcome(port) {
+    return new Promise((resolve, reject) => {
+        const socket = net.connect(port, '127.0.0.1');
+        let received = '';
+        let ending = null;
+        const timer = setTimeout(() => {
+            socket.destroy();
+            reject(new Error(`WebSocket upgrade socket was still open after ${PROXY_WAIT_MS}ms; the proxy never closed it`));
+        }, PROXY_WAIT_MS);
+        const finish = (how) => {
+            ending = ending || how;
+        };
+        socket.setEncoding('utf8');
+        socket.on('data', (chunk) => { received += chunk; });
+        socket.on('error', (err) => finish(`error:${err.code}`));
+        socket.on('end', () => finish('end'));
+        socket.on('close', () => {
+            clearTimeout(timer);
+            resolve({ ending: ending || 'close', received });
+        });
+        socket.on('connect', () => {
+            socket.write([
+                'GET /terminal/ws?client=test HTTP/1.1',
+                `Host: 127.0.0.1:${port}`,
+                `Origin: http://127.0.0.1:${port}`,
+                'Connection: Upgrade',
+                'Upgrade: websocket',
+                'Sec-WebSocket-Version: 13',
+                'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==',
+                '',
+                ''
+            ].join('\r\n'));
+        });
+    });
+}
+
+// Leaves a Unix socket file on disk with nothing accepting on it, the state a
+// crashed ttyd leaves behind: connecting gets ECONNREFUSED.
+async function createStaleUnixSocket(t) {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ctp-ttyd-stale-test-'));
+    const socketPath = path.join(directory, 'ttyd.sock');
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const listener = spawn(process.execPath, ['-e', `
+        require('net').createServer().listen(process.argv[1], () => console.log('ready'));
+    `, socketPath], { stdio: ['ignore', 'pipe', 'inherit'] });
+    t.after(() => listener.kill('SIGKILL'));
+    await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`stale-socket helper did not listen within ${PROXY_WAIT_MS}ms`)), PROXY_WAIT_MS);
+        listener.once('error', reject);
+        listener.stdout.once('data', () => {
+            clearTimeout(timer);
+            resolve();
+        });
+    });
+    const exited = new Promise((resolve) => listener.once('exit', resolve));
+    listener.kill('SIGKILL');
+    await Promise.race([
+        exited,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('stale-socket helper did not exit')), PROXY_WAIT_MS))
+    ]);
+    assert.equal(fs.lstatSync(socketPath).isSocket(), true);
+    return socketPath;
+}
+
+async function assertTerminalProxyFailsClosed(server, expectedHealthStatus = 200) {
+    const { baseUrl, child } = server;
+    const port = Number.parseInt(new URL(baseUrl).port, 10);
+
+    let page;
+    try {
+        page = await fetch(`${baseUrl}/terminal/anything?client=test`, {
+            signal: AbortSignal.timeout(PROXY_WAIT_MS)
+        });
+    } catch (err) {
+        assert.fail(`GET /terminal/ failed while ttyd is down (${err.name}: ${err.message}; image service exitCode=${child.exitCode} signal=${child.signalCode}); expected a 502 within ${PROXY_WAIT_MS}ms`);
+    }
+    assert.equal(page.status, 502);
+    assert.equal(await page.text(), 'Failed to connect to terminal');
+
+    const upgrade = await upgradeOutcome(port);
+    assert.doesNotMatch(upgrade.received, /^HTTP\/1\.1 101/);
+    // Authorized upgrades that fail at the proxy are destroyed without a reply;
+    // any bytes here would mean the request was answered (e.g. 401/403) rather
+    // than forwarded.
+    assert.equal(upgrade.received, '');
+
+    const health = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(PROXY_WAIT_MS) });
+    assert.equal(health.status, expectedHealthStatus);
+    assert.equal(child.exitCode, null);
+    assert.equal(child.signalCode, null);
+}
+
+test('terminal proxy answers 502 and drops upgrades when nothing listens on TTYD_PORT', async (t) => {
+    const closedPort = await reservePort();
+    const server = await startServer(t, true, () => ({
+        TTYD_PORT: String(closedPort)
+    }));
+    await assertTerminalProxyFailsClosed(server);
+});
+
+test('terminal proxy answers 502 and drops upgrades when the ttyd Unix socket is stale', async (t) => {
+    const staleSocket = await createStaleUnixSocket(t);
+    const server = await startServer(t, true, () => ({
+        TTYD_SOCKET_PATH: staleSocket
+    }));
+    await assertTerminalProxyFailsClosed(server);
+});
+
+test('terminal proxy answers 502 and drops upgrades after the ttyd Unix socket is removed', async (t) => {
+    const ttydSocket = await startUnixTerminalBackend(t);
+    const server = await startServer(t, true, () => ({
+        TTYD_SOCKET_PATH: ttydSocket
+    }));
+    // /health only goes ready once the socket exists, so remove it afterwards.
+    fs.rmSync(ttydSocket);
+    // /health reports 503 while the transport is missing; the process must live.
+    await assertTerminalProxyFailsClosed(server, 503);
+});
+
 test('consultant setup fails closed when the shared shell has a descendant', async (t) => {
     const { baseUrl, directory } = await startServer(t, true, (root) => {
         const binDirectory = path.join(root, 'bin');
