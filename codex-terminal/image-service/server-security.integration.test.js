@@ -252,6 +252,7 @@ case "$1" in
 esac
 `, { mode: 0o755 });
         fs.writeFileSync(path.join(binDirectory, 'ps'), `#!/bin/sh
+[ "$1" = -e ] || { echo 'ps: expected -e so every process is listed' >&2; exit 64; }
 printf '%s\n' '4242 1 root /bin/bash -l' '4243 4242 root /bin/bash /usr/local/bin/claude-auth-helper'
 `, { mode: 0o755 });
         return {
@@ -376,6 +377,7 @@ case "$1" in
 esac
 `, { mode: 0o755 });
         fs.writeFileSync(path.join(binDirectory, 'ps'), `#!/bin/sh
+[ "$1" = -e ] || { echo 'ps: expected -e so every process is listed' >&2; exit 64; }
 printf '%s\n' ${processLines}
 `, { mode: 0o755 });
         return { PATH: `${binDirectory}:${process.env.PATH}` };
@@ -448,6 +450,7 @@ case "$1" in
 esac
 `, { mode: 0o755 });
         fs.writeFileSync(path.join(binDirectory, 'ps'), `#!/bin/sh
+[ "$1" = -e ] || { echo 'ps: expected -e so every process is listed' >&2; exit 64; }
 printf '%s\n' '4242 1 root /bin/bash -l' '4243 4242 root codex login --device-auth'
 `, { mode: 0o755 });
         return {
@@ -502,6 +505,7 @@ case "$1" in
 esac
 `, { mode: 0o755 });
         fs.writeFileSync(path.join(binDirectory, 'ps'), `#!/bin/sh
+[ "$1" = -e ] || { echo 'ps: expected -e so every process is listed' >&2; exit 64; }
 printf '%s\n' '4242 1 root /bin/bash -l'
 if [ -f "$LOGIN_STATE" ]; then
     printf '%s\n' '4243 4242 root codex login'
