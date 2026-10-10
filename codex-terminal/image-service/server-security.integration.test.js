@@ -461,6 +461,44 @@ printf '%s\\n' '${JSON.stringify({ consultants: [consultant] })}'
     });
 });
 
+test('Codex CLI update controls accept only same-origin fixed actions', async (t) => {
+    const { baseUrl, directory } = await startServer(t, true, (root) => {
+        const manager = path.join(root, 'manager.py');
+        fs.writeFileSync(manager, [
+            'import json, os, sys',
+            'with open(os.environ["MANAGER_ACTIONS"], "a") as log:',
+            '    log.write(" ".join(sys.argv[1:]) + "\\n")',
+            'print(json.dumps({"autoUpdate": True, "selected": "0.162.1", "bundled": "0.162.1"}))',
+            ''
+        ].join('\n'));
+        return {
+            CODEX_CLI_MANAGER: manager,
+            MANAGER_ACTIONS: path.join(root, 'actions')
+        };
+    });
+    const options = { headers: { Origin: baseUrl } };
+    assert.equal((await fetch(`${baseUrl}/codex-cli-update`, options)).status, 200);
+    assert.equal((await fetch(`${baseUrl}/codex-cli-update/check`, {
+        method: 'POST', headers: { Origin: 'https://other.example' }
+    })).status, 403);
+    assert.equal((await fetch(`${baseUrl}/codex-cli-update/auto`, {
+        method: 'POST', headers: { Origin: baseUrl, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: 'yes' })
+    })).status, 400);
+    assert.equal((await fetch(`${baseUrl}/codex-cli-update/auto`, {
+        method: 'POST', headers: { Origin: baseUrl, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: false, version: 'evil' })
+    })).status, 200);
+    assert.equal((await fetch(`${baseUrl}/codex-cli-update/rollback`, {
+        method: 'POST', headers: { Origin: baseUrl }
+    })).status, 200);
+    const actions = fs.readFileSync(path.join(directory, 'actions'), 'utf8');
+    assert.match(actions, /status/);
+    assert.match(actions, /set-auto false/);
+    assert.match(actions, /rollback/);
+    assert.doesNotMatch(actions, /evil|check/);
+});
+
 test('an allowlisted URL is hidden unless the live process is the matching login CLI', async (t) => {
     const startWithProcess = (args, options = {}) => startServer(t, true, (root) => {
         const binDirectory = path.join(root, 'bin');

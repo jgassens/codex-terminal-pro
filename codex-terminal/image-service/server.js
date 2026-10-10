@@ -85,6 +85,8 @@ const UI_BUILD_ID = (() => {
     }
 })();
 const SETTINGS_FILE = process.env.SETTINGS_FILE || '/data/settings.json';
+const CODEX_CLI_MANAGER = process.env.CODEX_CLI_MANAGER || '/opt/scripts/codex-cli-manager.py';
+let codexCliCheckInFlight = false;
 const CONSULT_BIN = process.env.CONSULT_BIN || '/usr/local/bin/consult';
 const UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
 const UPLOAD_MAX_DECODED_PIXELS = 40 * 1024 * 1024;
@@ -2740,6 +2742,80 @@ app.get('/config', (req, res) => {
 // ---------------------------------------------------------------------------
 // Consultants and settings
 // ---------------------------------------------------------------------------
+
+function codexCliManager(action, value = null, timeout = 15000) {
+    return new Promise((resolve, reject) => {
+        const args = [CODEX_CLI_MANAGER, action];
+        if (value !== null) args.push(value);
+        execFile('python3', args, { timeout, maxBuffer: 32768 }, (err, stdout) => {
+            if (err) return reject(err);
+            try {
+                resolve(JSON.parse(stdout));
+            } catch (parseErr) {
+                reject(parseErr);
+            }
+        });
+    });
+}
+
+function startCodexCliCheck(force = false) {
+    if (codexCliCheckInFlight) return false;
+    codexCliCheckInFlight = true;
+    codexCliManager('check', force ? 'force' : null, 340000)
+        .catch((err) => console.warn('Codex CLI update check failed:', err.message))
+        .finally(() => { codexCliCheckInFlight = false; });
+    return true;
+}
+
+app.get('/codex-cli-update', async (req, res) => {
+    if (!isSameOriginBrowserRequest(req)) {
+        return res.status(403).json({ success: false, error: 'Cross-origin update access is not allowed' });
+    }
+    try {
+        res.json({ success: true, checking: codexCliCheckInFlight, ...(await codexCliManager('status')) });
+    } catch (err) {
+        res.status(502).json({ success: false, error: 'Could not read Codex CLI update status' });
+    }
+});
+
+app.post('/codex-cli-update/check', (req, res) => {
+    if (!isSameOriginBrowserRequest(req)) {
+        return res.status(403).json({ success: false, error: 'Cross-origin update access is not allowed' });
+    }
+    const started = startCodexCliCheck(true);
+    res.status(started ? 202 : 409).json({ success: started, checking: true,
+        error: started ? null : 'An update check is already running' });
+});
+
+app.post('/codex-cli-update/auto', async (req, res) => {
+    if (!isSameOriginBrowserRequest(req)) {
+        return res.status(403).json({ success: false, error: 'Cross-origin update access is not allowed' });
+    }
+    if (typeof req.body?.enabled !== 'boolean') {
+        return res.status(400).json({ success: false, error: 'enabled must be true or false' });
+    }
+    try {
+        res.json({ success: true, ...(await codexCliManager('set-auto', String(req.body.enabled))) });
+    } catch (err) {
+        res.status(502).json({ success: false, error: 'Could not save update preference' });
+    }
+});
+
+app.post('/codex-cli-update/rollback', async (req, res) => {
+    if (!isSameOriginBrowserRequest(req)) {
+        return res.status(403).json({ success: false, error: 'Cross-origin update access is not allowed' });
+    }
+    try {
+        res.json({ success: true, ...(await codexCliManager('rollback')) });
+    } catch (err) {
+        res.status(502).json({ success: false, error: 'Could not prepare rollback' });
+    }
+});
+
+if (process.env.NODE_ENV !== 'test') {
+    setTimeout(() => startCodexCliCheck(), 5000).unref();
+    setInterval(() => startCodexCliCheck(), 60 * 60 * 1000).unref();
+}
 
 // Codex is this add-on's agent. Claude Code and Kimi Code are optional
 // consultants it can ask for a second opinion once the user signs them in.

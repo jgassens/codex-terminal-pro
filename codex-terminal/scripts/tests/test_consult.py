@@ -1107,6 +1107,45 @@ class RefreshedCredentialTests(unittest.TestCase):
 class CodexConsultantTests(unittest.TestCase):
     """Codex is consulted through the same isolation as the others."""
 
+    def test_persistent_cli_selection_keeps_a_narrow_landlock_release(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw) / "codex-cli"
+            release = root / "releases" / "0.163.0-amd64"
+            binary = release / "node_modules" / ".bin" / "codex"
+            binary.parent.mkdir(parents=True)
+            binary.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            binary.chmod(0o755)
+            manager = Path(raw) / "manager.py"
+            manager.write_text(
+                f"import json\nprint(json.dumps({{'binary': {str(binary)!r}, 'standalone': True}}))\n",
+                encoding="utf-8",
+            )
+            with mock.patch.dict(os.environ, {
+                "CODEX_CLI_MANAGER": str(manager), "CODEX_CLI_ROOT": str(root)
+            }):
+                chosen, standalone, allowed_release = consult.selected_codex_cli()
+            self.assertEqual(chosen, str(binary))
+            self.assertTrue(standalone)
+            self.assertEqual(allowed_release, release)
+
+    def test_persistent_cli_is_copied_into_disposable_sandbox(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            release = root / "private-release"
+            script = release / "node_modules" / "@openai" / "codex" / "bin" / "codex"
+            script.parent.mkdir(parents=True)
+            script.write_text("#!/bin/sh\necho codex-cli 0.163.0\n", encoding="utf-8")
+            script.chmod(0o755)
+            link = release / "node_modules" / ".bin" / "codex"
+            link.parent.mkdir()
+            link.symlink_to("../@openai/codex/bin/codex")
+            sandbox = root / "sandbox"
+            sandbox.mkdir()
+            copied, allowed = consult.copy_codex_cli_into_sandbox(str(link), release, sandbox)
+            self.assertEqual(allowed, sandbox / "cli")
+            self.assertEqual(subprocess.check_output([copied], text=True).strip(), "codex-cli 0.163.0")
+            self.assertTrue(link.exists())
+
     def test_codex_args_turn_off_every_extra_capability(self) -> None:
         args = consult.codex_args("what is this?", "gpt-6.1-sol", "max")
         self.assertEqual(args[:2], ["codex", "exec"])

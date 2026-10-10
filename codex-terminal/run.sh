@@ -145,6 +145,11 @@ init_environment() {
     ensure_codex_security_mcp_ready
     remove_heygen_codex_plugin_state
     ensure_codex_update_prompt_disabled
+    if /usr/local/bin/codex features disable api_key_model_discovery >/dev/null 2>&1; then
+        bashio::log.info "Codex API-key model discovery disabled for ChatGPT login"
+    else
+        bashio::log.warning "Could not disable Codex API-key model discovery"
+    fi
     ensure_codex_execution_defaults
     ensure_codex_tui_defaults
 
@@ -226,7 +231,7 @@ ensure_codex_update_prompt_disabled() {
     local config_file="$CODEX_HOME/config.toml"
 
     if set_codex_top_level_config "$config_file" "check_for_update_on_startup" "false"; then
-        bashio::log.info "Codex CLI startup update prompt disabled; update Codex through add-on releases"
+        bashio::log.info "Codex CLI startup update prompt disabled; Codex Terminal Pro manages stable CLI updates"
     else
         bashio::log.warning "Could not update Codex startup prompt setting; invalid config.toml was left unchanged"
     fi
@@ -396,6 +401,23 @@ fi
 export CODEX_TERMINAL_AGENT_EXECUTION=1
 
 self="$(readlink -f "$0" 2>/dev/null || printf '%s\n' "$0")"
+
+selection=""
+if [ -f /opt/scripts/codex-cli-manager.py ]; then
+    selection="$(python3 /opt/scripts/codex-cli-manager.py select 2>/dev/null)" || selection=""
+fi
+if [ -n "$selection" ]; then
+    mapfile -t selected < <(printf '%s' "$selection" | python3 -c 'import json,sys; item=json.load(sys.stdin); print(item["binary"]); print("1" if item["standalone"] else "0")' 2>/dev/null)
+    if [ "${#selected[@]}" -eq 2 ] && [ -x "${selected[0]}" ]; then
+        if [ "${selected[1]}" = "1" ]; then
+            case "${1:-}" in
+                --version|--help|-h|features|login|logout|app-server) ;;
+                *) exec "${selected[0]}" --no-daemon "$@" ;;
+            esac
+        fi
+        exec "${selected[0]}" "$@"
+    fi
+fi
 
 for candidate in /usr/local/bin/codex /usr/bin/codex; do
     if [ ! -x "$candidate" ]; then

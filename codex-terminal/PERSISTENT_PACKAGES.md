@@ -12,6 +12,7 @@ libraries from an older image.
 - Alpine package manifest: `/data/packages/apk-packages.txt`
 - Optional user executables: `/data/packages/bin` (last on `PATH`)
 - Python virtual environment: `/data/packages/python/venv`
+- Versioned stable Codex CLI releases: `/data/packages/codex-cli/releases`
 - Quarantined pre-2.6 copied shared libraries: `/data/packages/legacy-copied-files/lib`
 
 All terminal sessions load `/etc/profile.d/persistent-packages.sh`. The guarded

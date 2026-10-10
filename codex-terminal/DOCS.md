@@ -213,9 +213,18 @@ It also disables Codex CLI's own startup update prompt:
 check_for_update_on_startup = false
 ```
 
-Use Home Assistant add-on updates to pick up new bundled Codex CLI versions.
-This release pins the bundled CLI package to `@openai/codex@0.160.0` during
-the Docker build.
+The add-on bundles `@openai/codex@0.162.1` as a recovery fallback. It checks
+npm's stable `latest` release daily and stages newer CLI versions in
+`/data/packages/codex-cli/releases`. The next Codex process uses a staged
+version; a running process is never replaced. Open **Settings → Codex CLI
+updates** to pause automatic checks, check immediately, or prepare a rollback
+for the next launch. Updating the add-on itself still uses Home Assistant's
+normal add-on update flow. Startup also sets
+`features.api_key_model_discovery=false` for this ChatGPT-login add-on.
+When an older background server is running and its work cannot be confirmed
+idle, the new CLI runs standalone for that session. The add-on retries server
+coordination at later launches; restarting only the add-on also starts a
+fresh server without restarting Home Assistant.
 
 Managed Codex Terminal Pro TUI defaults use this footer:
 
@@ -225,7 +234,7 @@ status_line = ["run-state", "model-with-reasoning", "fast-mode", "context-remain
 ```
 
 When a status line is already present, the add-on preserves it. Startup only
-removes unsupported `[tui].status_line` item IDs that Codex CLI `0.160.0`
+removes unsupported `[tui].status_line` item IDs that the bundled Codex CLI
 warns about. `auto-review`, `permissions`, and `approval-mode` are valid Codex
 permission concepts, but this pinned CLI does not accept those strings as
 footer item IDs.

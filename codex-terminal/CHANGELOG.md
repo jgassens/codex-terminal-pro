@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.14.0
+
+- Bundle Codex CLI 0.162.1 and check npm's stable release daily. Validated
+  updates are staged under `/data` and selected at the next CLI process
+  launch, without ending the current terminal session.
+- Add update status, pause, manual check, and next-launch rollback controls
+  to Settings. Keep the image CLI as a fallback and use standalone mode when
+  the shared app server cannot be safely coordinated.
+- Apply `api_key_model_discovery=false` for this add-on's ChatGPT login to
+  prevent the background-server feature mismatch prompt.
+
 ## 2.13.3
 
 - Keep the Codex/Shell switch in place when a status message appears or clears.

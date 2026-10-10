@@ -1164,6 +1164,19 @@
                 <input id="settings-consult-timeout" class="settings-input" type="number" min="30" max="1800" step="10">
             </div>
         </div>
+        <div class="settings-section">
+            <h3>Codex CLI updates</h3>
+            <div class="settings-hint">Stable releases are checked daily. A ready update starts with the next Codex process; your current session continues.</div>
+            <div id="settings-codex-update-state" class="settings-hint" style="white-space: pre-line">Loading update status…</div>
+            <div class="settings-row">
+                <div class="settings-row-label"><label for="settings-codex-auto-update">Automatic daily updates</label></div>
+                <input id="settings-codex-auto-update" type="checkbox">
+            </div>
+            <div class="modal-buttons">
+                <button type="button" id="settings-codex-check" class="modal-btn modal-btn-secondary">Check and stage now</button>
+                <button type="button" id="settings-codex-rollback" class="modal-btn modal-btn-secondary">Use previous version next launch</button>
+            </div>
+        </div>
         <div class="modal-buttons">
             <button type="button" id="settings-save" class="modal-btn modal-btn-primary">Save</button>
             <button type="button" id="settings-dismiss" class="modal-btn modal-btn-secondary">Close</button>
@@ -1526,6 +1539,10 @@
         const settingsConsultTimeout = document.getElementById('settings-consult-timeout');
         const settingsSave = document.getElementById('settings-save');
         const settingsDismiss = document.getElementById('settings-dismiss');
+        const codexUpdateState = document.getElementById('settings-codex-update-state');
+        const codexAutoUpdate = document.getElementById('settings-codex-auto-update');
+        const codexCheck = document.getElementById('settings-codex-check');
+        const codexRollback = document.getElementById('settings-codex-rollback');
         const mobileInputRow = document.getElementById('mobile-input-row');
         const mobileTerminalInput = document.getElementById('mobile-terminal-input');
         const mobileSendBtn = document.getElementById('mobile-send-btn');
@@ -5125,11 +5142,82 @@
             }
         }
 
+        async function loadCodexUpdateStatus() {
+            try {
+                const response = await protectedIngressFetch('codex-cli-update');
+                const data = await response.json();
+                if (!response.ok || !data.success) throw new Error(data.error || 'Update status unavailable');
+                const lines = [
+                    `Selected: ${data.selected} (${data.selectedSource === 'bundled' ? 'bundled' : 'persistent'})`,
+                    `Bundled fallback: ${data.bundled}`,
+                    `Background server: ${data.daemonRunning ? (data.daemonVersion || 'version unavailable') : 'not running'}`,
+                    `Ready for next launch: ${data.ready || 'none'}`,
+                    `Stable release: ${data.available || 'not checked'}`,
+                    `Last check: ${data.lastCheck ? new Date(data.lastCheck * 1000).toLocaleString() : 'never'}`
+                ];
+                if (data.checking) lines.push('Checking and staging now…');
+                if (data.error) lines.push(data.error);
+                codexUpdateState.textContent = lines.join('\n');
+                codexAutoUpdate.checked = data.autoUpdate;
+                codexCheck.disabled = data.checking;
+                codexRollback.disabled = !data.previous;
+                if (data.checking) setTimeout(loadCodexUpdateStatus, 2500);
+            } catch (err) {
+                codexUpdateState.textContent = 'Could not load update status.';
+            }
+        }
+
+        codexCheck.addEventListener('click', async () => {
+            codexCheck.disabled = true;
+            try {
+                const response = await protectedIngressFetch('codex-cli-update/check', { method: 'POST' });
+                if (!response.ok) throw new Error('Could not start update check');
+                await loadCodexUpdateStatus();
+            } catch (err) {
+                setStatus(err.message, 'error');
+                codexCheck.disabled = false;
+            }
+        });
+
+        codexAutoUpdate.addEventListener('change', async () => {
+            const enabled = codexAutoUpdate.checked;
+            codexAutoUpdate.disabled = true;
+            try {
+                const response = await protectedIngressFetch('codex-cli-update/auto', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled })
+                });
+                if (!response.ok) throw new Error('Could not save update preference');
+                await loadCodexUpdateStatus();
+            } catch (err) {
+                codexAutoUpdate.checked = !enabled;
+                setStatus(err.message, 'error');
+            } finally {
+                codexAutoUpdate.disabled = false;
+            }
+        });
+
+        codexRollback.addEventListener('click', async () => {
+            codexRollback.disabled = true;
+            try {
+                const response = await protectedIngressFetch('codex-cli-update/rollback', { method: 'POST' });
+                if (!response.ok) throw new Error('Could not prepare previous version');
+                await loadCodexUpdateStatus();
+                setStatus('Previous Codex CLI selected for the next launch.', 'success');
+            } catch (err) {
+                setStatus(err.message, 'error');
+                codexRollback.disabled = false;
+            }
+        });
+
         async function loadSettings() {
             // Coming to Settings is intent to manage sign-in, so let a dialog
             // that was dismissed earlier reappear for the pending link.
             dismissedSignInUrl = null;
             settingsConsultants.textContent = 'Loading…';
+            settingsPanel.classList.add('active');
+            loadCodexUpdateStatus();
             try {
                 const res = await protectedIngressFetch('settings');
                 const data = await res.json().catch(() => null);
@@ -5156,7 +5244,6 @@
                     settingsConsultTimeout.min = data.limits.consultTimeoutSeconds.min;
                     settingsConsultTimeout.max = data.limits.consultTimeoutSeconds.max;
                 }
-                settingsPanel.classList.add('active');
                 setStatus('');
             } catch (err) {
                 console.error('Settings load failed:', err);

@@ -992,7 +992,7 @@ def landlock_supported() -> tuple[bool, int]:
     return abi >= 1, 0
 
 
-def apply_landlock(workspace: Path, writable_home: Path) -> bool:
+def apply_landlock(workspace: Path, writable_home: Path, codex_release: Path | None = None) -> bool:
     """Confine this process to runtime files plus its projected workspace.
 
     Returns True when a Landlock ruleset was installed, False when the kernel
@@ -1058,6 +1058,8 @@ def apply_landlock(workspace: Path, writable_home: Path) -> bool:
     try:
         for runtime_path in ("/bin", "/usr", "/lib"):
             add_path(Path(runtime_path), execute_access)
+        if codex_release is not None:
+            add_path(codex_release, execute_access)
         add_path(Path("/etc"), read_access)
         for device in ("/dev/null", "/dev/urandom", "/dev/random"):
             add_path(
@@ -1075,12 +1077,13 @@ def apply_landlock(workspace: Path, writable_home: Path) -> bool:
     return True
 
 
-def drop_privileges_and_isolate(uid: int, gid: int, workspace: Path, writable_home: Path) -> None:
+def drop_privileges_and_isolate(uid: int, gid: int, workspace: Path, writable_home: Path,
+                                codex_release: Path | None = None) -> None:
     os.setgroups([])
     os.setgid(gid)
     os.setuid(uid)
     set_no_new_privileges()
-    apply_landlock(workspace, writable_home)
+    apply_landlock(workspace, writable_home, codex_release)
 
 
 def build_environment(spec: dict, sandbox_home: Path) -> dict:
@@ -1101,6 +1104,45 @@ def build_environment(spec: dict, sandbox_home: Path) -> dict:
     for name in BLOCKED_ENV:
         env.pop(name, None)
     return env
+
+
+def selected_codex_cli() -> tuple[str, bool, Path | None]:
+    """Resolve before uid-drop; grant Landlock only the selected release tree."""
+    manager = Path(os.environ.get("CODEX_CLI_MANAGER", "/opt/scripts/codex-cli-manager.py"))
+    if not manager.is_file():
+        return "codex", False, None
+    try:
+        result = subprocess.run(
+            [sys.executable, str(manager), "select-local"],
+            capture_output=True, text=True, check=True, timeout=20,
+        )
+        selected = json.loads(result.stdout)
+        binary = Path(selected["binary"])
+        if not binary.is_file() or not os.access(binary, os.X_OK):
+            raise ValueError("Selected Codex CLI is unavailable")
+        releases = Path(os.environ.get("CODEX_CLI_ROOT", "/data/packages/codex-cli")) / "releases"
+        try:
+            relative = binary.relative_to(releases)
+            release = releases / relative.parts[0]
+        except ValueError:
+            release = None
+        return str(binary), selected.get("standalone") is True, release
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+        # The bundled CLI stays available if persistent update state fails.
+        return "codex", False, None
+
+
+def copy_codex_cli_into_sandbox(binary: str, release: Path, sandbox: Path) -> tuple[str, Path]:
+    """Keep /data private while allowing the uid-dropped consultant to execute."""
+    destination = sandbox / "cli"
+    try:
+        shutil.copytree(release, destination, symlinks=True)
+        copied_binary = destination / Path(binary).relative_to(release)
+        if not copied_binary.is_file() or not os.access(copied_binary, os.X_OK):
+            raise OSError("Copied Codex CLI is not executable")
+    except (OSError, ValueError) as exc:
+        raise ConsultError("Could not prepare the selected Codex CLI for isolation") from exc
+    return str(copied_binary), destination
 
 
 def ensure_sandbox_base() -> Path:
@@ -1239,6 +1281,19 @@ def run_consult(agent: str, prompt: str, timeout: int, model: str = "", effort: 
             argv = spec["build_args"](framed_prompt(spec, prompt, model, effort), run_model, effort)
             if spec.get("answer_file"):
                 argv = [*argv, "-o", str(agent_home / spec["answer_file"])]
+            codex_release = None
+            if agent == "codex":
+                binary, _standalone, codex_release = selected_codex_cli()
+                if codex_release is not None:
+                    # /data may be 0700 on Home Assistant. Copy only this
+                    # release into the disposable consultant sandbox rather
+                    # than weakening traversal of persistent private state.
+                    binary, codex_release = copy_codex_cli_into_sandbox(
+                        binary, codex_release, sandbox)
+                argv[0] = binary
+                # The consultant uses a throwaway CODEX_HOME and must not
+                # attach to the terminal's shared background server.
+                argv.insert(1, "--no-daemon")
             proc = subprocess.Popen(
                 argv,
                 cwd=workspace,
@@ -1249,6 +1304,7 @@ def run_consult(agent: str, prompt: str, timeout: int, model: str = "", effort: 
                     spec["gid"],
                     workspace,
                     agent_home,
+                    codex_release,
                 ),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
