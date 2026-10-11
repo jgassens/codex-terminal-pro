@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.14.1
+
+- Correct the Home Assistant Info page to describe the bundled Codex CLI
+  version and the new persistent CLI updater.
+
 ## 2.14.0
 
 - Bundle Codex CLI 0.162.1 and check npm's stable release daily. Validated

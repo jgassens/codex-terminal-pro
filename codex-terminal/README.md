@@ -263,9 +263,13 @@ Mocha theme colors, and a footer with run state, model/reasoning/Fast mode,
 context remaining, 5-hour limit, and weekly limit. Existing user-customized
 Codex TUI config and status-line preferences are left untouched.
 
-The bundled Codex CLI is pinned in the Docker build. This release installs
-`@openai/codex@0.160.0`; future CLI updates should bump that Dockerfile value
-and the add-on version together.
+The add-on bundles `@openai/codex@0.162.1` as a recovery fallback. It checks
+npm's stable `latest` release daily and stages newer CLI versions under
+`/data/packages/codex-cli/releases`. The next Codex process uses a ready
+update without interrupting an existing session. **Settings → Codex CLI
+updates** shows the selected, bundled, and ready versions and offers a manual
+check, a pause switch, and next-launch rollback. Updating the add-on itself
+still uses Home Assistant's normal update flow.
 
 ![Codex Terminal Pro screenshot](screenshot.png)
 
