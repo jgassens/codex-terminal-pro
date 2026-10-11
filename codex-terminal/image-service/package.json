@@ -21,9 +21,10 @@
     "http-proxy": "1.18.1",
     "multer": "2.4.0",
     "qrcode": "^1.5.4",
-    "sharp": "0.35.4"
+    "sharp": "0.35.5"
   },
   "overrides": {
-    "path-to-regexp": "0.1.13"
+    "path-to-regexp": "0.1.13",
+    "proxy-addr": "2.0.8"
   }
 }

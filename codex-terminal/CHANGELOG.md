@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.14.2
+
+- Update `sharp` to 0.35.5 and `proxy-addr` to 2.0.8 to resolve newly
+  reported dependency advisories and restore the production audit check.
+
 ## 2.14.1
 
 - Correct the Home Assistant Info page to describe the bundled Codex CLI
